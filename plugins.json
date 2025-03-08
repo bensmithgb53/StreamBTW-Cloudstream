@@ -1,0 +1,21 @@
+[
+    {
+        "iconUrl": "https://streambtw.com/icon.png",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/bensmithgb53/StreamBTW-Cloudstream/",
+        "fileSize": 9630,
+        "status": 1,
+        "language": "en",
+        "authors": [
+            "Ben",
+        ],
+        "tvTypes": [
+            "Live"
+        ],
+        "version": 3,
+        "internalName": "StreamBTW",
+        "description": "Live streams from the StreamBTW.
+        "url": "https://github.com/bensmithgb53/StreamBTW-Cloudstream/builds/StreamBTW.cs3",
+        "name": "StreamBTW"
+    }
+]
