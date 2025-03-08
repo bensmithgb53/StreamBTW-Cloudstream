@@ -1,4 +1,4 @@
-package ben.smith53.provider
+package ben.smith53
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
