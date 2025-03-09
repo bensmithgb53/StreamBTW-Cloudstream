@@ -6,7 +6,7 @@ cloudstream {
     language = "en"
     // All of these properties are optional, you can safely remove them
 
-     description = "Live streams from the StreamBTW.
+     description = "Live streams from the StreamBTW."
     authors = listOf("Ben")
 
     /**
