@@ -40,7 +40,7 @@ subprojects {
     }
 
     android {
-        namespace = "it.dogior.hadEnough"
+        namespace = "ben.smith53"
         defaultConfig {
             minSdk = 21
             compileSdkVersion(35)
