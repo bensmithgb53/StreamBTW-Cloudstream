@@ -39,7 +39,7 @@ class StrimsyExtractor : ExtractorApi() {
             .map { fixUrl(it.groupValues[1]) }
             .firstOrNull { !it.contains("chat2.php") }
         if (iframeUrl == null) {
-            println("No valid iframe found. Page snippet: ${initialResp.text.take(200)}")
+            println("No valid iframe found. Page snippet: ${initialResp.text.take(500)}")
             return
         }
         println("Found iframe for source: $iframeUrl")
@@ -52,13 +52,13 @@ class StrimsyExtractor : ExtractorApi() {
         println("Iframe response code: ${iframeResp.code}, Headers: ${iframeResp.headers}")
         val iframeText = iframeResp.text
 
-        // Step 3: Extract .m3u8 from iframe (broader regex)
+        // Step 3: Extract .m3u8 from iframe
         var m3u8Url = Regex("https?://[^\\s\"']+\\.m3u8(?:[^\\s\"']*)").find(iframeText)?.value
         println("Script-parsed m3u8: $m3u8Url")
 
         // Step 4: Follow additional iframe if no .m3u8
         if (m3u8Url == null) {
-            val nextIframeUrl = Regex("iframe asesor=\"(https?://[^\"]+)\"").find(iframeText)?.groupValues?.get(1)
+            val nextIframeUrl = Regex("iframe src=\"(https?://[^\"]+)\"").find(iframeText)?.groupValues?.get(1)
             if (nextIframeUrl != null) {
                 println("Found next iframe: $nextIframeUrl")
                 val nextResp = app.get(nextIframeUrl, headers = iframeHeaders + mapOf("Referer" to iframeUrl))
@@ -68,7 +68,16 @@ class StrimsyExtractor : ExtractorApi() {
             }
         }
 
-        // Step 5: Verify .m3u8 with a HEAD request (optional)
+        // Step 5: Fallback - Try direct .m3u8 fetch if still not found
+        if (m3u8Url == null) {
+            val guessedM3u8 = iframeResp.url.takeIf { it.endsWith(".m3u8") }
+            if (guessedM3u8 != null) {
+                println("Guessing m3u8 from iframe URL: $guessedM3u8")
+                m3u8Url = guessedM3u8
+            }
+        }
+
+        // Step 6: Verify .m3u8 with a HEAD request
         if (m3u8Url != null) {
             val m3u8Check = app.head(m3u8Url, headers = iframeHeaders + mapOf("Referer" to "https://$iframeDomain/"))
             println("m3u8 HEAD check code: ${m3u8Check.code}, Headers: ${m3u8Check.headers}")
@@ -78,7 +87,7 @@ class StrimsyExtractor : ExtractorApi() {
             }
         }
 
-        // Step 6: Return the link if found
+        // Step 7: Return the link if found
         if (m3u8Url?.contains(".m3u8") == true) {
             println("Final m3u8 link: $m3u8Url")
             callback(
@@ -93,7 +102,7 @@ class StrimsyExtractor : ExtractorApi() {
                 )
             )
         } else {
-            println("No m3u8 link found. Iframe snippet: ${iframeText.take(500)}")
+            println("No m3u8 link found. Iframe snippet: ${iframeText.take(1000)}")
         }
     }
 
