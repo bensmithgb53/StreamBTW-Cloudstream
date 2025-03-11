@@ -35,7 +35,7 @@ class StrimsyExtractor : ExtractorApi() {
             val iframeBase = document.selectFirst("iframe")?.attr("src")?.let { fixUrl(it) }
                 ?: return
 
-            val qualityLinks = document.select("font a").mapIndexed { index, link ->
+            document.select("font a").forEachIndexed { index, link ->
                 val qualityName = when (index) {
                     0 -> "HD"
                     1 -> "Full HD 1"
@@ -45,12 +45,10 @@ class StrimsyExtractor : ExtractorApi() {
                 }
                 val sourceParam = link.attr("href").substringAfter("?source=").takeIf { it.isNotEmpty() } 
                     ?: (index + 1).toString()
-                Pair(qualityName, "$url?source=$sourceParam")
-            }
+                val qualityUrl = "$url?source=$sourceParam"
 
-            qualityLinks.forEach { pair ->
                 try {
-                    extractStream(pair.second, iframeBase, pair.first, headers, callback)
+                    extractStream(qualityUrl, iframeBase, qualityName, headers, callback)
                 } catch (e: Exception) {
                     // Skip failed quality options silently
                 }
