@@ -10,7 +10,7 @@ import org.jsoup.nodes.Document
 class StrimsyStreaming : MainAPI() {
     override var lang = "en" // English language
     override var mainUrl = "https://strimsy.top" // Primary URL
-    override var name = "StrimsyStreaming"
+    override var name = "Strimsy"
     override val hasMainPage = true
     override val hasChromecastSupport = true
     override val supportedTypes = setOf(TvType.Live)
@@ -125,124 +125,15 @@ class StrimsyStreaming : MainAPI() {
         )
     }
 
-    // Extract multiple stream URLs from the event page
-    private suspend fun extractVideoLinks(
-        url: String,
-        callback: (ExtractorLink) -> Unit
-    ) {
-        val document = app.get(url).document
-        val iframeBase = document.selectFirst("iframe")?.attr("src")?.let { fixUrl(it) }
-            ?: return
-
-        // Quality options from the page
-        val qualityLinks = document.select("font a").mapIndexed { index, link ->
-            val qualityName = when (index) {
-                0 -> "HD"
-                1 -> "Full HD 1"
-                2 -> "Full HD 2"
-                3 -> "Full HD 3"
-                else -> "Stream ${index + 1}"
-            }
-            val sourceParam = link.attr("href").substringAfter("?source=").takeIf { it.isNotEmpty() } ?: (index + 1).toString()
-            Pair(qualityName, "$url?source=$sourceParam")
-        }
-
-        // Headers to mimic browser
-        val headers = mapOf(
-            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
-            "Accept" to "*/*",
-            "Accept-Language" to "en-GB,en-US;q=0.9,en;q=0.8",
-            "Referer" to url,
-            "Origin" to "https://strimsy.top"
-        )
-
-        // Process each quality option
-        qualityLinks.forEach { (qualityName, qualityUrl) ->
-            try {
-                // Follow the quality URL
-                val qualityResponse = app.get(qualityUrl, referer = url, headers = headers)
-                val qualityIframe = qualityResponse.document.selectFirst("iframe")?.attr("src")?.let { fixUrl(it) } ?: iframeBase
-
-                // Follow the iframe URL with proper headers
-                val streamResponse = app.get(
-                    qualityIframe,
-                    referer = qualityUrl,
-                    headers = headers,
-                    allowRedirects = true
-                )
-
-                // Check for .m3u8 in redirect or content
-                var finalStreamUrl = streamResponse.url.takeIf { it.contains(".m3u8") }
-                    ?: extractStreamUrlFromScript(streamResponse.document)
-
-                // Retry with specific Accept header if no .m3u8 found
-                if (finalStreamUrl == null || !finalStreamUrl.contains(".m3u8")) {
-                    val deeperResponse = app.get(
-                        qualityIframe,
-                        referer = qualityUrl,
-                        headers = headers.plus("Accept" to "application/vnd.apple.mpegurl")
-                    )
-                    finalStreamUrl = deeperResponse.url.takeIf { it.contains(".m3u8") }
-                        ?: extractStreamUrlFromScript(deeperResponse.document)
-                }
-
-                if (finalStreamUrl?.contains(".m3u8") == true) {
-                    callback(
-                        ExtractorLink(
-                            source = this.name,
-                            name = qualityName,
-                            url = finalStreamUrl,
-                            referer = qualityIframe,
-                            quality = when {
-                                qualityName.contains("Full HD") -> Qualities.FHD.value
-                                qualityName.contains("HD") -> Qualities.HD.value
-                                else -> Qualities.Unknown.value
-                            },
-                            isM3u8 = true,
-                            headers = headers
-                        )
-                    )
-                }
-            } catch (e: Exception) {
-                // Skip failed quality options silently
-            }
-        }
-    }
-
-    // Extract stream URL from JavaScript
-    private fun extractStreamUrlFromScript(document: Document): String? {
-        val scripts = document.select("script")
-        val streamScript = scripts.find { it.data().contains("src=") || it.data().contains("file:") || it.data().contains(".m3u8") }
-            ?: return null
-
-        val scriptData = streamScript.data()
-        return when {
-            scriptData.contains("eval(") -> {
-                val unpacked = getAndUnpack(scriptData)
-                unpacked.substringAfter("src=\"")?.substringBefore("\"")
-                    ?: unpacked.substringAfter("file: \"")?.substringBefore("\"")
-                    ?: unpacked.findM3u8Url()
-            }
-            else -> scriptData.substringAfter("src=\"")?.substringBefore("\"")
-                ?: scriptData.substringAfter("file: \"")?.substringBefore("\"")
-                ?: scriptData.findM3u8Url()
-        } ?: document.selectFirst("source")?.attr("src")
-    }
-
-    // Helper to find .m3u8 in text
-    private fun String.findM3u8Url(): String? {
-        val regex = Regex("https?://[^\\s\"']+\\.m3u8(?:\\?[^\\s\"']*)?")
-        return regex.find(this)?.value
-    }
-
-    // Load all links for an event
+    // Load all links for an event using the extractor
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        extractVideoLinks(data, callback)
+        val extractor = StrimsyExtractor()
+        extractor.getUrl(data, data, subtitleCallback, callback)
         return true
     }
 
