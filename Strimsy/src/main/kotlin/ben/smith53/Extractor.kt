@@ -33,50 +33,45 @@ class StrimsyExtractor : ExtractorApi() {
 
         // Step 1: Fetch the initial strimsy.top page
         println("Fetching initial page: $url")
-        val initialResp = app.get(url, headers = headers, timeout = 10) // Add timeout
-        println("Initial response code: ${initialResp.code}, Headers: ${initialResp.headers}")
-        val iframeUrl = Regex("iframe src=\"([^\"]*/embed/[^\"]*)\"").find(initialResp.text)?.groupValues?.get(1)
+        val initialResp = app.get(url, headers = headers, timeout = 10)
+        println("Initial response code: ${initialResp.code}")
+        val embedIframeUrl = Regex("iframe src=\"([^\"]*/embed/[^\"]*)\"").find(initialResp.text)?.groupValues?.get(1)
             ?.let { fixUrl(it) }
-        if (iframeUrl == null) {
+        if (embedIframeUrl == null) {
             println("No embed iframe found. Page snippet: ${initialResp.text.take(200)}")
             return
         }
-        println("Found embed iframe: $iframeUrl")
+        println("Found embed iframe: $embedIframeUrl")
 
-        // Step 2: Fetch iframe content
-        val embedDomain = URL(iframeUrl).host
-        val embedId = iframeUrl.substringAfter("/embed/").substringBefore("?")
+        // Step 2: Fetch the embed iframe
+        val embedDomain = URL(embedIframeUrl).host
         val embedHeaders = headers + mapOf("Referer" to url)
-        println("Fetching iframe: $iframeUrl")
-        val iframeResp = app.get(iframeUrl, headers = embedHeaders, timeout = 10)
-        println("Iframe response code: ${iframeResp.code}, Headers: ${iframeResp.headers}")
+        println("Fetching embed iframe: $embedIframeUrl")
+        val embedResp = app.get(embedIframeUrl, headers = embedHeaders, timeout = 10)
+        println("Embed iframe response code: ${embedResp.code}")
+        val embedText = embedResp.text
 
-        // Step 3: Extract .m3u8 from iframe (like DaddyLive)
-        val iframeText = iframeResp.text
-        var m3u8Url = Regex("https?://[^\\s\"']+\\.m3u8[^\\s\"']*").find(iframeText)?.value
+        // Step 3: Extract the player iframe URL from the script
+        val playerPath = Regex("n = \"https://[^\"]+/player/([^\"]*)\"").find(embedText)?.groupValues?.get(1)
+        if (playerPath == null) {
+            println("No player iframe path found. Embed snippet: ${embedText.take(200)}")
+            return
+        }
+        val playerIframeUrl = "https://$embedDomain/player/$playerPath"
+        println("Found player iframe: $playerIframeUrl")
+
+        // Step 4: Fetch the player iframe
+        val playerHeaders = headers + mapOf("Referer" to embedIframeUrl)
+        println("Fetching player iframe: $playerIframeUrl")
+        val playerResp = app.get(playerIframeUrl, headers = playerHeaders, timeout = 10)
+        println("Player iframe response code: ${playerResp.code}")
+        val playerText = playerResp.text
+
+        // Step 5: Extract .m3u8 from player iframe
+        var m3u8Url = Regex("https?://[^\\s\"']+\\.m3u8[^\\s\"']*").find(playerText)?.value
         println("Script-parsed m3u8: $m3u8Url")
 
-        // Step 4: Fallback - Predict .m3u8 if not in script
-        if (m3u8Url == null) {
-            val predictedM3u8 = "https://270532139.cdnobject.net:8443/hls/$embedId.m3u8"
-            println("Trying predicted m3u8: $predictedM3u8")
-            val encodedReferer = URLEncoder.encode("https://$embedDomain/", "UTF-8")
-            val m3u8Resp = app.get(
-                predictedM3u8,
-                headers = headers + mapOf(
-                    "Referer" to "https://$embedDomain/",
-                    "Origin" to "https://$embedDomain/"
-                ),
-                timeout = 10
-            )
-            println("Predicted m3u8 response code: ${m3u8Resp.code}, Headers: ${m3u8Resp.headers}")
-            if (m3u8Resp.isSuccessful && m3u8Resp.headers["content-type"]?.contains("mpegurl") == true) {
-                m3u8Url = m3u8Resp.url
-                println("Found m3u8 via prediction: $m3u8Url")
-            }
-        }
-
-        // Step 5: Return the link if found
+        // Step 6: Return the link if found
         if (m3u8Url?.contains(".m3u8") == true) {
             println("Final m3u8 link: $m3u8Url")
             callback(
@@ -91,7 +86,7 @@ class StrimsyExtractor : ExtractorApi() {
                 )
             )
         } else {
-            println("No m3u8 link found")
+            println("No m3u8 link found. Player snippet: ${playerText.take(200)}")
         }
     }
 
