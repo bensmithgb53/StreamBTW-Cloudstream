@@ -9,7 +9,7 @@ import com.lagradost.cloudstream3.utils.getAndUnpack
 import org.jsoup.nodes.Document
 
 class StrimsyExtractor : ExtractorApi() {
-    override val name = "StrimsyExtractor"  // Could be "Strimsy" if you prefer, but this is fine
+    override val name = "StrimsyExtractor"
     override val mainUrl = "https://strimsy.top"
     override val requiresReferer = true
 
@@ -22,12 +22,13 @@ class StrimsyExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val headers = mapOf(  // Line ~29 in this version
-            "User-Agent" to userAgent,
-            "Accept" to "*/*",
-            "Accept-Language" to "en-GB,en-US;q=0.9,en;q=0.8",
-            "Referer" to referer ?: mainUrl,
-            "Origin" to mainUrl
+        // Explicitly typed Map to avoid type inference issues
+        val headers: Map<String, String> = mapOf(
+            Pair("User-Agent", userAgent),
+            Pair("Accept", "*/*"),
+            Pair("Accept-Language", "en-GB,en-US;q=0.9,en;q=0.8"),
+            Pair("Referer", referer ?: mainUrl),
+            Pair("Origin", mainUrl)
         )
 
         try {
