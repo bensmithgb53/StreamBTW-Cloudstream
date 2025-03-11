@@ -21,6 +21,7 @@ class StrimsyExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
+        println("Starting extraction for URL: $url with referer: $referer")
         val headers = mapOf(
             "User-Agent" to userAgent,
             "Accept" to "*/*",
@@ -32,46 +33,68 @@ class StrimsyExtractor : ExtractorApi() {
         // Step 1: Fetch the initial strimsy.top page
         val document = app.get(url, headers = headers).document
         val iframeUrl = document.selectFirst("iframe")?.attr("src")?.let { fixUrl(it) }
-            ?: return
+        if (iframeUrl == null) {
+            println("No iframe found in initial page")
+            return
+        }
+        println("Found iframe: $iframeUrl")
 
-        // Step 2: Fetch the iframe content
+        // Step 2: Fetch iframe content and extract .m3u8
         val embedDomain = iframeUrl.substringBefore("/embed").substringAfter("://")
         val embedHeaders = headers.plus("Referer" to url)
         val iframeResp = app.get(iframeUrl, headers = embedHeaders)
+        println("Iframe response code: ${iframeResp.code}")
         var m3u8Url = extractStreamUrlFromScript(iframeResp.document)
 
-        // Step 3: Fallback - Predict .m3u8 based on embed URL
+        // Step 3: If not found, try deeper script-based extraction (like DaddyLive)
         if (m3u8Url == null) {
-            val embedId = iframeUrl.substringAfterLast("/").substringBefore("?")
-            val baseDomain = iframeUrl.substringBefore("/embed")
-            // Try common patterns
-            val possibleM3u8s = listOf(
-                "$baseDomain/hls/$embedId.m3u8", // forgepattern.net pattern
-                "$baseDomain/$embedId/index.m3u8", // wideiptv.top pattern
-                "$baseDomain/$embedId/index.fmp4.m3u8" // fmp4 variant
-            )
-            for (candidate in possibleM3u8s) {
-                val resp = app.get(
-                    candidate,
-                    headers = headers.plus("Referer" to baseDomain)
-                )
-                if (resp.isSuccessful && resp.headers["content-type"]?.contains("mpegurl") == true) {
-                    m3u8Url = resp.url
-                    break
+            val iframeHtml = iframeResp.text
+            val fetchUrl = Regex("fetch\\(['\"]([^'\"]+\\.m3u8[^'\"]*)").find(iframeHtml)?.groupValues?.get(1)
+            if (fetchUrl != null) {
+                println("Found fetch URL: $fetchUrl")
+                val fetchResp = app.get(fetchUrl, headers = embedHeaders.plus("Referer" to iframeUrl))
+                if (fetchResp.isSuccessful) {
+                    m3u8Url = fetchResp.url
+                    println("Fetched m3u8 from fetch: $m3u8Url")
                 }
             }
         }
 
-        // Step 4: Handle query params if present in iframe URL
-        if (m3u8Url != null && iframeUrl.contains("?")) {
-            val params = iframeUrl.substringAfter("?")
-            if (!m3u8Url.contains("?")) {
-                m3u8Url += "?$params" // Append token if missing
+        // Step 4: Fallback - Predict .m3u8 based on embed URL
+        if (m3u8Url == null) {
+            val embedId = iframeUrl.substringAfterLast("/").substringBefore("?")
+            val baseDomain = iframeUrl.substringBefore("/embed")
+            val possibleM3u8s = listOf(
+                "$baseDomain/hls/$embedId.m3u8",
+                "$baseDomain/$embedId/index.m3u8",
+                "$baseDomain/$embedId/index.fmp4.m3u8",
+                "$baseDomain/hls/$embedId/index.m3u8"
+            )
+            for (candidate in possibleM3u8s) {
+                println("Trying predicted m3u8: $candidate")
+                val resp = app.get(candidate, headers = embedHeaders.plus("Referer" to baseDomain))
+                if (resp.isSuccessful && resp.headers["content-type"]?.contains("mpegurl") == true) {
+                    m3u8Url = resp.url
+                    println("Found m3u8 via prediction: $m3u8Url")
+                    break
+                } else {
+                    println("Failed $candidate - Code: ${resp.code}")
+                }
             }
         }
 
-        // Step 5: Return the link if found
+        // Step 5: Append query params if present
+        if (m3u8Url != null && iframeUrl.contains("?")) {
+            val params = iframeUrl.substringAfter("?")
+            if (!m3u8Url.contains("?")) {
+                m3u8Url += "?$params"
+                println("Added params to m3u8: $m3u8Url")
+            }
+        }
+
+        // Step 6: Return the link if found
         if (m3u8Url?.contains(".m3u8") == true) {
+            println("Final m3u8 link: $m3u8Url")
             callback(
                 ExtractorLink(
                     source = this.name,
@@ -83,13 +106,17 @@ class StrimsyExtractor : ExtractorApi() {
                     headers = headers
                 )
             )
+        } else {
+            println("No m3u8 link found")
         }
     }
 
     private fun extractStreamUrlFromScript(document: Document): String? {
         val scriptData = document.select("script").joinToString { it.data() }
-        return Regex("https?://[^\\s\"']+\\.m3u8[^\\s\"']*").find(scriptData)?.value
+        val m3u8 = Regex("https?://[^\\s\"']+\\.m3u8[^\\s\"']*").find(scriptData)?.value
             ?: document.selectFirst("source[src*=.m3u8]")?.attr("src")
+        println("Script data snippet: ${scriptData.take(200)}")
+        return m3u8
     }
 
     private fun fixUrl(url: String): String {
