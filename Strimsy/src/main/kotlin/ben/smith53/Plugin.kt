@@ -7,6 +7,6 @@ import android.content.Context
 @CloudstreamPlugin
 class StrimsyPlugin : Plugin() {
     override fun load(context: Context) {
-        registerMainAPI(Strimsy())
+        registerMainAPI(StrimsyStreaming())
     }
 }
