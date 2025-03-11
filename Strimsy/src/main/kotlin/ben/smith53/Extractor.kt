@@ -5,6 +5,7 @@ import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
+import org.jsoup.nodes.Document
 
 class StrimsyExtractor : ExtractorApi() {
     override val name = "StrimsyExtractor"
@@ -28,10 +29,7 @@ class StrimsyExtractor : ExtractorApi() {
             "Accept-Language" to "en-GB,en-US;q=0.9,en;q=0.8",
             "Referer" to (referer ?: mainUrl),
             "Origin" to mainUrl,
-            "Connection" to "keep-alive",
-            "Sec-Fetch-Dest" to "empty",
-            "Sec-Fetch-Mode" to "cors",
-            "Sec-Fetch-Site" to "cross-site"
+            "Connection" to "keep-alive"
         )
 
         // Step 1: Fetch the initial strimsy.top page
@@ -41,8 +39,7 @@ class StrimsyExtractor : ExtractorApi() {
             ?.attr("src")
             ?.let { fixUrl(it) }
         if (iframeUrl == null) {
-            println("No video iframe found in initial page")
-            println("Available iframes: ${document.select("iframe").map { it.attr("src") }}")
+            println("No video iframe found. Available iframes: ${document.select("iframe").map { it.attr("src") }}")
             return
         }
         println("Found video iframe: $iframeUrl")
@@ -50,22 +47,22 @@ class StrimsyExtractor : ExtractorApi() {
         // Step 2: Extract embed ID and domain
         val embedDomain = iframeUrl.substringBefore("/embed").substringAfter("://")
         val embedId = iframeUrl.substringAfter("/embed/").substringBefore("?")
-        val embedHeaders = headers.plus("Referer" to url)
+        val embedHeaders = headers + mapOf("Referer" to url)
         val predictedM3u8Base = "https://270532139.cdnobject.net:8443/hls/$embedId.m3u8"
 
-        // Step 3: Fetch iframe and look for params or .m3u8
+        // Step 3: Fetch iframe content
         val iframeResp = app.get(iframeUrl, headers = embedHeaders)
         println("Iframe response code: ${iframeResp.code}")
         var m3u8Url = extractStreamUrlFromScript(iframeResp.document)
-        var queryParams = iframeUrl.substringAfter("?", "")
+        val queryParams = iframeUrl.substringAfter("?", "")
 
-        // Step 4: If no .m3u8 in script, try predicted URL with params
+        // Step 4: Try predicted .m3u8 with params
         if (m3u8Url == null) {
             val testM3u8 = if (queryParams.isNotEmpty()) "$predictedM3u8Base?$queryParams" else predictedM3u8Base
             println("Trying predicted m3u8: $testM3u8")
             val m3u8Resp = app.get(
                 testM3u8,
-                headers = headers.plus(
+                headers = headers + mapOf(
                     "Referer" to "https://$embedDomain/",
                     "Origin" to "https://$embedDomain/"
                 )
@@ -89,7 +86,7 @@ class StrimsyExtractor : ExtractorApi() {
                     referer = "https://$embedDomain/",
                     quality = Qualities.Unknown.value,
                     isM3u8 = true,
-                    headers = headers.plus("Referer" to "https://$embedDomain/")
+                    headers = headers + mapOf("Referer" to "https://$embedDomain/")
                 )
             )
         } else {
