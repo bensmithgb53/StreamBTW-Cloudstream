@@ -5,7 +5,6 @@ import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
-import org.jsoup.nodes.Document
 
 class StrimsyExtractor : ExtractorApi() {
     override val name = "StrimsyExtractor"
@@ -25,74 +24,61 @@ class StrimsyExtractor : ExtractorApi() {
         val headers = mapOf(
             "User-Agent" to userAgent,
             "Accept" to "*/*",
+            "Accept-Encoding" to "gzip, deflate, br, zstd",
             "Accept-Language" to "en-GB,en-US;q=0.9,en;q=0.8",
             "Referer" to (referer ?: mainUrl),
-            "Origin" to mainUrl
+            "Origin" to mainUrl,
+            "Connection" to "keep-alive",
+            "Sec-Fetch-Dest" to "empty",
+            "Sec-Fetch-Mode" to "cors",
+            "Sec-Fetch-Site" to "cross-site"
         )
 
         // Step 1: Fetch the initial strimsy.top page
         val document = app.get(url, headers = headers).document
-        val iframeUrl = document.selectFirst("iframe")?.attr("src")?.let { fixUrl(it) }
+        val iframeUrl = document.select("iframe")
+            .firstOrNull { it.attr("src").contains("embed") && !it.attr("src").contains("chat") }
+            ?.attr("src")
+            ?.let { fixUrl(it) }
         if (iframeUrl == null) {
-            println("No iframe found in initial page")
+            println("No video iframe found in initial page")
+            println("Available iframes: ${document.select("iframe").map { it.attr("src") }}")
             return
         }
-        println("Found iframe: $iframeUrl")
+        println("Found video iframe: $iframeUrl")
 
-        // Step 2: Fetch iframe content and extract .m3u8
+        // Step 2: Extract embed ID and domain
         val embedDomain = iframeUrl.substringBefore("/embed").substringAfter("://")
+        val embedId = iframeUrl.substringAfter("/embed/").substringBefore("?")
         val embedHeaders = headers.plus("Referer" to url)
+        val predictedM3u8Base = "https://270532139.cdnobject.net:8443/hls/$embedId.m3u8"
+
+        // Step 3: Fetch iframe and look for params or .m3u8
         val iframeResp = app.get(iframeUrl, headers = embedHeaders)
         println("Iframe response code: ${iframeResp.code}")
         var m3u8Url = extractStreamUrlFromScript(iframeResp.document)
+        var queryParams = iframeUrl.substringAfter("?", "")
 
-        // Step 3: If not found, try deeper script-based extraction (like DaddyLive)
+        // Step 4: If no .m3u8 in script, try predicted URL with params
         if (m3u8Url == null) {
-            val iframeHtml = iframeResp.text
-            val fetchUrl = Regex("fetch\\(['\"]([^'\"]+\\.m3u8[^'\"]*)").find(iframeHtml)?.groupValues?.get(1)
-            if (fetchUrl != null) {
-                println("Found fetch URL: $fetchUrl")
-                val fetchResp = app.get(fetchUrl, headers = embedHeaders.plus("Referer" to iframeUrl))
-                if (fetchResp.isSuccessful) {
-                    m3u8Url = fetchResp.url
-                    println("Fetched m3u8 from fetch: $m3u8Url")
-                }
-            }
-        }
-
-        // Step 4: Fallback - Predict .m3u8 based on embed URL
-        if (m3u8Url == null) {
-            val embedId = iframeUrl.substringAfterLast("/").substringBefore("?")
-            val baseDomain = iframeUrl.substringBefore("/embed")
-            val possibleM3u8s = listOf(
-                "$baseDomain/hls/$embedId.m3u8",
-                "$baseDomain/$embedId/index.m3u8",
-                "$baseDomain/$embedId/index.fmp4.m3u8",
-                "$baseDomain/hls/$embedId/index.m3u8"
+            val testM3u8 = if (queryParams.isNotEmpty()) "$predictedM3u8Base?$queryParams" else predictedM3u8Base
+            println("Trying predicted m3u8: $testM3u8")
+            val m3u8Resp = app.get(
+                testM3u8,
+                headers = headers.plus(
+                    "Referer" to "https://$embedDomain/",
+                    "Origin" to "https://$embedDomain/"
+                )
             )
-            for (candidate in possibleM3u8s) {
-                println("Trying predicted m3u8: $candidate")
-                val resp = app.get(candidate, headers = embedHeaders.plus("Referer" to baseDomain))
-                if (resp.isSuccessful && resp.headers["content-type"]?.contains("mpegurl") == true) {
-                    m3u8Url = resp.url
-                    println("Found m3u8 via prediction: $m3u8Url")
-                    break
-                } else {
-                    println("Failed $candidate - Code: ${resp.code}")
-                }
+            if (m3u8Resp.isSuccessful && m3u8Resp.headers["content-type"]?.contains("mpegurl") == true) {
+                m3u8Url = m3u8Resp.url
+                println("Found m3u8 via prediction: $m3u8Url")
+            } else {
+                println("Predicted m3u8 failed - Code: ${m3u8Resp.code}, Headers: ${m3u8Resp.headers}")
             }
         }
 
-        // Step 5: Append query params if present
-        if (m3u8Url != null && iframeUrl.contains("?")) {
-            val params = iframeUrl.substringAfter("?")
-            if (!m3u8Url.contains("?")) {
-                m3u8Url += "?$params"
-                println("Added params to m3u8: $m3u8Url")
-            }
-        }
-
-        // Step 6: Return the link if found
+        // Step 5: Return the link if found
         if (m3u8Url?.contains(".m3u8") == true) {
             println("Final m3u8 link: $m3u8Url")
             callback(
@@ -103,7 +89,7 @@ class StrimsyExtractor : ExtractorApi() {
                     referer = "https://$embedDomain/",
                     quality = Qualities.Unknown.value,
                     isM3u8 = true,
-                    headers = headers
+                    headers = headers.plus("Referer" to "https://$embedDomain/")
                 )
             )
         } else {
