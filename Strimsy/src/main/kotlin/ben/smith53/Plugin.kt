@@ -8,5 +8,6 @@ import android.content.Context
 class StrimsyPlugin : Plugin() {
     override fun load(context: Context) {
         registerMainAPI(StrimsyStreaming())
+        registerExtractorAPI(StrimsyExtractor())
     }
 }
