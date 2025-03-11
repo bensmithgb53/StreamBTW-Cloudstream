@@ -1,0 +1,40 @@
+[
+    {
+        "iconUrl": "https://streambtw.com/favicon.ico",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/bensmithgb53/StreamBTW-Cloudstream",
+        "fileSize": 9095,
+        "status": 1,
+        "language": "en",
+        "authors": [
+            "Ben"
+        ],
+        "tvTypes": [
+            "Live"
+        ],
+        "version": 3,
+        "internalName": "StreamBTW",
+        "description": "Live streams from the StreamBTW.",
+        "url": "https://raw.githubusercontent.com/bensmithgb53/StreamBTW-Cloudstream/builds/StreamBTW.cs3",
+        "name": "StreamBTW"
+    },
+    {
+        "iconUrl": "https://i.imgur.com/JqgVon6.png",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/bensmithgb53/StreamBTW-Cloudstream",
+        "fileSize": 15047,
+        "status": 1,
+        "language": "en",
+        "authors": [
+            "Ben"
+        ],
+        "tvTypes": [
+            "Live"
+        ],
+        "version": 3,
+        "internalName": "Strimsy",
+        "description": "Live streams from the Strimsy.",
+        "url": "https://raw.githubusercontent.com/bensmithgb53/StreamBTW-Cloudstream/builds/Strimsy.cs3",
+        "name": "Strimsy"
+    }
+]
