@@ -91,17 +91,15 @@ class StrimsyStreaming : MainAPI() {
                 val className = linkElement.className().takeIf { it.isNotEmpty() }
                 val translatedName = translateEventName(rawName, className)
                 val time = td.text().substringBefore(" ").trim()
-                newLiveSearchResponse( // Updated from LiveSearchResponse
+                newLiveSearchResponse(
                     name = "$time - $translatedName",
                     url = href,
-                    apiName = this@StrimsyStreaming.name,
-                    type = TvType.Live,
-                    posterUrl = null
+                    type = TvType.Live
                 )
             }
             HomePageList(englishDayName, events, isHorizontalImages = false)
         }
-        return newHomePageResponse(homePageLists) // Updated from HomePageResponse
+        return newHomePageResponse(homePageLists)
     }
 
     override suspend fun load(url: String): LoadResponse {
@@ -111,13 +109,10 @@ class StrimsyStreaming : MainAPI() {
         val className = document.selectFirst("iframe")?.parent()?.selectFirst("a")?.className()
         val translatedTitle = translateEventName(rawTitle, className)
 
-        return newLiveStreamLoadResponse( // Updated from LiveStreamLoadResponse
+        return newLiveStreamLoadResponse(
             name = translatedTitle,
-            url = url,
-            apiName = this.name,
             dataUrl = url,
-            posterUrl = null,
-            plot = "Live stream from Strimsy"
+            url = url
         )
     }
 
