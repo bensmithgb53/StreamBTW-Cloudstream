@@ -33,37 +33,38 @@ class StrimsyExtractor : ExtractorApi() {
 
         // Step 1: Fetch the initial strimsy.top page
         println("Fetching initial page: $url")
-        val initialResp = app.get(url, headers = headers, timeout = 10)
-        println("Initial response code: ${initialResp.code}")
-        val liveIframeUrl = Regex("iframe src=\"(/live/[^\"]+\\.php[^\"]*)\"").find(initialResp.text)?.groupValues?.get(1)
-            ?.let { fixUrl(it) }
-        if (liveIframeUrl == null) {
-            println("No live iframe found. Page snippet: ${initialResp.text.take(200)}")
+        val initialResp = app.get(url, headers = headers)
+        println("Initial response code: ${initialResp.code}, Headers: ${initialResp.headers}")
+        val iframeUrl = Regex("iframe src=\"([^\"]+)\"").findAll(initialResp.text)
+            .map { fixUrl(it.groupValues[1]) }
+            .firstOrNull { !it.contains("chat2.php") } // Take first non-chat iframe
+        if (iframeUrl == null) {
+            println("No valid iframe found. Page snippet: ${initialResp.text.take(200)}")
             return
         }
-        println("Found live iframe: $liveIframeUrl")
+        println("Found iframe: $iframeUrl")
 
-        // Step 2: Fetch the live iframe content
-        val liveDomain = URL(liveIframeUrl).host
-        val liveHeaders = headers + mapOf("Referer" to url)
-        println("Fetching live iframe: $liveIframeUrl")
-        val liveResp = app.get(liveIframeUrl, headers = liveHeaders, timeout = 10)
-        println("Live iframe response code: ${liveResp.code}, Headers: ${liveResp.headers}")
-        val liveText = liveResp.text
+        // Step 2: Fetch the iframe content
+        val iframeDomain = URL(iframeUrl).host
+        val iframeHeaders = headers + mapOf("Referer" to url)
+        println("Fetching iframe: $iframeUrl")
+        val iframeResp = app.get(iframeUrl, headers = iframeHeaders)
+        println("Iframe response code: ${iframeResp.code}, Headers: ${iframeResp.headers}")
+        val iframeText = iframeResp.text
 
-        // Step 3: Extract .m3u8 from live iframe
-        var m3u8Url = Regex("https?://[^\\s\"']+\\.m3u8[^\\s\"']*").find(liveText)?.value
+        // Step 3: Extract .m3u8 from iframe
+        var m3u8Url = Regex("https?://[^\\s\"']+\\.m3u8[^\\s\"']*").find(iframeText)?.value
         println("Script-parsed m3u8: $m3u8Url")
 
-        // Step 4: Check for a player iframe if no .m3u8 (e.g., voodc.com/player/)
+        // Step 4: Follow additional iframe if no .m3u8
         if (m3u8Url == null) {
-            val playerIframeUrl = Regex("iframe src=\"(https?://[^\"]+/player/[^\"]*)\"").find(liveText)?.groupValues?.get(1)
-            if (playerIframeUrl != null) {
-                println("Found player iframe: $playerIframeUrl")
-                val playerResp = app.get(playerIframeUrl, headers = liveHeaders + mapOf("Referer" to liveIframeUrl), timeout = 10)
-                println("Player iframe response code: ${playerResp.code}")
-                m3u8Url = Regex("https?://[^\\s\"']+\\.m3u8[^\\s\"']*").find(playerResp.text)?.value
-                println("Player-parsed m3u8: $m3u8Url")
+            val nextIframeUrl = Regex("iframe src=\"(https?://[^\"]+)\"").find(iframeText)?.groupValues?.get(1)
+            if (nextIframeUrl != null) {
+                println("Found next iframe: $nextIframeUrl")
+                val nextResp = app.get(nextIframeUrl, headers = iframeHeaders + mapOf("Referer" to iframeUrl))
+                println("Next iframe response code: ${nextResp.code}, Headers: ${nextResp.headers}")
+                m3u8Url = Regex("https?://[^\\s\"']+\\.m3u8[^\\s\"']*").find(nextResp.text)?.value
+                println("Next iframe-parsed m3u8: $m3u8Url")
             }
         }
 
@@ -75,14 +76,14 @@ class StrimsyExtractor : ExtractorApi() {
                     source = this.name,
                     name = "Strimsy Stream",
                     url = m3u8Url,
-                    referer = "https://$liveDomain/",
+                    referer = "https://$iframeDomain/",
                     quality = Qualities.Unknown.value,
                     isM3u8 = true,
-                    headers = headers + mapOf("Referer" to "https://$liveDomain/")
+                    headers = headers + mapOf("Referer" to "https://$iframeDomain/")
                 )
             )
         } else {
-            println("No m3u8 link found. Live iframe snippet: ${liveText.take(200)}")
+            println("No m3u8 link found. Iframe snippet: ${iframeText.take(200)}")
         }
     }
 
