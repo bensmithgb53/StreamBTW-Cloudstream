@@ -10,7 +10,7 @@ import org.jsoup.nodes.Document
 class StrimsyStreaming : MainAPI() {
     override var lang = "en" // English language
     override var mainUrl = "https://strimsy.top" // Primary URL
-    override var name = "Strimsy"
+    override var name = "StrimsyStreaming"
     override val hasMainPage = true
     override val hasChromecastSupport = true
     override val supportedTypes = setOf(TvType.Live)
