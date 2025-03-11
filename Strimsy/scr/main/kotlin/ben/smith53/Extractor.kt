@@ -1,4 +1,4 @@
-package ben.smith53 // Match your package name
+package ben.smith53
 
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
@@ -31,51 +31,81 @@ class StrimsyExtractor : ExtractorApi() {
 
         try {
             val document = app.get(url, headers = headers).document
-            extractStreams(document, url, headers, callback)
+            val iframeBase = document.selectFirst("iframe")?.attr("src")?.let { fixUrl(it) }
+                ?: return
+
+            // Extract quality options
+            val qualityLinks = document.select("font a").mapIndexed { index, link ->
+                val qualityName = when (index) {
+                    0 -> "HD"
+                    1 -> "Full HD 1"
+                    2 -> "Full HD 2"
+                    3 -> "Full HD 3"
+                    else -> "Stream ${index + 1}"
+                }
+                val sourceParam = link.attr("href").substringAfter("?source=").takeIf { it.isNotEmpty() } 
+                    ?: (index + 1).toString()
+                Pair(qualityName, "$url?source=$sourceParam")
+            }
+
+            // Process each quality option
+            qualityLinks.forEach { (qualityName, qualityUrl) ->
+                try {
+                    extractStream(qualityUrl, iframeBase, qualityName, headers, callback)
+                } catch (e: Exception) {
+                    // Skip failed quality options silently
+                }
+            }
         } catch (e: Exception) {
-            // Handle extraction failure silently or log it
+            // Handle general extraction failure silently
         }
     }
 
-    private suspend fun extractStreams(
-        document: Document,
-        referer: String,
+    private suspend fun extractStream(
+        qualityUrl: String,
+        iframeBase: String,
+        qualityName: String,
         headers: Map<String, String>,
         callback: (ExtractorLink) -> Unit
     ) {
-        val iframeUrl = document.selectFirst("iframe")?.attr("src")?.let { fixUrl(it) }
-            ?: return
+        val qualityResponse = app.get(qualityUrl, referer = qualityUrl, headers = headers)
+        val qualityIframe = qualityResponse.document.selectFirst("iframe")?.attr("src")?.let { fixUrl(it) } 
+            ?: iframeBase
 
-        // Try multiple approaches to get the stream
+        // Try to get the stream
         val streamResponse = app.get(
-            iframeUrl,
-            referer = referer,
+            qualityIframe,
+            referer = qualityUrl,
             headers = headers,
             allowRedirects = true
         )
 
-        var streamUrl = streamResponse.url.takeIf { it.contains(".m3u8") }
+        var finalStreamUrl = streamResponse.url.takeIf { it.contains(".m3u8") }
             ?: extractStreamUrlFromScript(streamResponse.document)
 
         // Fallback with specific Accept header
-        if (streamUrl == null || !streamUrl.contains(".m3u8")) {
-            val fallbackResponse = app.get(
-                iframeUrl,
-                referer = referer,
+        if (finalStreamUrl == null || !finalStreamUrl.contains(".m3u8")) {
+            val deeperResponse = app.get(
+                qualityIframe,
+                referer = qualityUrl,
                 headers = headers.plus("Accept" to "application/vnd.apple.mpegurl")
             )
-            streamUrl = fallbackResponse.url.takeIf { it.contains(".m3u8") }
-                ?: extractStreamUrlFromScript(fallbackResponse.document)
+            finalStreamUrl = deeperResponse.url.takeIf { it.contains(".m3u8") }
+                ?: extractStreamUrlFromScript(deeperResponse.document)
         }
 
-        if (streamUrl?.contains(".m3u8") == true) {
+        if (finalStreamUrl?.contains(".m3u8") == true) {
             callback(
                 ExtractorLink(
                     source = this.name,
-                    name = "Strimsy Stream",
-                    url = streamUrl,
-                    referer = iframeUrl,
-                    quality = Qualities.Unknown.value,
+                    name = qualityName,
+                    url = finalStreamUrl,
+                    referer = qualityIframe,
+                    quality = when {
+                        qualityName.contains("Full HD") -> Qualities.FHD.value
+                        qualityName.contains("HD") -> Qualities.HD.value
+                        else -> Qualities.Unknown.value
+                    },
                     isM3u8 = true,
                     headers = headers
                 )
@@ -107,7 +137,6 @@ class StrimsyExtractor : ExtractorApi() {
         return regex.find(this)?.value
     }
 
-    // Helper to fix relative URLs
     private fun fixUrl(url: String): String {
         return if (url.startsWith("//")) "https:$url"
         else if (url.startsWith("/")) "$mainUrl$url"
