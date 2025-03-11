@@ -31,10 +31,10 @@ class StrimsyExtractor : ExtractorApi() {
             "Origin" to mainUrl
         )
 
-        // Step 1: Fetch the initial strimsy.top page
-        println("Fetching initial page: $url")
+        // Step 1: Fetch the specific source page (e.g., ?source=5)
+        println("Fetching source page: $url")
         val initialResp = app.get(url, headers = headers)
-        println("Initial response code: ${initialResp.code}, Headers: ${initialResp.headers}")
+        println("Source page response code: ${initialResp.code}, Headers: ${initialResp.headers}")
         val iframeUrl = Regex("iframe src=\"([^\"]+)\"").findAll(initialResp.text)
             .map { fixUrl(it.groupValues[1]) }
             .firstOrNull { !it.contains("chat2.php") } // Take first non-chat iframe
@@ -42,7 +42,7 @@ class StrimsyExtractor : ExtractorApi() {
             println("No valid iframe found. Page snippet: ${initialResp.text.take(200)}")
             return
         }
-        println("Found iframe: $iframeUrl")
+        println("Found iframe for source: $iframeUrl")
 
         // Step 2: Fetch the iframe content
         val iframeDomain = URL(iframeUrl).host
