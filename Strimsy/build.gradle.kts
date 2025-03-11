@@ -1,14 +1,25 @@
-package ben.smith53
+// use an integer for version numbers
+version = 3
 
-import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
-import com.lagradost.cloudstream3.plugins.Plugin
-import android.content.Context
 
-@CloudstreamPlugin
-class StrimsyPlugin: Plugin() {
+cloudstream {
+    language = "en"
+    // All of these properties are optional, you can safely remove them
 
-    override fun load(context: Context) {
-        // All providers should be added in this manner
-        registerMainAPI(Strimsy())
-    }
+     description = "Live streams from the Strimsy."
+    authors = listOf("Ben")
+
+    /**
+     * Status int as the following:
+     * 0: Down
+     * 1: Ok
+     * 2: Slow
+     * 3: Beta only
+     * */
+    status = 1 // will be 3 if unspecified
+    tvTypes = listOf(
+        "Live",
+    )
+
+    iconUrl = "https://i.imgur.com/JqgVon6.png"
 }
