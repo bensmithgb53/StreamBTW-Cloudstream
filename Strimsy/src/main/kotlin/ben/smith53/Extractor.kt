@@ -5,6 +5,7 @@ import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
+import com.lagradost.cloudstream3.utils.getAndUnpack // Added import for getAndUnpack
 import org.jsoup.nodes.Document
 
 class StrimsyExtractor : ExtractorApi() {
@@ -34,7 +35,6 @@ class StrimsyExtractor : ExtractorApi() {
             val iframeBase = document.selectFirst("iframe")?.attr("src")?.let { fixUrl(it) }
                 ?: return
 
-            // Extract quality options
             val qualityLinks = document.select("font a").mapIndexed { index, link ->
                 val qualityName = when (index) {
                     0 -> "HD"
@@ -45,10 +45,9 @@ class StrimsyExtractor : ExtractorApi() {
                 }
                 val sourceParam = link.attr("href").substringAfter("?source=").takeIf { it.isNotEmpty() } 
                     ?: (index + 1).toString()
-                Pair(qualityName, "$url?source=$sourceParam")
+                Pair<String, String>(qualityName, "$url?source=$sourceParam") // Explicit typing for safety
             }
 
-            // Process each quality option
             qualityLinks.forEach { (qualityName, qualityUrl) ->
                 try {
                     extractStream(qualityUrl, iframeBase, qualityName, headers, callback)
@@ -72,7 +71,6 @@ class StrimsyExtractor : ExtractorApi() {
         val qualityIframe = qualityResponse.document.selectFirst("iframe")?.attr("src")?.let { fixUrl(it) } 
             ?: iframeBase
 
-        // Try to get the stream
         val streamResponse = app.get(
             qualityIframe,
             referer = qualityUrl,
@@ -83,7 +81,6 @@ class StrimsyExtractor : ExtractorApi() {
         var finalStreamUrl = streamResponse.url.takeIf { it.contains(".m3u8") }
             ?: extractStreamUrlFromScript(streamResponse.document)
 
-        // Fallback with specific Accept header
         if (finalStreamUrl == null || !finalStreamUrl.contains(".m3u8")) {
             val deeperResponse = app.get(
                 qualityIframe,
@@ -102,8 +99,8 @@ class StrimsyExtractor : ExtractorApi() {
                     url = finalStreamUrl,
                     referer = qualityIframe,
                     quality = when {
-                        qualityName.contains("Full HD") -> Qualities.FHD.value
-                        qualityName.contains("HD") -> Qualities.HD.value
+                        qualityName.contains("Full HD") -> Qualities.P1080.value // Updated from FHD
+                        qualityName.contains("HD") -> Qualities.P720.value     // Updated from HD
                         else -> Qualities.Unknown.value
                     },
                     isM3u8 = true,
