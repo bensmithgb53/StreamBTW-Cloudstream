@@ -5,7 +5,7 @@ import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
-import com.lagradost.cloudstream3.utils.getAndUnpack // Added import for getAndUnpack
+import com.lagradost.cloudstream3.utils.getAndUnpack
 import org.jsoup.nodes.Document
 
 class StrimsyExtractor : ExtractorApi() {
@@ -45,12 +45,12 @@ class StrimsyExtractor : ExtractorApi() {
                 }
                 val sourceParam = link.attr("href").substringAfter("?source=").takeIf { it.isNotEmpty() } 
                     ?: (index + 1).toString()
-                Pair<String, String>(qualityName, "$url?source=$sourceParam") // Explicit typing for safety
+                Pair(qualityName, "$url?source=$sourceParam")
             }
 
-            qualityLinks.forEach { (qualityName, qualityUrl) ->
+            qualityLinks.forEach { pair ->
                 try {
-                    extractStream(qualityUrl, iframeBase, qualityName, headers, callback)
+                    extractStream(pair.second, iframeBase, pair.first, headers, callback)
                 } catch (e: Exception) {
                     // Skip failed quality options silently
                 }
@@ -99,8 +99,8 @@ class StrimsyExtractor : ExtractorApi() {
                     url = finalStreamUrl,
                     referer = qualityIframe,
                     quality = when {
-                        qualityName.contains("Full HD") -> Qualities.P1080.value // Updated from FHD
-                        qualityName.contains("HD") -> Qualities.P720.value     // Updated from HD
+                        qualityName.contains("Full HD") -> Qualities.P1080.value
+                        qualityName.contains("HD") -> Qualities.P720.value
                         else -> Qualities.Unknown.value
                     },
                     isM3u8 = true,
