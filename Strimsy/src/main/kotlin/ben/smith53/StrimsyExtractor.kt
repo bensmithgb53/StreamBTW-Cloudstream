@@ -92,7 +92,7 @@ class StrimsyExtractor : ExtractorApi() {
             println("Failed to fetch iframe $resolvedIframeUrl: ${e.message}")
             return null
         }
-        println("Iframe snippet: ${iframeResponse.take(2000)}...") // More chars for JS visibility
+        println("Iframe snippet: ${iframeResponse.take(2000)}...")
 
         // Static .m3u8 check
         val staticStream = Regex("hls\\.loadSource\\(['\"]?(https?://[^'\"]+\\.m3u8[^'\"]*)['\"]?\\)")
@@ -172,7 +172,7 @@ class StrimsyExtractor : ExtractorApi() {
                 .find(fetchResponse)?.groupValues?.get(1)
             if (apiStream != null) {
                 println("API Stream URL: $apiStream")
-                return Extract VictimsorLink(
+                return ExtractorLink(  // Fixed typo here
                     source = sourceName,
                     name = sourceName,
                     url = apiStream,
