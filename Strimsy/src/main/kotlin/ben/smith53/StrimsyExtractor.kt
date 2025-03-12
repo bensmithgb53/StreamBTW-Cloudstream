@@ -15,7 +15,7 @@ class StrimsyExtractor : ExtractorApi() {
     override val requiresReferer = true
 
     private val userAgent =
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36"
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
 
     override suspend fun getUrl(
         url: String,
@@ -76,7 +76,6 @@ class StrimsyExtractor : ExtractorApi() {
         val parsedUrl = URL(resolvedIframeUrl)
         val refererBase = "${parsedUrl.protocol}://${parsedUrl.host}"
         val ref = URLEncoder.encode(refererBase, "UTF-8")
-        val encodedUserAgent = URLEncoder.encode(userAgent, "UTF-8")
         val iframeHeaders = mapOf(
             "User-Agent" to userAgent,
             "Referer" to url
@@ -94,9 +93,9 @@ class StrimsyExtractor : ExtractorApi() {
         // Static .m3u8 check
         val staticStream = Regex("hls\\.loadSource\\(['\"]?(https?://[^'\"]+\\.m3u8[^'\"]*)['\"]?\\)")
             .find(iframeResponse)?.groupValues?.get(1)
-            ?: Regex("video\\.src\\s*=\\s*['\"]?(https?://[^'\"]+\\.m3u8[^'\"]*)['\"]?")
+            ?: Regex("playerInstance\\.load\\(['\"]?(https?://[^'\"]+\\.m3u8[^'\"]*)['\"]?\\)")
                 .find(iframeResponse)?.groupValues?.get(1)
-            ?: Regex("['\"]?(https?://[^'\"\\s]+\\.m3u8(?:\\?[^'\"\\s]*)?)['\"]?)")
+            ?: Regex("file:\\s*['\"]?(https?://[^'\"]+\\.m3u8[^'\"]*)['\"]?")
                 .find(iframeResponse)?.groupValues?.get(1)
         if (staticStream != null) {
             println("Static Stream URL: $staticStream")
@@ -116,7 +115,7 @@ class StrimsyExtractor : ExtractorApi() {
             )
         }
 
-        // Dynamic JS pattern extraction
+        // JW Player JS pattern extraction
         val fetchUrl = Regex("fetch\\(['\"]?(https?://[^'\"]+)['\"]?\\)")
             .find(iframeResponse)?.groupValues?.get(1)
         val streamBase = Regex("var\\s+stream\\s*=\\s*['\"]?(https?://[^'\"\\s]+)['\"]?")
@@ -128,7 +127,6 @@ class StrimsyExtractor : ExtractorApi() {
         val token = Regex("\\?token=([a-f0-9-]{40,})")
             .find(iframeResponse)?.groupValues?.get(1)
 
-        // Construct .m3u8 from patterns
         if (streamBase != null && streamPath != null) {
             val finalLink = "$streamBase$streamPath" + (token?.let { "?token=$it" } ?: "")
             println("Constructed Stream URL: $finalLink")
@@ -147,24 +145,24 @@ class StrimsyExtractor : ExtractorApi() {
             )
         }
 
-        // Fetch API if present
-        if (fetchUrl != null) {
-            println("Found fetch URL: $fetchUrl")
+        // Check API fetch (e.g., ip-api.com response)
+        if (fetchUrl != null && fetchUrl.contains("ip-api.com")) {
+            println("Found API fetch URL: $fetchUrl")
             val fetchResponse = try {
                 app.get(fetchUrl, headers = iframeHeaders).text
             } catch (e: Exception) {
                 println("Failed to fetch $fetchUrl: ${e.message}")
                 return null
             }
-            println("Fetch response: ${fetchResponse.take(1000)}...")
-            val fetchStream = Regex("['\"]?(https?://[^'\"\\s]+\\.m3u8(?:\\?[^'\"\\s]*)?)['\"]?)")
+            println("API fetch response: $fetchResponse")
+            val apiStream = Regex("['\"]?(https?://[^'\"\\s]+\\.m3u8(?:\\?[^'\"\\s]*)?)['\"]?)")
                 .find(fetchResponse)?.groupValues?.get(1)
-            if (fetchStream != null) {
-                println("Fetch Stream URL: $fetchStream")
+            if (apiStream != null) {
+                println("API Stream URL: $apiStream")
                 return ExtractorLink(
                     source = sourceName,
                     name = sourceName,
-                    url = fetchStream,
+                    url = apiStream,
                     referer = resolvedIframeUrl,
                     quality = Qualities.Unknown.value,
                     isM3u8 = true,
@@ -177,7 +175,7 @@ class StrimsyExtractor : ExtractorApi() {
             }
         }
 
-        // Check scripts
+        // Fetch jwpsrv.js or other scripts
         val doc = Jsoup.parse(iframeResponse)
         val scripts = doc.select("script[src]")
         for (script in scripts) {
@@ -188,31 +186,33 @@ class StrimsyExtractor : ExtractorApi() {
                     else -> it
                 }
             }
-            println("Fetching script: $scriptUrl")
-            val scriptResponse = try {
-                app.get(scriptUrl, headers = iframeHeaders).text
-            } catch (e: Exception) {
-                println("Failed to fetch script $scriptUrl: ${e.message}")
-                continue
-            }
-            println("Script snippet: ${scriptResponse.take(1000)}...")
-            val scriptStream = Regex("['\"]?(https?://[^'\"\\s]+\\.m3u8(?:\\?[^'\"\\s]*)?)['\"]?)")
-                .find(scriptResponse)?.groupValues?.get(1)
-            if (scriptStream != null) {
-                println("Script Stream URL: $scriptStream")
-                return ExtractorLink(
-                    source = sourceName,
-                    name = sourceName,
-                    url = scriptStream,
-                    referer = resolvedIframeUrl,
-                    quality = Qualities.Unknown.value,
-                    isM3u8 = true,
-                    headers = mapOf(
-                        "User-Agent" to userAgent,
-                        "Referer" to ref,
-                        "Origin" to ref
+            if (scriptUrl.contains("jwpsrv.js")) {
+                println("Fetching JW Player script: $scriptUrl")
+                val scriptResponse = try {
+                    app.get(scriptUrl, headers = iframeHeaders).text
+                } catch (e: Exception) {
+                    println("Failed to fetch script $scriptUrl: ${e.message}")
+                    continue
+                }
+                println("JW Player script snippet: ${scriptResponse.take(1000)}...")
+                val jwStream = Regex("['\"]?(https?://[^'\"\\s]+\\.m3u8(?:\\?[^'\"\\s]*)?)['\"]?)")
+                    .find(scriptResponse)?.groupValues?.get(1)
+                if (jwStream != null) {
+                    println("JW Player Stream URL: $jwStream")
+                    return ExtractorLink(
+                        source = sourceName,
+                        name = sourceName,
+                        url = jwStream,
+                        referer = resolvedIframeUrl,
+                        quality = Qualities.Unknown.value,
+                        isM3u8 = true,
+                        headers = mapOf(
+                            "User-Agent" to userAgent,
+                            "Referer" to ref,
+                            "Origin" to ref
+                        )
                     )
-                )
+                }
             }
         }
 
