@@ -61,16 +61,21 @@ class StrimsyExtractor : ExtractorApi() {
         println("Embed URL: $finalEmbedUrl")
 
         val embedHeaders = mapOf("User-Agent" to userAgent, "Referer" to liveUrl)
-        val embedResponse = app.get(finalEmbedUrl, headers = embedHeaders).text
-        println("Embed Response Snippet: ${embedResponse.take(500)}...") // Limit to 500 chars for brevity
+        val embedResponse = try {
+            app.get(finalEmbedUrl, headers = embedHeaders).text
+        } catch (e: Exception) {
+            println("Failed to fetch embed URL $finalEmbedUrl: ${e.message}")
+            return null
+        }
+        println("Embed Response Snippet: ${embedResponse.take(1000)}...") // Increased to 1000 chars
 
-        // Try multiple patterns for .m3u8
+        // Search for .m3u8 with broader patterns
         val streamUrl = Regex("hls\\.loadSource\\(['\"]?(https?://[^'\"]+\\.m3u8[^'\"]*)['\"]?\\)")
             .find(embedResponse)?.groupValues?.get(1)
             ?: Regex("video\\.src\\s*=\\s*['\"]?(https?://[^'\"]+\\.m3u8[^'\"]*)['\"]?")
                 .find(embedResponse)?.groupValues?.get(1)
-            ?: Regex("https?://[^'\"\\s]+\\.m3u8")
-                .find(embedResponse)?.value
+            ?: Regex("['\"]?(https?://[^'\"\\s]+\\.m3u8(?:\\?[^'\"\\s]*)?)['\"]?")
+                .find(embedResponse)?.groupValues?.get(1)
             ?: run {
                 println("No .m3u8 URL found in embed response")
                 return null
