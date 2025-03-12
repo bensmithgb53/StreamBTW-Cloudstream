@@ -6,7 +6,6 @@ import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
 import java.net.URL
-import java.net.URLEncoder
 
 class StrimsyExtractor : ExtractorApi() {
     override val mainUrl = "https://strimsy.top"
@@ -24,85 +23,66 @@ class StrimsyExtractor : ExtractorApi() {
         val headers = mapOf(
             "User-Agent" to userAgent,
             "Accept" to "*/*",
-            "Accept-Encoding" to "gzip, deflate, br, zstd",
-            "Accept-Language" to "en-GB,en-US;q=0.9,en;q=0.8",
-            "Connection" to "keep-alive",
             "Referer" to (referer ?: mainUrl),
             "Origin" to mainUrl
         )
 
-        // Step 1: Fetch the specific source page
+        // Step 1: Fetch source page
         println("Fetching source page: $url")
         val initialResp = app.get(url, headers = headers)
         println("Source page response code: ${initialResp.code}, Headers: ${initialResp.headers}")
-        val iframeUrl = Regex("iframe src=\"([^\"]+)\"").findAll(initialResp.text)
-            .map { fixUrl(it.groupValues[1]) }
-            .firstOrNull { !it.contains("chat2.php") }
+        val iframeUrl = Regex("iframe src=\"([^\"]+)\"").find(initialResp.text)
+            ?.groupValues?.get(1)?.let { fixUrl(it) }
         if (iframeUrl == null) {
-            println("No valid iframe found. Page snippet: ${initialResp.text.take(500)}")
+            println("No iframe found. Snippet: ${initialResp.text.take(500)}")
             return
         }
-        println("Found iframe for source: $iframeUrl")
+        println("Found iframe: $iframeUrl")
 
-        // Step 2: Fetch the iframe content
-        val iframeDomain = URL(iframeUrl).host
-        val iframeHeaders = headers + mapOf("Referer" to url, "Origin" to mainUrl)
+        // Step 2: Fetch iframe content
+        val iframeHeaders = headers + mapOf("Referer" to url)
         println("Fetching iframe: $iframeUrl with headers: $iframeHeaders")
         val iframeResp = app.get(iframeUrl, headers = iframeHeaders)
         println("Iframe response code: ${iframeResp.code}, Headers: ${iframeResp.headers}")
         val iframeText = iframeResp.text
 
-        // Step 3: Extract .m3u8 from iframe
+        // Step 3: Extract .m3u8 or build from embed ID
         var m3u8Url = Regex("https?://[^\\s\"']+\\.m3u8(?:[^\\s\"']*)").find(iframeText)?.value
-        println("Script-parsed m3u8: $m3u8Url")
+        println("Parsed m3u8: $m3u8Url")
 
-        // Step 4: Follow additional iframe if no .m3u8
-        if (m3u8Url == null) {
-            val nextIframeUrl = Regex("iframe src=\"(https?://[^\"]+)\"").find(iframeText)?.groupValues?.get(1)
-            if (nextIframeUrl != null) {
-                println("Found next iframe: $nextIframeUrl")
-                val nextResp = app.get(nextIframeUrl, headers = iframeHeaders + mapOf("Referer" to iframeUrl))
-                println("Next iframe response code: ${nextResp.code}, Headers: ${nextResp.headers}")
-                m3u8Url = Regex("https?://[^\\s\"']+\\.m3u8(?:[^\\s\"']*)").find(nextResp.text)?.value
-                println("Next iframe-parsed m3u8: $m3u8Url")
-            }
+        // Fallback: Construct .m3u8 from browncrossing.net embed ID
+        if (m3u8Url == null && iframeUrl.contains("browncrossing.net/embed/")) {
+            val embedId = iframeUrl.split("/embed/").last()
+            m3u8Url = "https://270532139.cdnobject.net:8443/hls/$embedId.m3u8?s=g6oxAt6-VcgJcNXlt-Ar3A&e=1741778010" // Static params
+            println("Constructed m3u8 from embed ID: $m3u8Url")
         }
 
-        // Step 5: Fallback - Try direct .m3u8 fetch if still not found
-        if (m3u8Url == null) {
-            val guessedM3u8 = iframeResp.url.takeIf { it.endsWith(".m3u8") }
-            if (guessedM3u8 != null) {
-                println("Guessing m3u8 from iframe URL: $guessedM3u8")
-                m3u8Url = guessedM3u8
-            }
-        }
-
-        // Step 6: Verify .m3u8 with a HEAD request
+        // Step 4: Verify .m3u8
         if (m3u8Url != null) {
-            val m3u8Check = app.head(m3u8Url, headers = iframeHeaders + mapOf("Referer" to "https://$iframeDomain/"))
+            val m3u8Check = app.head(m3u8Url, headers = mapOf("Referer" to "https://browncrossing.net/", "User-Agent" to userAgent))
             println("m3u8 HEAD check code: ${m3u8Check.code}, Headers: ${m3u8Check.headers}")
             if (!m3u8Check.isSuccessful) {
-                println("m3u8 HEAD check failed, discarding: $m3u8Url")
+                println("m3u8 check failed: $m3u8Url")
                 m3u8Url = null
             }
         }
 
-        // Step 7: Return the link if found
+        // Step 5: Deliver link
         if (m3u8Url?.contains(".m3u8") == true) {
             println("Final m3u8 link: $m3u8Url")
             callback(
                 ExtractorLink(
-                    source = this.name,
+                    source = name,
                     name = "Strimsy Stream",
                     url = m3u8Url,
-                    referer = "https://$iframeDomain/",
+                    referer = "https://browncrossing.net/",
                     quality = Qualities.Unknown.value,
                     isM3u8 = true,
-                    headers = headers + mapOf("Referer" to "https://$iframeDomain/")
+                    headers = mapOf("Referer" to "https://browncrossing.net/")
                 )
             )
         } else {
-            println("No m3u8 link found. Iframe snippet: ${iframeText.take(1000)}")
+            println("No m3u8 found. Iframe snippet: ${iframeText.take(1000)}")
         }
     }
 
