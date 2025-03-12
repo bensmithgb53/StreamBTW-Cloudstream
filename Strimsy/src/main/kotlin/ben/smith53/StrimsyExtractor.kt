@@ -10,6 +10,7 @@ class StrimsyExtractor : ExtractorApi() {
     override val mainUrl = "https://strimsy.top"
     override val name = "Strimsy"
     override val requiresReferer = true
+    
     private val userAgent = 
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
 
@@ -24,35 +25,35 @@ class StrimsyExtractor : ExtractorApi() {
             "User-Agent" to userAgent
         )
         
-        // Get the main match page
+        // Fetch main page
         val matchPage = app.get(url, headers = headers).text
-        // Extract iframe src (/live/tntX.php)
+        
+        // Extract iframe src
         val iframeSrc = Regex("""iframe src=["'](/live/[^"']+)["']""")
             .find(matchPage)?.groupValues?.get(1)
             ?: return
-
-        // Get the iframe content
+            
         val iframeUrl = "$mainUrl$iframeSrc"
+        
+        // Fetch iframe content
         val iframeResponse = app.get(iframeUrl, headers = headers).text
         
-        // Extract the m3u8 URL from the Clappr player script
+        // Extract m3u8 URL
         val m3u8Url = Regex("""playbackURL = ["']([^"']+)["']""")
             .find(iframeResponse)?.groupValues?.get(1)
             ?: return
-
-        // In your second example, the domain differs in network tab
-        // We'll use the URL as-is and adjust referer
+            
         val finalHeaders = mapOf(
             "Referer" to iframeUrl,
             "Origin" to mainUrl,
             "User-Agent" to userAgent
         )
-
+        
         callback(
             ExtractorLink(
-                name,
-                name,
-                m3u8Url,
+                source = name,
+                name = name,
+                url = m3u8Url,
                 referer = iframeUrl,
                 quality = Qualities.Unknown.value,
                 isM3u8 = true,
