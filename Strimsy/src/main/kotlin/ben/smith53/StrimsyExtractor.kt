@@ -1,4 +1,4 @@
-package ben.smith53
+package ben.smith53 // Adjusted to match your project structure
 
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
@@ -6,7 +6,6 @@ import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
 import org.jsoup.Jsoup
-import kotlinx.coroutines.runBlocking
 
 class StrimsyExtractor : ExtractorApi() {
     override val mainUrl = "https://strimsy.top"
@@ -17,8 +16,8 @@ class StrimsyExtractor : ExtractorApi() {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36"
 
     override suspend fun getUrl(
-        url: String,           // No default value here
-        referer: String?,      // No default value here
+        url: String,
+        referer: String?,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
@@ -38,13 +37,11 @@ class StrimsyExtractor : ExtractorApi() {
             .map { "$mainUrl$it" }
             .distinct()
 
-        // Process each event page (runBlocking for simplicity in this context)
+        // Process each event page directly in suspend context
         eventLinks.forEach { eventUrl ->
-            runBlocking {
-                val streamLink = extractStream(eventUrl)
-                if (streamLink != null) {
-                    callback(streamLink)
-                }
+            val streamLink = extractStream(eventUrl)
+            if (streamLink != null) {
+                callback(streamLink)
             }
         }
     }
