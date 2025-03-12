@@ -21,23 +21,16 @@ class StrimsyExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val headers = mapOf(
-            "User-Agent" to userAgent,
-            "Referer" to mainUrl
-        )
-
-        // Fetch the main page
+        val headers = mapOf("User-Agent" to userAgent, "Referer" to mainUrl)
         val mainResponse = app.get(mainUrl, headers = headers).text
         val mainDoc = Jsoup.parse(mainResponse)
-
-        // Extract event page links
         val eventLinks = mainDoc.select("table.ramowka td a[href]")
             .map { link -> link.attr("href") }
             .filter { it.startsWith("/") && !it.contains("liga") && !it.contains("football") }
             .map { "$mainUrl$it" }
             .distinct()
+        println("Found ${eventLinks.size} event links: $eventLinks")
 
-        // Process each event page
         eventLinks.forEach { eventUrl ->
             val streamLink = extractStream(eventUrl)
             if (streamLink != null) {
@@ -47,46 +40,44 @@ class StrimsyExtractor : ExtractorApi() {
     }
 
     private suspend fun extractStream(eventUrl: String): ExtractorLink? {
-        val headers = mapOf(
-            "User-Agent" to userAgent,
-            "Referer" to mainUrl
-        )
-
-        // Step 1: Fetch the event page (e.g., /Dart.php)
+        val headers = mapOf("User-Agent" to userAgent, "Referer" to mainUrl)
         val eventResponse = app.get(eventUrl, headers = headers).text
         val eventDoc = Jsoup.parse(eventResponse)
-
-        // Extract the /live/ iframe URL (e.g., /live/r16w.php)
-        val liveIframe = eventDoc.selectFirst("iframe#rk")?.attr("src") ?: return null
+        val liveIframe = eventDoc.selectFirst("iframe#rk")?.attr("src") ?: run {
+            println("No live iframe found in $eventUrl")
+            return null
+        }
         val liveUrl = if (liveIframe.startsWith("/")) "$mainUrl$liveIframe" else liveIframe
+        println("Live URL: $liveUrl")
 
-        // Step 2: Fetch the live page
-        val liveHeaders = mapOf(
-            "User-Agent" to userAgent,
-            "Referer" to eventUrl
-        )
+        val liveHeaders = mapOf("User-Agent" to userAgent, "Referer" to eventUrl)
         val liveResponse = app.get(liveUrl, headers = liveHeaders).text
         val liveDoc = Jsoup.parse(liveResponse)
-
-        // Extract the embed URL (e.g., swipebreed.net/embed/2h8vdh4t5u)
-        val embedUrl = liveDoc.selectFirst("iframe#rk")?.attr("src") ?: return null
+        val embedUrl = liveDoc.selectFirst("iframe#rk")?.attr("src") ?: run {
+            println("No embed iframe found in $liveUrl")
+            return null
+        }
         val finalEmbedUrl = if (embedUrl.startsWith("//")) "https:$embedUrl" else embedUrl
+        println("Embed URL: $finalEmbedUrl")
 
-        // Step 3: Fetch the embed page and extract the .m3u8 stream
-        val embedHeaders = mapOf(
-            "User-Agent" to userAgent,
-            "Referer" to liveUrl
-        )
+        val embedHeaders = mapOf("User-Agent" to userAgent, "Referer" to liveUrl)
         val embedResponse = app.get(finalEmbedUrl, headers = embedHeaders).text
+        println("Embed Response Snippet: ${embedResponse.take(500)}...") // Limit to 500 chars for brevity
 
-        // Extract .m3u8 URL from hls.loadSource()
+        // Try multiple patterns for .m3u8
         val streamUrl = Regex("hls\\.loadSource\\(['\"]?(https?://[^'\"]+\\.m3u8[^'\"]*)['\"]?\\)")
             .find(embedResponse)?.groupValues?.get(1)
-            ?: return null // If no match, fail gracefully
+            ?: Regex("video\\.src\\s*=\\s*['\"]?(https?://[^'\"]+\\.m3u8[^'\"]*)['\"]?")
+                .find(embedResponse)?.groupValues?.get(1)
+            ?: Regex("https?://[^'\"\\s]+\\.m3u8")
+                .find(embedResponse)?.value
+            ?: run {
+                println("No .m3u8 URL found in embed response")
+                return null
+            }
+        println("Stream URL: $streamUrl")
 
-        // Ensure the stream URL is absolute
         val finalStreamUrl = if (streamUrl.startsWith("//")) "https:$streamUrl" else streamUrl
-
         return ExtractorLink(
             source = this.name,
             name = this.name,
@@ -97,7 +88,7 @@ class StrimsyExtractor : ExtractorApi() {
             headers = mapOf(
                 "User-Agent" to userAgent,
                 "Referer" to finalEmbedUrl,
-                "Origin" to "https://swipebreed.net"
+                "Origin" to finalEmbedUrl.substringBefore("/").substringAfter("//")
             )
         )
     }
