@@ -78,17 +78,21 @@ class StrimsyExtractor : ExtractorApi() {
         val ref = URLEncoder.encode(refererBase, "UTF-8")
         val iframeHeaders = mapOf(
             "User-Agent" to userAgent,
-            "Referer" to url
+            "Referer" to url,
+            "Accept" to "*/*",
+            "Origin" to mainUrl
         )
 
         println("Fetching iframe page: $resolvedIframeUrl")
         val iframeResponse = try {
-            app.get(resolvedIframeUrl, headers = iframeHeaders).text
+            val response = app.get(resolvedIframeUrl, headers = iframeHeaders)
+            println("Iframe response code: ${response.code}")
+            response.text
         } catch (e: Exception) {
             println("Failed to fetch iframe $resolvedIframeUrl: ${e.message}")
             return null
         }
-        println("Iframe snippet: ${iframeResponse.take(1000)}...")
+        println("Iframe snippet: ${iframeResponse.take(2000)}...") // More chars for JS visibility
 
         // Static .m3u8 check
         val staticStream = Regex("hls\\.loadSource\\(['\"]?(https?://[^'\"]+\\.m3u8[^'\"]*)['\"]?\\)")
@@ -96,6 +100,8 @@ class StrimsyExtractor : ExtractorApi() {
             ?: Regex("playerInstance\\.load\\(['\"]?(https?://[^'\"]+\\.m3u8[^'\"]*)['\"]?\\)")
                 .find(iframeResponse)?.groupValues?.get(1)
             ?: Regex("file:\\s*['\"]?(https?://[^'\"]+\\.m3u8[^'\"]*)['\"]?")
+                .find(iframeResponse)?.groupValues?.get(1)
+            ?: Regex("['\"]?(https?://[^'\"\\s]+\\.m3u8(?:\\?[^'\"\\s]*)?)['\"]?)")
                 .find(iframeResponse)?.groupValues?.get(1)
         if (staticStream != null) {
             println("Static Stream URL: $staticStream")
@@ -113,6 +119,8 @@ class StrimsyExtractor : ExtractorApi() {
                     "Origin" to ref
                 )
             )
+        } else {
+            println("No static .m3u8 found in iframe response")
         }
 
         // JW Player JS pattern extraction
@@ -127,26 +135,31 @@ class StrimsyExtractor : ExtractorApi() {
         val token = Regex("\\?token=([a-f0-9-]{40,})")
             .find(iframeResponse)?.groupValues?.get(1)
 
-        if (streamBase != null && streamPath != null) {
-            val finalLink = "$streamBase$streamPath" + (token?.let { "?token=$it" } ?: "")
-            println("Constructed Stream URL: $finalLink")
-            return ExtractorLink(
-                source = sourceName,
-                name = sourceName,
-                url = finalLink,
-                referer = resolvedIframeUrl,
-                quality = Qualities.Unknown.value,
-                isM3u8 = true,
-                headers = mapOf(
-                    "User-Agent" to userAgent,
-                    "Referer" to ref,
-                    "Origin" to ref
+        if (streamBase != null || streamPath != null || token != null) {
+            println("Found JS patterns - Base: $streamBase, Path: $streamPath, Token: $token")
+            if (streamBase != null && streamPath != null) {
+                val finalLink = "$streamBase$streamPath" + (token?.let { "?token=$it" } ?: "")
+                println("Constructed Stream URL: $finalLink")
+                return ExtractorLink(
+                    source = sourceName,
+                    name = sourceName,
+                    url = finalLink,
+                    referer = resolvedIframeUrl,
+                    quality = Qualities.Unknown.value,
+                    isM3u8 = true,
+                    headers = mapOf(
+                        "User-Agent" to userAgent,
+                        "Referer" to ref,
+                        "Origin" to ref
+                    )
                 )
-            )
+            }
+        } else {
+            println("No JS patterns (fetch, stream, path, token) found in iframe")
         }
 
-        // Check API fetch (e.g., ip-api.com response)
-        if (fetchUrl != null && fetchUrl.contains("ip-api.com")) {
+        // Check API fetch
+        if (fetchUrl != null) {
             println("Found API fetch URL: $fetchUrl")
             val fetchResponse = try {
                 app.get(fetchUrl, headers = iframeHeaders).text
@@ -159,7 +172,7 @@ class StrimsyExtractor : ExtractorApi() {
                 .find(fetchResponse)?.groupValues?.get(1)
             if (apiStream != null) {
                 println("API Stream URL: $apiStream")
-                return ExtractorLink(
+                return Extract VictimsorLink(
                     source = sourceName,
                     name = sourceName,
                     url = apiStream,
@@ -186,37 +199,35 @@ class StrimsyExtractor : ExtractorApi() {
                     else -> it
                 }
             }
-            if (scriptUrl.contains("jwpsrv.js")) {
-                println("Fetching JW Player script: $scriptUrl")
-                val scriptResponse = try {
-                    app.get(scriptUrl, headers = iframeHeaders).text
-                } catch (e: Exception) {
-                    println("Failed to fetch script $scriptUrl: ${e.message}")
-                    continue
-                }
-                println("JW Player script snippet: ${scriptResponse.take(1000)}...")
-                val jwStream = Regex("['\"]?(https?://[^'\"\\s]+\\.m3u8(?:\\?[^'\"\\s]*)?)['\"]?)")
-                    .find(scriptResponse)?.groupValues?.get(1)
-                if (jwStream != null) {
-                    println("JW Player Stream URL: $jwStream")
-                    return ExtractorLink(
-                        source = sourceName,
-                        name = sourceName,
-                        url = jwStream,
-                        referer = resolvedIframeUrl,
-                        quality = Qualities.Unknown.value,
-                        isM3u8 = true,
-                        headers = mapOf(
-                            "User-Agent" to userAgent,
-                            "Referer" to ref,
-                            "Origin" to ref
-                        )
+            println("Fetching script: $scriptUrl")
+            val scriptResponse = try {
+                app.get(scriptUrl, headers = iframeHeaders).text
+            } catch (e: Exception) {
+                println("Failed to fetch script $scriptUrl: ${e.message}")
+                continue
+            }
+            println("Script snippet: ${scriptResponse.take(2000)}...")
+            val jwStream = Regex("['\"]?(https?://[^'\"\\s]+\\.m3u8(?:\\?[^'\"\\s]*)?)['\"]?)")
+                .find(scriptResponse)?.groupValues?.get(1)
+            if (jwStream != null) {
+                println("Script Stream URL: $jwStream")
+                return ExtractorLink(
+                    source = sourceName,
+                    name = sourceName,
+                    url = jwStream,
+                    referer = resolvedIframeUrl,
+                    quality = Qualities.Unknown.value,
+                    isM3u8 = true,
+                    headers = mapOf(
+                        "User-Agent" to userAgent,
+                        "Referer" to ref,
+                        "Origin" to ref
                     )
-                }
+                )
             }
         }
 
-        println("No stream found in $resolvedIframeUrl")
+        println("No stream found in $resolvedIframeUrl after all checks")
         return null
     }
 }
