@@ -1,4 +1,4 @@
-package ben.smith53
+package ben.smith53 // Adjust if your package differs
 
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
@@ -25,10 +25,10 @@ class StrimsyExtractor : ExtractorApi() {
             "Accept" to "text/html,application/xhtml+xml"
         )
 
-        // Fetch the base page (e.g., https://strimsy.top/Dart.php)
-        val baseResp = app.get(url, headers = headers).text // Use .text to avoid blocking warning
+        // Fetch the base page
+        val baseResp = app.get(url, headers = headers).text
         
-        // Extract all source links (e.g., ?source=2, ?source=3, etc.)
+        // Extract source links from <a href="?source=X"> tags
         val sourceLinks = Regex("<a href=\"\\?source=(\\d+)\"[^>]*>(.*?)</a>")
             .findAll(baseResp)
             .map { match ->
@@ -37,16 +37,11 @@ class StrimsyExtractor : ExtractorApi() {
                 Pair(label, "$url?source=$sourceNum")
             }
             .toList()
+            .ifEmpty { listOf(Pair("Default", url)) } // Fallback to input URL if no sources
 
-        // If no sources found, try the input URL directly
-        val linksToProcess = if (sourceLinks.isEmpty()) listOf(Pair("Default", url)) else sourceLinks
-
-        // Process each source URL
-        linksToProcess.forEach { (label, sourceUrl) ->
-            val link = extractVideo(sourceUrl, label)
-            if (link != null) {
-                callback(link)
-            }
+        // Extract streams for each source
+        sourceLinks.forEach { (label, sourceUrl) ->
+            extractVideo(sourceUrl, label)?.let { callback(it) }
         }
     }
 
@@ -57,29 +52,28 @@ class StrimsyExtractor : ExtractorApi() {
             "Accept" to "text/html,application/xhtml+xml"
         )
 
-        // Fetch the source-specific page
+        // Fetch the source page
         val resp = app.get(url, headers = headers).text
-        // Extract the iframe URL (generalized for various providers)
         val iframeUrl = Regex("iframe[^>]*src=\"([^\"]+)\"").find(resp)?.groupValues?.get(1)
             ?.let { if (it.startsWith("http")) it else "https://strimsy.top$it" }
-            ?.takeIf { !it.contains("chat") } // Avoid chat iframes
+            ?.takeIf { !it.contains("chat") } // Skip chat iframes
             ?: return null
 
-        // Fetch the iframe content
+        // Fetch iframe content
         val iframeHeaders = mapOf("User-Agent" to userAgent, "Referer" to url)
         val iframeResp = app.get(iframeUrl, headers = iframeHeaders).text
 
-        // Look for a script or another iframe
+        // Look for script or nested iframe
         val nextUrl = Regex("src=\"([^\"]+\\.js)\"").find(iframeResp)?.groupValues?.get(1)
             ?.let { if (it.startsWith("http")) it else "https://${URL(iframeUrl).host}$it" }
             ?: Regex("iframe[^>]*src=\"([^\"]+)\"").find(iframeResp)?.groupValues?.get(1)
             ?.let { if (it.startsWith("http")) it else "https://${URL(iframeUrl).host}$it" }
-            ?: iframeUrl // Fallback to iframe URL
+            ?: iframeUrl
 
         // Fetch the next layer
         val nextResp = app.get(nextUrl, headers = iframeHeaders).text
 
-        // Extract the stream URL
+        // Extract stream URL
         val streamUrl = Regex("https://[^\" ]*\\.m3u8").find(nextResp)?.value
             ?: Regex("https://[^\" ]*\\.ts").find(nextResp)?.value
             ?: Regex("https://[^\" ]*\\.mp4").find(nextResp)?.value
@@ -87,7 +81,7 @@ class StrimsyExtractor : ExtractorApi() {
 
         return ExtractorLink(
             name,
-            "$name - $sourceName", // e.g., "Strimsy - HD 2"
+            "$name - $sourceName",
             streamUrl,
             referer = nextUrl,
             isM3u8 = streamUrl.endsWith(".m3u8"),
