@@ -4,10 +4,11 @@ import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
+import com.lagradost.cloudstream3.SubtitleFile // Added import for SubtitleFile
 
 class StrimsyExtractor : ExtractorApi() {
     override val mainUrl = "https://strimsy.top"
-    override val name = "strimsy"
+    override val name = "Strimsy"
     override val requiresReferer = false
     private val userAgent = "Mozilla/5.0 (Android 10; Mobile; rv:91.0) Gecko/91.0 Firefox/91.0"
 
@@ -21,6 +22,7 @@ class StrimsyExtractor : ExtractorApi() {
         if (extractorLink != null) {
             callback(extractorLink)
         }
+        // Note: No subtitles are extracted in this implementation, so subtitleCallback is not invoked
     }
 
     private suspend fun extractVideo(url: String): ExtractorLink? {
@@ -53,13 +55,13 @@ class StrimsyExtractor : ExtractorApi() {
         
         // Return ExtractorLink
         return ExtractorLink(
-            name,
-            name,
-            m3u8Url,
+            source = name, // Use 'source' instead of 'name' as first parameter
+            name = name,
+            url = m3u8Url,
             referer = secondIframeUrl,
+            quality = Qualities.P720.value,
             isM3u8 = true,
-            headers = headers,
-            quality = Qualities.P720.value
+            headers = headers
         )
     }
 }
