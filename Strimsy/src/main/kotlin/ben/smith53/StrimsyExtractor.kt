@@ -1,4 +1,4 @@
-package ben.smith53 // Adjust if your package differs
+package ben.smith53
 
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
@@ -28,7 +28,7 @@ class StrimsyExtractor : ExtractorApi() {
         // Fetch the base page
         val baseResp = app.get(url, headers = headers).text
         
-        // Extract source links from <a href="?source=X"> tags
+        // Extract source links
         val sourceLinks = Regex("<a href=\"\\?source=(\\d+)\"[^>]*>(.*?)</a>")
             .findAll(baseResp)
             .map { match ->
@@ -37,9 +37,9 @@ class StrimsyExtractor : ExtractorApi() {
                 Pair(label, "$url?source=$sourceNum")
             }
             .toList()
-            .ifEmpty { listOf(Pair("Default", url)) } // Fallback to input URL if no sources
+            .ifEmpty { listOf(Pair("Default", url)) }
 
-        // Extract streams for each source
+        // Process each source
         sourceLinks.forEach { (label, sourceUrl) ->
             extractVideo(sourceUrl, label)?.let { callback(it) }
         }
@@ -52,28 +52,23 @@ class StrimsyExtractor : ExtractorApi() {
             "Accept" to "text/html,application/xhtml+xml"
         )
 
-        // Fetch the source page
         val resp = app.get(url, headers = headers).text
         val iframeUrl = Regex("iframe[^>]*src=\"([^\"]+)\"").find(resp)?.groupValues?.get(1)
             ?.let { if (it.startsWith("http")) it else "https://strimsy.top$it" }
-            ?.takeIf { !it.contains("chat") } // Skip chat iframes
+            ?.takeIf { !it.contains("chat") }
             ?: return null
 
-        // Fetch iframe content
         val iframeHeaders = mapOf("User-Agent" to userAgent, "Referer" to url)
         val iframeResp = app.get(iframeUrl, headers = iframeHeaders).text
 
-        // Look for script or nested iframe
         val nextUrl = Regex("src=\"([^\"]+\\.js)\"").find(iframeResp)?.groupValues?.get(1)
             ?.let { if (it.startsWith("http")) it else "https://${URL(iframeUrl).host}$it" }
             ?: Regex("iframe[^>]*src=\"([^\"]+)\"").find(iframeResp)?.groupValues?.get(1)
             ?.let { if (it.startsWith("http")) it else "https://${URL(iframeUrl).host}$it" }
             ?: iframeUrl
 
-        // Fetch the next layer
         val nextResp = app.get(nextUrl, headers = iframeHeaders).text
 
-        // Extract stream URL
         val streamUrl = Regex("https://[^\" ]*\\.m3u8").find(nextResp)?.value
             ?: Regex("https://[^\" ]*\\.ts").find(nextResp)?.value
             ?: Regex("https://[^\" ]*\\.mp4").find(nextResp)?.value
