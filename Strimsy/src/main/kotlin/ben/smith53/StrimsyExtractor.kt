@@ -19,33 +19,44 @@ class StrimsyExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val headers = mapOf("Referer" to (referer ?: mainUrl), "User-Agent" to userAgent)
+        val headers = mapOf(
+            "Referer" to (referer ?: mainUrl),
+            "User-Agent" to userAgent
+        )
 
-        // Fetch the event page (e.g., AstonVillaClubBrugge.php)
-        val matchPage = app.get(url, headers = headers).text
-        val iframeSrc = Regex("""iframe src=["'](/live/[^"']+)["']""")
-            .find(matchPage)?.groupValues?.get(1) ?: return
-        val iframeUrl = "$mainUrl$iframeSrc"
+        try {
+            // Fetch the event page (e.g., AstonVillaClubBrugge.php)
+            val matchPage = app.get(url, headers = headers).text
+            val iframeSrc = Regex("""iframe src=["'](/live/[^"']+)["']""")
+                .find(matchPage)?.groupValues?.get(1)
+                ?: return // Exit if iframe src not found
 
-        // Fetch the iframe content (e.g., /live/tnt1.php)
-        val iframeResponse = app.get(iframeUrl, headers = headers).text
-        val m3u8Url = Regex("""playbackURL = ["']([^"']+)["']""")
-            .find(iframeResponse)?.groupValues?.get(1) ?: return
+            val iframeUrl = "$mainUrl$iframeSrc"
 
-        callback(
-            ExtractorLink(
-                source = name,
-                name = name,
-                url = m3u8Url,
-                referer = iframeUrl,
-                quality = Qualities.Unknown.value,
-                isM3u8 = true,
-                headers = mapOf(
-                    "Referer" to iframeUrl,
-                    "Origin" to mainUrl,
-                    "User-Agent" to userAgent
+            // Fetch the iframe content (e.g., /live/tnt1.php)
+            val iframeResponse = app.get(iframeUrl, headers = headers).text
+            val m3u8Url = Regex("""playbackURL = ["']([^"']+)["']""")
+                .find(iframeResponse)?.groupValues?.get(1)
+                ?: return // Exit if m3u8 URL not found
+
+            callback(
+                ExtractorLink(
+                    source = name,
+                    name = name,
+                    url = m3u8Url,
+                    referer = iframeUrl,
+                    quality = Qualities.Unknown.value,
+                    isM3u8 = true,
+                    headers = mapOf(
+                        "Referer" to iframeUrl,
+                        "Origin" to mainUrl,
+                        "User-Agent" to userAgent
+                    )
                 )
             )
-        )
+        } catch (e: Exception) {
+            // Replace logError with a simple println for now
+            println("StrimsyExtractor failed: ${e.message}")
+        }
     }
 }
