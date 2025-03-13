@@ -29,7 +29,6 @@ class StrimsyExtractor : ExtractorApi() {
 
         val baseResp = app.get(url, headers = headers).text
         
-        // Using buildList with explicit type
         val sourceLinks: List<SourceLink> = buildList {
             val matches = Regex("<a href=\"\\?source=(\\d+)\"[^>]*>(.*?)</a>").findAll(baseResp)
             for (match in matches) {
