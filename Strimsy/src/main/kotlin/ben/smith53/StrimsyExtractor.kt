@@ -19,25 +19,34 @@ class StrimsyExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val headers = mapOf(
-            "Referer" to (referer ?: mainUrl),
-            "User-Agent" to userAgent
-        )
+        val headers = mapOf("Referer" to (referer ?: mainUrl), "User-Agent" to userAgent)
+        println("StrimsyExtractor: Starting extraction for URL: $url with referer: $referer")
 
         try {
-            // Fetch the event page (e.g., AstonVillaClubBrugge.php)
+            // Fetch the event page
             val matchPage = app.get(url, headers = headers).text
+            println("StrimsyExtractor: Fetched event page, content length: ${matchPage.length}")
+
             val iframeSrc = Regex("""iframe src=["'](/live/[^"']+)["']""")
                 .find(matchPage)?.groupValues?.get(1)
-                ?: return // Exit if iframe src not found
-
+            if (iframeSrc == null) {
+                println("StrimsyExtractor: No iframe src found in event page")
+                return
+            }
             val iframeUrl = "$mainUrl$iframeSrc"
+            println("StrimsyExtractor: Found iframe URL: $iframeUrl")
 
-            // Fetch the iframe content (e.g., /live/tnt1.php)
+            // Fetch the iframe content
             val iframeResponse = app.get(iframeUrl, headers = headers).text
+            println("StrimsyExtractor: Fetched iframe content, length: ${iframeResponse.length}")
+
             val m3u8Url = Regex("""playbackURL = ["']([^"']+)["']""")
                 .find(iframeResponse)?.groupValues?.get(1)
-                ?: return // Exit if m3u8 URL not found
+            if (m3u8Url == null) {
+                println("StrimsyExtractor: No playbackURL found in iframe content")
+                return
+            }
+            println("StrimsyExtractor: Found M3U8 URL: $m3u8Url")
 
             callback(
                 ExtractorLink(
@@ -54,9 +63,9 @@ class StrimsyExtractor : ExtractorApi() {
                     )
                 )
             )
+            println("StrimsyExtractor: Successfully extracted link: $m3u8Url")
         } catch (e: Exception) {
-            // Replace logError with a simple println for now
-            println("StrimsyExtractor failed: ${e.message}")
+            println("StrimsyExtractor: Extraction failed: ${e.message}")
         }
     }
 }
