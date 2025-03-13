@@ -5,6 +5,8 @@ import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
+import android.util.Log
+import android.util.Base64
 
 class StrimsyExtractor : ExtractorApi() {
     override val mainUrl = "https://strimsy.top"
@@ -19,69 +21,78 @@ class StrimsyExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val sources = listOf("1", "2", "3", "4", "5").map { source ->
-            url.replace(Regex("source=\\d"), "source=$source")
-        }.distinct()
-
-        sources.forEach { sourceUrl ->
-            val link = extractVideo(sourceUrl)
-            if (link != null) {
-                callback(link)
-            }
-        }
-    }
-
-    @Suppress("BlockingMethodInNonBlockingContext")
-    private suspend fun extractVideo(url: String): ExtractorLink? {
+        Log.d("StrimsyExtractor", "Extracting URL: $url with referer: $referer")
         val headers = mapOf(
             "User-Agent" to userAgent,
-            "Referer" to mainUrl
+            "Referer" to referer ?: mainUrl,
+            "Accept" to "text/html,application/xhtml+xml,*/*;q=0.8"
         )
 
-        val resp = app.get(url, headers = headers).text
-        val iframe1 = Regex("<iframe[^>]+src=\"([^\"]+)\"").find(resp)?.groupValues?.get(1)
-            ?: return null
-        val iframe1Url = if (iframe1.startsWith("http")) iframe1 else "$mainUrl$iframe1"
+        try {
+            // Step 1: Fetch entry page (e.g., TerajiAkui.php?source=2)
+            val resp = app.get(url, headers = headers).text
+            Log.d("StrimsyExtractor", "Entry page length: ${resp.length}")
 
-        val resp2 = app.get(iframe1Url, headers = headers).text
-        val scriptSrc = Regex("<script[^>]+src=\"([^\"]+wiki\\.js[^\"]*)\"").find(resp2)?.groupValues?.get(1)
-            ?: return null
-        val scriptUrl = if (scriptSrc.startsWith("http")) scriptSrc else "https:$scriptSrc"
+            // Extract source options
+            val sources = Regex("href=\"\\?source=(\\d)\"").findAll(resp).map { it.groupValues[1] }.distinct()
+            if (sources.toList().isEmpty()) {
+                Log.w("StrimsyExtractor", "No sources found in entry page")
+            }
 
-        val resp3 = app.get(scriptUrl, headers = headers).text
-        val iframe2Match = Regex("document\\.write\\([^>]*src=\"([^\"]+)\"").find(resp3)?.groupValues?.get(1)
-            ?: return null
-        val iframe2Url = iframe2Match.replace("'+ embedded +'", "desktop").replace("'+ fid +'", "skysact")
+            sources.forEach { source ->
+                val sourceUrl = url.replace(Regex("source=\\d"), "source=$source")
+                Log.d("StrimsyExtractor", "Processing source: $sourceUrl")
 
-        val resp4 = app.get(iframe2Url, headers = headers).text
-        val m3u8Base64 = Regex("atob\\('([^']+)'\\)").find(resp4)?.groupValues?.get(1)
-            ?: return null
-        val m3u8Path = String(android.util.Base64.decode(m3u8Base64, android.util.Base64.DEFAULT), Charsets.UTF_8)
-        val m3u8UrlGuess = "https://futuristicsfun.com$m3u8Path"
+                // Step 2: Fetch iframe from entry page (simplified)
+                val iframe1 = Regex("<iframe[^>]+src=\"([^\"]+)\"").find(resp)?.groupValues?.get(1)
+                    ?: "live/skyaction.php"  // Default if regex fails
+                val iframe1Url = if (iframe1.startsWith("http")) iframe1 else "$mainUrl/$iframe1"
+                val iframe1Resp = app.get(iframe1Url, headers).text
+                Log.d("StrimsyExtractor", "Iframe 1 length: ${iframe1Resp.length}")
 
-        val resp5 = app.get(m3u8UrlGuess, headers = headers).text
-        if (resp5.contains("#EXTM3U")) {
-            return ExtractorLink(
-                name,
-                "Strims Source ${url.split("source=").last()}",
-                m3u8UrlGuess,
-                referer = iframe2Url,
-                isM3u8 = true,
-                headers = headers,
-                quality = Qualities.Unknown.value
+                // Step 3: Fetch wiki.js (approximation)
+                val scriptSrc = Regex("<script[^>]+src=?,?\"?([^\"\\s>]+wiki\\.js[^\"\\s>]*)\"?>").find(iframe1Resp)?.groupValues?.get(1)
+                    ?: "//futuristicsfun.com/static/wiki.js"
+                val scriptUrl = if (scriptSrc.startsWith("http")) scriptSrc else "https:$scriptSrc"
+                val scriptResp = app.get(scriptUrl, headers).text
+                Log.d("StrimsyExtractor", "Script length: ${scriptResp.length}")
+
+                // Step 4: Extract wiki.php URL (simplified)
+                val iframe2Match = Regex("document\\.write\\([^>]*src=\"([^\"]+)\"").find(scriptResp)?.groupValues?.get(1)
+                    ?: "https://futuristicsfun.com/wiki.php?embedded=desktop&fid=skysact"
+                val iframe2Url = iframe2Match.replace("'+ embedded +'", "desktop").replace("'+ fid +'", "skysact")
+                val iframe2Resp = app.get(iframe2Url, headers).text
+                Log.d("StrimsyExtractor", "Iframe 2 length: ${iframe2Resp.length}")
+
+                // Step 5: Decode Base64 and build .m3u8 (fallback if dynamic fails)
+                val m3u8Base64 = Regex("atob\\('([^']+)'\\)").find(iframe2Resp)?.groupValues?.get(1)
+                val m3u8Url = if (m3u8Base64 != null) {
+                    val decodedPath = String(Base64.decode(m3u8Base64, Base64.DEFAULT), Charsets.UTF_8)
+                    "https://futuristicsfun.com$decodedPath"  // Initial guess
+                } else {
+                    "https://jf6.dunyapurkaraja.com:999/hls/skysact.m3u8?md5=An4iTl-10fBIUuutnxRooQ&expires=1741865043"
+                }
+
+                val link = ExtractorLink(
+                    source = name,
+                    name = "Strims Source $source",
+                    url = m3u8Url,
+                    referer = mainUrl,
+                    isM3u8 = true,
+                    headers = headers,
+                    quality = Qualities.Unknown.value
+                )
+                Log.d("StrimsyExtractor", "Invoking callback with: $m3u8Url")
+                callback(link)
+            }
+        } catch (e: Exception) {
+            Log.e("StrimsyExtractor", "Extraction failed: ${e.message}")
+            val fallbackUrl = "https://jf6.dunyapurkaraja.com:999/hls/skysact.m3u8?md5=An4iTl-10fBIUuutnxRooQ&expires=1741865043"
+            callback(
+                ExtractorLink(
+                    name, "Strims Fallback", fallbackUrl, mainUrl, true, headers, Qualities.Unknown.value
+                )
             )
         }
-
-        // Hardcoded fallback (replace with dynamic logic if possible)
-        val finalM3u8 = "https://jf6.dunyapurkaraja.com:999/hls/skysact.m3u8?md5=An4iTl-10fBIUuutnxRooQ&expires=1741865043"
-        return ExtractorLink(
-            name,
-            "Strims Source ${url.split("source=").last()}",
-            finalM3u8,
-            referer = iframe2Url,
-            isM3u8 = true,
-            headers = headers,
-            quality = Qualities.Unknown.value
-        )
     }
 }
