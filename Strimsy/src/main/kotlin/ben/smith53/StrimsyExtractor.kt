@@ -1,9 +1,9 @@
 package ben.smith53
 
 import com.lagradost.cloudstream3.app
-import com.lagradost.cloudstream3.extractors.ExtractorLink
-import com.lagradost.cloudstream3.extractors.ExtractorApi
-import com.lagradost.cloudstream3.Qualities
+import com.lagradost.cloudstream3.utils.ExtractorApi
+import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.Qualities
 
 class StrimsyExtractor : ExtractorApi() {
     override val mainUrl = "https://strimsy.top"
@@ -14,7 +14,7 @@ class StrimsyExtractor : ExtractorApi() {
     override suspend fun getUrl(
         url: String,
         referer: String?,
-        subtitleCallback: (com.lagradost.cloudstream3.SubtitleFile) -> Unit,
+        subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
         val extractorLink = extractVideo(url)
