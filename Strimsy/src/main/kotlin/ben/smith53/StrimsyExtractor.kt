@@ -2,7 +2,6 @@ package ben.smith53
 
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
-import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
@@ -12,8 +11,7 @@ class StrimsyExtractor : ExtractorApi() {
     override val mainUrl = "https://strimsy.top"
     override val name = "Strimsy"
     override val requiresReferer = true
-    private val userAgent = "Mozilla/5.0 (Android 10; Mobile; rv:91.0) Gecko/91.0 Firefox/91.0"
-    private val cfKiller = CloudflareKiller()
+    private val userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0"
 
     override suspend fun getUrl(
         url: String,
@@ -21,70 +19,85 @@ class StrimsyExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        var currentUrl = url
-        var currentReferer = referer ?: mainUrl
-        val headers = mapOf("User-Agent" to userAgent, "Referer" to currentReferer)
-
-        // Follow iframe chain up to 2 levels
-        repeat(2) { level ->
-            val resp = app.get(currentUrl, headers = headers, interceptor = cfKiller).body.string()
-            val iframe = findStreamIframe(resp) ?: return@repeat
-
-            // Resolve iframe URL
-            currentUrl = if (iframe.startsWith("/")) "$mainUrl$iframe" else if (iframe.startsWith("//")) "https:$iframe" else iframe
-            val parsedUrl = URL(currentUrl)
-            currentReferer = "${parsedUrl.protocol}://${parsedUrl.host}"
-        }
-
-        // Fetch final player page
-        val playerResp = app.get(currentUrl, headers = mapOf("User-Agent" to userAgent, "Referer" to currentReferer), interceptor = cfKiller).body.string()
-        val m3u8Url = extractM3u8(playerResp) ?: return
-
-        // Return the stream link
-        callback(
-            ExtractorLink(
-                source = name,
-                name = name,
-                url = m3u8Url,
-                referer = currentReferer,
-                quality = Qualities.Unknown.value,
-                isM3u8 = true,
-                headers = mapOf("User-Agent" to userAgent, "Referer" to currentReferer)
-            )
+        val headers = mapOf(
+            "User-Agent" to userAgent,
+            "Referer" to referer ?: mainUrl,
+            "Accept" to "text/html,application/xhtml+xml"
         )
-    }
 
-    // Find the iframe likely containing the stream
-    private fun findStreamIframe(html: String): String? {
-        val iframeRegex = Regex("iframe[^>]+src=\"([^\"]+)\"", RegexOption.IGNORE_CASE)
-        val iframes = iframeRegex.findAll(html).map { it.groupValues[1] }.toList()
+        // Fetch the base page (e.g., https://strimsy.top/Dart.php)
+        val baseResp = app.get(url, headers = headers).body.string()
+        
+        // Extract all source links (e.g., ?source=2, ?source=3, etc.)
+        val sourceLinks = Regex("<a href=\"\\?source=(\\d+)\"[^>]*>(.*?)</a>")
+            .findAll(baseResp)
+            .map { match ->
+                val sourceNum = match.groupValues[1]
+                val label = match.groupValues[2].replace("<b>", "").replace("</b>", "").trim()
+                Pair(label, "$url?source=$sourceNum")
+            }
+            .toList()
 
-        // Filter for stream-related iframes
-        return iframes.firstOrNull { iframe ->
-            !iframe.contains(Regex("chat|ads|banner|popup", RegexOption.IGNORE_CASE)) &&
-            iframe.contains(Regex("live|embed|player|stream", RegexOption.IGNORE_CASE))
+        // If no sources found, try the input URL directly
+        val linksToProcess = if (sourceLinks.isEmpty()) listOf(Pair("Default", url)) else sourceLinks
+
+        // Process each source URL
+        linksToProcess.forEach { (label, sourceUrl) ->
+            val link = extractVideo(sourceUrl, label)
+            if (link != null) {
+                callback(link)
+            }
         }
     }
 
-    // Extract .m3u8 from player page, including obfuscated JS
-    private fun extractM3u8(html: String): String? {
-        // Direct .m3u8 match
-        val m3u8Regex = Regex("https?://[^\"']+\\.m3u8(?:\\?[^\"']*)?", RegexOption.IGNORE_CASE)
-        var m3u8 = m3u8Regex.find(html)?.value
-        if (m3u8 != null) return m3u8
+    @Suppress("BlockingMethodInNonBlockingContext")
+    private suspend fun extractVideo(url: String, sourceName: String): ExtractorLink? {
+        val headers = mapOf(
+            "User-Agent" to userAgent,
+            "Referer" to mainUrl,
+            "Accept" to "text/html,application/xhtml+xml"
+        )
 
-        // Obfuscated eval (e.g., jointexploit.net style)
-        val evalRegex = Regex("eval\\(function\\(p,a,c,k,e,d\\).*?'([^']+)'\\.split\\('|'\\)", RegexOption.DOT_MATCHES_ALL)
-        val evalMatch = evalRegex.find(html)?.groupValues?.get(1) ?: return null
-        val keys = evalMatch.split("|")
-        val srcIndex = keys.indexOf("src").takeIf { it >= 0 } ?: return null
-        val urlPattern = Regex("\\b$srcIndex\\s*=\\s*\"([^\"]+)\"")
-        val urlParts = urlPattern.find(html)?.groupValues?.get(1)?.split("\\d+".toRegex()) ?: return null
+        // Fetch the source-specific page
+        val resp = app.get(url, headers = headers).body.string()
+        // Extract the iframe URL (generalized for various providers)
+        val iframeUrl = Regex("iframe[^>]*src=\"([^\"]+)\"").find(resp)?.groupValues?.get(1)
+            ?.let { if (it.startsWith("http")) it else "https://strimsy.top$it" }
+            ?.takeIf { !it.contains("chat") } // Avoid chat iframes
+            ?: return null
 
-        // Reconstruct URL from parts and keys
-        m3u8 = urlParts.joinToString("") { part ->
-            keys.getOrNull(part.toIntOrNull() ?: 0) ?: part
-        }
-        return m3u8.takeIf { it.contains(".m3u8") }
+        // Fetch the iframe content
+        val iframeHeaders = mapOf("User-Agent" to userAgent, "Referer" to url)
+        val iframeResp = app.get(iframeUrl, headers = iframeHeaders).body.string()
+
+        // Look for a script or another iframe
+        val nextUrl = Regex("src=\"([^\"]+\\.js)\"").find(iframeResp)?.groupValues?.get(1)
+            ?.let { if (it.startsWith("http")) it else "https://${URL(iframeUrl).host}$it" }
+            ?: Regex("iframe[^>]*src=\"([^\"]+)\"").find(iframeResp)?.groupValues?.get(1)
+            ?.let { if (it.startsWith("http")) it else "https://${URL(iframeUrl).host}$it" }
+            ?: iframeUrl // Fallback to iframe URL
+
+        // Fetch the next layer
+        val nextResp = app.get(nextUrl, headers = iframeHeaders).body.string()
+
+        // Extract the stream URL
+        val streamUrl = Regex("https://[^\" ]*\\.m3u8").find(nextResp)?.value
+            ?: Regex("https://[^\" ]*\\.ts").find(nextResp)?.value
+            ?: Regex("https://[^\" ]*\\.mp4").find(nextResp)?.value
+            ?: return null
+
+        return ExtractorLink(
+            name,
+            "$name - $sourceName", // e.g., "Strimsy - HD 2"
+            streamUrl,
+            referer = nextUrl,
+            isM3u8 = streamUrl.endsWith(".m3u8"),
+            quality = when {
+                sourceName.contains("FULL HD", true) -> Qualities.P1080.value
+                sourceName.contains("HD", true) -> Qualities.P720.value
+                else -> Qualities.Unknown.value
+            },
+            headers = iframeHeaders
+        )
     }
 }
