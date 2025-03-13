@@ -75,20 +75,17 @@ class StrimsyStreaming : MainAPI() {
         val document = try {
             app.get(mainUrl, timeout = 30).document
         } catch (e: Exception) {
-            loge("Failed to fetch main page", e)
             throw ErrorLoadingException("Could not load schedule from $mainUrl: ${e.message}")
         }
 
         val tabs = document.select("div.tabcontent")
         if (tabs.isEmpty()) {
-            loge("No tabs found on $mainUrl")
             return newHomePageResponse(emptyList()) // Return empty response instead of throwing
         }
 
         val homePageLists = tabs.mapIndexedNotNull { index, tab ->
             val tabButton = document.select("button.tablinks").getOrNull(index)
             if (tabButton == null) {
-                loge("Missing tab button for index $index")
                 return@mapIndexedNotNull null
             }
             val polishDayName = tabButton.text().uppercase()
@@ -115,7 +112,6 @@ class StrimsyStreaming : MainAPI() {
         val document = try {
             app.get(url, timeout = 30).document
         } catch (e: Exception) {
-            loge("Failed to load page $url", e)
             throw ErrorLoadingException("Could not load event page: ${e.message}")
         }
 
@@ -158,7 +154,6 @@ class StrimsyStreaming : MainAPI() {
                 true
             }
         } catch (e: Exception) {
-            loge("Failed to load links for $data", e)
             false
         }
     }
@@ -169,7 +164,6 @@ class StrimsyStreaming : MainAPI() {
                 return try {
                     cfKiller.intercept(chain)
                 } catch (e: Exception) {
-                    loge("Cloudflare bypass failed", e)
                     chain.proceed(chain.request()) // Proceed without bypass if it fails
                 }
             }
@@ -178,4 +172,10 @@ class StrimsyStreaming : MainAPI() {
 
     private fun fixUrl(url: String): String {
         return when {
-            url.startsWith("//") ->
+            url.startsWith("//") -> "https:$url"
+            url.startsWith("/") -> "$mainUrl$url"
+            !url.startsWith("http") -> "$mainUrl/$url"
+            else -> url // Added else branch to make when exhaustive
+        }
+    }
+}
