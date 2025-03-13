@@ -13,7 +13,6 @@ class StrimsyExtractor : ExtractorApi() {
     override val requiresReferer = true
     private val userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0"
 
-    // Define a simple data class instead of using Pair
     data class SourceLink(val label: String, val url: String)
 
     override suspend fun getUrl(
@@ -30,17 +29,18 @@ class StrimsyExtractor : ExtractorApi() {
 
         val baseResp = app.get(url, headers = headers).text
         
-        val sourceLinks: List<SourceLink> = Regex("<a href=\"\\?source=(\\d+)\"[^>]*>(.*?)</a>")
-            .findAll(baseResp)
-            .map { match ->
+        // Using buildList with explicit type
+        val sourceLinks: List<SourceLink> = buildList {
+            val matches = Regex("<a href=\"\\?source=(\\d+)\"[^>]*>(.*?)</a>").findAll(baseResp)
+            for (match in matches) {
                 val sourceNum = match.groupValues[1]
                 val label = match.groupValues[2].replace("<b>", "").replace("</b>", "").trim()
-                SourceLink(label, "$url?source=$sourceNum")
+                add(SourceLink(label, "$url?source=$sourceNum"))
             }
-            .toList()
-            .ifEmpty { 
-                listOf(SourceLink("Default", url))
+            if (isEmpty()) {
+                add(SourceLink("Default", url))
             }
+        }
 
         sourceLinks.forEach { sourceLink ->
             extractVideo(sourceLink.url, sourceLink.label)?.let { callback(it) }
