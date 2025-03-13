@@ -123,9 +123,10 @@ class StrimsyStreaming : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         return try {
-            StrimsyExtractor().getUrl(data, data, subtitleCallback, callback)
+            StrimsyExtractor().getUrl(data, mainUrl, subtitleCallback, callback)
             true
         } catch (e: Exception) {
+            logError(e)
             false
         }
     }
