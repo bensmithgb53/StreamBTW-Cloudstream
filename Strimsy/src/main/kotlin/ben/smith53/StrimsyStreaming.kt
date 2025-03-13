@@ -126,7 +126,7 @@ class StrimsyStreaming : MainAPI() {
             StrimsyExtractor().getUrl(data, mainUrl, subtitleCallback, callback)
             true
         } catch (e: Exception) {
-            logError(e)
+            println("Failed to load links: ${e.message}") // Fixed line 129
             false
         }
     }
