@@ -25,21 +25,18 @@ class StrimsyExtractor : ExtractorApi() {
             "Accept" to "text/html,application/xhtml+xml"
         )
 
-        // Fetch the base page
         val baseResp = app.get(url, headers = headers).text
         
-        // Extract source links
         val sourceLinks = Regex("<a href=\"\\?source=(\\d+)\"[^>]*>(.*?)</a>")
             .findAll(baseResp)
             .map { match ->
                 val sourceNum = match.groupValues[1]
                 val label = match.groupValues[2].replace("<b>", "").replace("</b>", "").trim()
-                Pair(label, "$url?source=$sourceNum")
+                kotlin.Pair(label, "$url?source=$sourceNum")
             }
             .toList()
-            .ifEmpty { listOf(Pair("Default", url)) }
+            .ifEmpty { listOf(kotlin.Pair("Default", url)) }
 
-        // Process each source
         sourceLinks.forEach { (label, sourceUrl) ->
             extractVideo(sourceUrl, label)?.let { callback(it) }
         }
