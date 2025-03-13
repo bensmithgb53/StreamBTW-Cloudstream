@@ -66,23 +66,32 @@ class StrimsyStreaming : MainAPI() {
     )
 
     private fun translateEventName(name: String, className: String?): String {
-        eventTranslation[name]?.let { return it }
-        className?.let { cls ->
-            eventTranslation[cls]?.let { type ->
-                return "$type: $name"
-            }
-        }
-        return name
+        return eventTranslation[name] ?: className?.let { cls ->
+            eventTranslation[cls]?.let { type -> "$type: $name" }
+        } ?: name
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val document = app.get(mainUrl).document
+        val document = try {
+            app.get(mainUrl, timeout = 30).document
+        } catch (e: Exception) {
+            loge("Failed to fetch main page", e)
+            throw ErrorLoadingException("Could not load schedule from $mainUrl: ${e.message}")
+        }
+
         val tabs = document.select("div.tabcontent")
+        if (tabs.isEmpty()) {
+            loge("No tabs found on $mainUrl")
+            return newHomePageResponse(emptyList()) // Return empty response instead of throwing
+        }
 
-        if (tabs.isEmpty()) throw ErrorLoadingException("No schedule found")
-
-        val homePageLists = tabs.mapIndexed { index, tab ->
-            val polishDayName = document.select("button.tablinks")[index].text().uppercase()
+        val homePageLists = tabs.mapIndexedNotNull { index, tab ->
+            val tabButton = document.select("button.tablinks").getOrNull(index)
+            if (tabButton == null) {
+                loge("Missing tab button for index $index")
+                return@mapIndexedNotNull null
+            }
+            val polishDayName = tabButton.text().uppercase()
             val englishDayName = dayTranslation[polishDayName] ?: polishDayName
             val events = tab.select("td").mapNotNull { td ->
                 val linkElement = td.selectFirst("a") ?: return@mapNotNull null
@@ -90,7 +99,7 @@ class StrimsyStreaming : MainAPI() {
                 val rawName = linkElement.text().trim()
                 val className = linkElement.className().takeIf { it.isNotEmpty() }
                 val translatedName = translateEventName(rawName, className)
-                val time = td.text().substringBefore(" ").trim()
+                val time = td.text().substringBefore(" ").trim().takeIf { it.isNotEmpty() } ?: "Unknown Time"
                 newLiveSearchResponse(
                     name = "$time - $translatedName",
                     url = href,
@@ -103,9 +112,15 @@ class StrimsyStreaming : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val document = app.get(url).document
+        val document = try {
+            app.get(url, timeout = 30).document
+        } catch (e: Exception) {
+            loge("Failed to load page $url", e)
+            throw ErrorLoadingException("Could not load event page: ${e.message}")
+        }
+
         val rawTitle = document.selectFirst("title")?.text()?.substringBefore(" - STRIMS")?.trim()
-            ?: url.substringAfterLast("/").substringBefore(".php").replace("-", " ")
+            ?: url.substringAfterLast("/").substringBefore(".php").replace("-", " ").ifEmpty { "Unknown Event" }
         val className = document.selectFirst("iframe")?.parent()?.selectFirst("a")?.className()
         val translatedTitle = translateEventName(rawTitle, className)
 
@@ -123,10 +138,27 @@ class StrimsyStreaming : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         return try {
-            StrimsyExtractor().getUrl(data, mainUrl, subtitleCallback, callback)
-            true
+            // Fallback if StrimsyExtractor is missing or fails
+            val document = app.get(data, timeout = 30).document
+            val iframe = document.selectFirst("iframe")?.attr("src")
+            if (iframe != null) {
+                callback.invoke(
+                    ExtractorLink(
+                        source = this.name,
+                        name = "Strimsy Direct",
+                        url = fixUrl(iframe),
+                        referer = mainUrl,
+                        quality = Qualities.Unknown.value,
+                        isM3u8 = iframe.contains("m3u8")
+                    )
+                )
+                true
+            } else {
+                StrimsyExtractor().getUrl(data, mainUrl, subtitleCallback, callback)
+                true
+            }
         } catch (e: Exception) {
-            loge(e) // Improved logging with CloudStream utils
+            loge("Failed to load links for $data", e)
             false
         }
     }
@@ -134,15 +166,16 @@ class StrimsyStreaming : MainAPI() {
     override fun getVideoInterceptor(extractorLink: ExtractorLink): Interceptor {
         return object : Interceptor {
             override fun intercept(chain: Interceptor.Chain): Response {
-                return cfKiller.intercept(chain)
+                return try {
+                    cfKiller.intercept(chain)
+                } catch (e: Exception) {
+                    loge("Cloudflare bypass failed", e)
+                    chain.proceed(chain.request()) // Proceed without bypass if it fails
+                }
             }
         }
     }
 
     private fun fixUrl(url: String): String {
-        return if (url.startsWith("//")) "https:$url"
-        else if (url.startsWith("/")) "$mainUrl$url"
-        else if (!url.startsWith("http")) "$mainUrl/$url"
-        else url
-    }
-}
+        return when {
+            url.startsWith("//") ->
