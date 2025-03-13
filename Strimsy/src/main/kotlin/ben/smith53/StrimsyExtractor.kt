@@ -26,7 +26,7 @@ class StrimsyExtractor : ExtractorApi() {
         )
 
         // Fetch the base page (e.g., https://strimsy.top/Dart.php)
-        val baseResp = app.get(url, headers = headers).body.string()
+        val baseResp = app.get(url, headers = headers).text // Use .text to avoid blocking warning
         
         // Extract all source links (e.g., ?source=2, ?source=3, etc.)
         val sourceLinks = Regex("<a href=\"\\?source=(\\d+)\"[^>]*>(.*?)</a>")
@@ -50,7 +50,6 @@ class StrimsyExtractor : ExtractorApi() {
         }
     }
 
-    @Suppress("BlockingMethodInNonBlockingContext")
     private suspend fun extractVideo(url: String, sourceName: String): ExtractorLink? {
         val headers = mapOf(
             "User-Agent" to userAgent,
@@ -59,7 +58,7 @@ class StrimsyExtractor : ExtractorApi() {
         )
 
         // Fetch the source-specific page
-        val resp = app.get(url, headers = headers).body.string()
+        val resp = app.get(url, headers = headers).text
         // Extract the iframe URL (generalized for various providers)
         val iframeUrl = Regex("iframe[^>]*src=\"([^\"]+)\"").find(resp)?.groupValues?.get(1)
             ?.let { if (it.startsWith("http")) it else "https://strimsy.top$it" }
@@ -68,7 +67,7 @@ class StrimsyExtractor : ExtractorApi() {
 
         // Fetch the iframe content
         val iframeHeaders = mapOf("User-Agent" to userAgent, "Referer" to url)
-        val iframeResp = app.get(iframeUrl, headers = iframeHeaders).body.string()
+        val iframeResp = app.get(iframeUrl, headers = iframeHeaders).text
 
         // Look for a script or another iframe
         val nextUrl = Regex("src=\"([^\"]+\\.js)\"").find(iframeResp)?.groupValues?.get(1)
@@ -78,7 +77,7 @@ class StrimsyExtractor : ExtractorApi() {
             ?: iframeUrl // Fallback to iframe URL
 
         // Fetch the next layer
-        val nextResp = app.get(nextUrl, headers = iframeHeaders).body.string()
+        val nextResp = app.get(nextUrl, headers = iframeHeaders).text
 
         // Extract the stream URL
         val streamUrl = Regex("https://[^\" ]*\\.m3u8").find(nextResp)?.value
