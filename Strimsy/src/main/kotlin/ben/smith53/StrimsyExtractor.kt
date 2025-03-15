@@ -1,4 +1,4 @@
-package ben.smith53.extractors
+package ben.smith53
 
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
