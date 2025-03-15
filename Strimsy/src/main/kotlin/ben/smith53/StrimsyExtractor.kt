@@ -1,17 +1,21 @@
-package ben.smith53
+package ben.smith53.extractors
 
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.Qualities
-import java.net.URL
+import com.lagradost.cloudstream3.utils.M3u8Helper
+import com.lagradost.cloudstream3.utils.getQualityFromName
+import org.jsoup.Jsoup
 
 class StrimsyExtractor : ExtractorApi() {
-    override val mainUrl = "https://strimsy.top"
     override val name = "Strimsy"
+    override val mainUrl = "https://strimsy.top"
     override val requiresReferer = true
-    private val userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0"
+
+    private val sourceRegex = Regex("source=(\\d+)")
+    private val m3u8Regex = Regex("['\"]?(https?://[^'\"\\s]+\\.m3u8[^'\"\\s]*)['\" ]?")
+    private val eventRegex = Regex("(?<=/l/|/)([^/]+?)(?=\\.php|LIV\\.php)")
 
     override suspend fun getUrl(
         url: String,
@@ -19,73 +23,76 @@ class StrimsyExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val headers = mapOf(
-            "User-Agent" to userAgent,
-            "Referer" to referer ?: mainUrl,
-            "Accept" to "text/html,application/xhtml+xml"
-        )
+        // Extract source number (default to 2 if not specified)
+        val sourceNum = sourceRegex.find(url)?.groupValues?.get(1)?.toIntOrNull() ?: 2
+        val pageUrl = if (url.contains("?source=")) url else "$url?source=$sourceNum"
 
-        val baseResp = app.get(url, headers = headers).text
-        
-        // Explicitly typed as List of custom data class to avoid Pair issues
-        data class Source(val label: String, val sourceUrl: String)
-        
-        val sourceLinks: List<Source> = Regex("<a href=\"\\?source=(\\d+)\"[^>]*>(.*?)</a>")
-            .findAll(baseResp)
-            .map { match ->
-                val sourceNum = match.groupValues[1]
-                val label = match.groupValues[2].replace("<b>", "").replace("</b>", "").trim()
-                Source(label, "$url?source=$sourceNum")
+        // Extract event name for labeling
+        val eventName = eventRegex.find(url)?.groupValues?.get(1)?.replaceFirstChar { it.uppercase() } ?: "Stream"
+
+        // Fetch main page
+        val mainResponse = app.get(pageUrl, headers = mapOf("Referer" to mainUrl), timeout = 15).text
+        val mainDoc = Jsoup.parse(mainResponse)
+
+        // Find iframes, skipping chat
+        val iframes = mainDoc.select("iframe").mapNotNull { it.attr("src") }
+            .filter { !it.contains("chat", ignoreCase = true) }
+
+        if (iframes.isEmpty()) {
+            log("No iframes found on $pageUrl")
+            return
+        }
+
+        iframes.forEach { iframeSrc ->
+            val fullIframeUrl = if (iframeSrc.startsWith("http")) iframeSrc else "$mainUrl$iframeSrc"
+            try {
+                // Fetch iframe content
+                val iframeResponse = app.get(
+                    fullIframeUrl,
+                    headers = mapOf("Referer" to pageUrl),
+                    timeout = 15
+                ).text
+
+                // Extract .m3u8 URLs
+                m3u8Regex.findAll(iframeResponse).forEach { match ->
+                    val m3u8Url = match.groupValues[1]
+                    val quality = when {
+                        "hd" in m3u8Url.lowercase() -> "HD"
+                        "1080" in m3u8Url -> "1080p"
+                        "720" in m3u8Url -> "720p"
+                        else -> "Unknown"
+                    }
+
+                    // Create extractor link
+                    callback.invoke(
+                        ExtractorLink(
+                            source = this.name,
+                            name = "$name - $eventName Source $sourceNum",
+                            url = m3u8Url,
+                            referer = pageUrl,
+                            quality = getQualityFromName(quality),
+                            isM3u8 = true,
+                            headers = mapOf(
+                                "Referer" to pageUrl,
+                                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36"
+                            )
+                        )
+                    )
+
+                    // Resolve M3U8 playlist for quality variants
+                    M3u8Helper.generateM3u8(
+                        source = this.name,
+                        streamUrl = m3u8Url,
+                        referer = pageUrl
+                    ).forEach(callback)
+                }
+            } catch (e: Exception) {
+                log("Error fetching iframe $fullIframeUrl: ${e.message}")
             }
-            .toList()
-            .ifEmpty { listOf(Source("Default", url)) }
-
-        sourceLinks.forEach { source ->
-            extractVideo(source.sourceUrl, source.label)?.let { callback(it) }
         }
     }
 
-    private suspend fun extractVideo(url: String, sourceName: String): ExtractorLink? {
-        val headers = mapOf(
-            "User-Agent" to userAgent,
-            "Referer" to mainUrl,
-            "Accept" to "text/html,application/xhtml+xml"
-        )
-
-        val resp = app.get(url, headers = headers).text
-        val iframeUrl = Regex("iframe[^>]*src=\"([^\"]+)\"").find(resp)?.groupValues?.get(1)
-            ?.let { if (it.startsWith("http")) it else "https://strimsy.top$it" }
-            ?.takeIf { !it.contains("chat") }
-            ?: return null
-
-        val iframeHeaders = mapOf("User-Agent" to userAgent, "Referer" to url)
-        val iframeResp = app.get(iframeUrl, headers = iframeHeaders).text
-
-        val nextUrl = Regex("src=\"([^\"]+\\.js)\"").find(iframeResp)?.groupValues?.get(1)
-            ?.let { if (it.startsWith("http")) it else "https://${URL(iframeUrl).host}$it" }
-            ?: Regex("iframe[^>]*src=\"([^\"]+)\"").find(iframeResp)?.groupValues?.get(1)
-            ?.let { if (it.startsWith("http")) it else "https://${URL(iframeUrl).host}$it" }
-            ?: iframeUrl
-
-        val nextResp = app.get(nextUrl, headers = iframeHeaders).text
-
-        val streamUrl = Regex("https://[^\" ]*\\.m3u8").find(nextResp)?.value
-            ?: Regex("https://[^\" ]*\\.ts").find(nextResp)?.value
-            ?: Regex("https://[^\" ]*\\.mp4").find(nextResp)?.value
-            ?: return null
-
-        return ExtractorLink(
-            name,
-            "$name - $sourceName",
-            streamUrl,
-            referer = nextUrl,
-            isM3u8 = streamUrl.endsWith(".m3u8"),
-            quality = when {
-                sourceName.contains("FULL HD", true) -> Qualities.P1080.value
-                sourceName.contains("HD", true) -> Qualities.P720.value
-                else -> Qualities.Unknown.value
-            },
-            headers = iframeHeaders
-        )
+    private fun log(message: String) {
+        println("StrimsyExtractor: $message")
     }
 }
