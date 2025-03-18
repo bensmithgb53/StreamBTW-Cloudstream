@@ -7,12 +7,11 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
 
 class StrimsyExtractor : ExtractorApi() {
-    override val mainUrl = "https://strimsy.top"
     override val name = "Strimsy"
+    override val mainUrl = "https://strimsy.top"
     override val requiresReferer = true
-    private val streamApi = "https://streamtp3.com/global1.php"
-    private val userAgent =
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36"
+    private val userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36"
+    private val cookie = "PHPSESSID=sr2ufaf1h3ha63dge62ahob"
 
     override suspend fun getUrl(
         url: String,
@@ -21,31 +20,30 @@ class StrimsyExtractor : ExtractorApi() {
         callback: (ExtractorLink) -> Unit
     ) {
         val headers = mapOf(
-            "Referer" to (referer ?: "https://streamtp3.com/"),
-            "User-Agent" to userAgent
+            "User-Agent" to userAgent,
+            "Referer" to (referer ?: url),
+            "Cookie" to cookie
         )
+        val response = app.get(url, headers = headers).text
+        val streamId = Regex("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}").find(response)?.groupValues?.get(0)
+            ?: return
+        val apiUrl = "$url?type=live"
+        val apiResponse = app.get(apiUrl, headers = headers).text
+        val m3u8Path = Regex("/[a-zA-Z0-9\\-]+\\.m3u8").find(apiResponse)?.groupValues?.get(0)
+            ?: return
+        val baseCdn = "https://ve16o28z6o6dszgkty3jni6ulo3ba9jt.global.ssl.fastly.net"
+        val finalUrl = "$baseCdn/v3/fragment/$streamId/tracks-v1a1/$m3u8Path"
 
-        val sourceMatch = Regex("source=(\\d+)").find(url)?.groupValues?.get(1)
-        if (sourceMatch != null) {
-            val apiUrl = "$streamApi?stream=ufc_$sourceMatch"
-            val apiResponse = app.get(apiUrl, headers = headers).text
-            val m3u8Pattern = Regex("""https?://[^'"\s]+?\.m3u8\?token=[a-f0-9]+-\w+-\d+-\d+""")
-            val m3u8Match = m3u8Pattern.find(apiResponse)
-
-            if (m3u8Match != null) {
-                val m3u8Url = m3u8Match.value
-                callback(
-                    ExtractorLink(
-                        source = name,
-                        name = name,
-                        url = m3u8Url,
-                        referer = "https://streamtp3.com/",
-                        quality = Qualities.Unknown.value,
-                        isM3u8 = true,
-                        headers = headers
-                    )
-                )
-            }
-        }
+        callback.invoke(
+            ExtractorLink(
+                name,
+                name,
+                finalUrl,
+                referer ?: url,
+                true,
+                Qualities.Unknown.value,
+                headers = headers
+            )
+        )
     }
 }
