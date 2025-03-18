@@ -1,12 +1,8 @@
-package ben.smithgb53
+package ben.smith53
 
 import android.util.Log
-import com.lagradost.cloudstream3.SubtitleFile
-import com.lagradost.cloudstream3.app
-import com.lagradost.cloudstream3.utils.ExtractorApi
-import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.Qualities
-import org.jsoup.Jsoup
+import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.utils.*
 
 class StrimsyExtractor : ExtractorApi() {
     override val name = "Strimsy"
@@ -17,58 +13,18 @@ class StrimsyExtractor : ExtractorApi() {
 
     override suspend fun getUrl(
         url: String,
-        referer: String?,
+        refererUrl: String?, // Corrected parameter name
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        Log.d("Strimsy", "Extractor called with URL: $url, Referer: $referer")
+        Log.d("Strimsy", "Extractor called with URL: $url, RefererUrl: $refererUrl")
         val headers = mapOf(
             "User-Agent" to userAgent,
-            "Referer" to (referer ?: url),
+            "Referer" to (refererUrl ?: url),
             "Cookie" to cookie
         )
         Log.d("Strimsy", "Headers: $headers")
 
-        try {
-            // If the URL is the main page, parse it for events
-            if (url == mainUrl) {
-                Log.d("Strimsy", "Parsing main page for events")
-                val mainResponse = app.get(url, headers = headers).text
-                Log.d("Strimsy", "Main page response length: ${mainResponse.length}")
-                val eventUrls = parseMainPage(mainResponse)
-                Log.d("Strimsy", "Found ${eventUrls.size} events")
-
-                eventUrls.forEach { eventUrl ->
-                    Log.d("Strimsy", "Processing event URL: $eventUrl")
-                    extractStream(eventUrl, headers, callback)
-                }
-            } else {
-                // Direct stream URL
-                Log.d("Strimsy", "Processing direct stream URL")
-                extractStream(url, headers, callback)
-            }
-        } catch (e: Exception) {
-            Log.e("Strimsy", "Error in getUrl: ${e.message}", e)
-        }
-    }
-
-    private fun parseMainPage(html: String): List<String> {
-        Log.d("Strimsy", "Parsing HTML for event URLs")
-        val urls = mutableListOf<String>()
-        val doc = Jsoup.parse(html)
-        val tables = doc.select("div.tabcontent table.ramowka")
-        tables.forEach { table ->
-            table.select("tr td a[href]").forEach { link ->
-                val eventUrl = "$mainUrl${link.attr("href")}"
-                val eventName = link.text().trim()
-                Log.d("Strimsy", "Found event: $eventName - $eventUrl")
-                urls.add(eventUrl)
-            }
-        }
-        return urls
-    }
-
-    private suspend fun extractStream(url: String, headers: Map<String, String>, callback: (ExtractorLink) -> Unit) {
         try {
             Log.d("Strimsy", "Fetching stream page: $url")
             val response = app.get(url, headers = headers).text
@@ -107,12 +63,12 @@ class StrimsyExtractor : ExtractorApi() {
             // Verify and callback
             callback.invoke(
                 ExtractorLink(
-                    name,
-                    name,
-                    finalUrl,
-                    referer ?: url,
-                    true,
-                    Qualities.Unknown.value,
+                    source = name,
+                    name = name,
+                    url = finalUrl,
+                    referer = refererUrl ?: url,
+                    quality = Qualities.Unknown.value,
+                    isM3u8 = true,
                     headers = headers
                 )
             )
