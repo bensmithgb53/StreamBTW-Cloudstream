@@ -12,9 +12,7 @@ class StrimsyStreaming : MainAPI() {
     override val hasMainPage = true
     override val hasDownloadSupport = true
     override val vpnStatus = VPNStatus.MightBeNeeded
-    override val supportedTypes = setOf(
-        TvType.Live
-    )
+    override val supportedTypes = setOf(TvType.Live)
 
     private val baseHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
@@ -79,24 +77,8 @@ class StrimsyStreaming : MainAPI() {
         return isChat
     }
 
-    private suspend fun getTeamPages(sportUrl: String, cookies: Map<String, String>): List<Pair<String, String>> {
-        println("StrimsyStreaming: Fetching team pages for $sportUrl")
-        val headersWithCookies = baseHeaders + mapOf("Cookie" to cookies.entries.joinToString("; ") { "${it.key}=${it.value}" })
-        val doc = app.get(sportUrl, headers = headersWithCookies).document
-        val teamLinks = mutableListOf<Pair<String, String>>()
-        doc.select("a[href^='?team=']").forEach { aTag ->
-            val href = fixUrl(aTag.attr("href"))
-            val teamName = aTag.previousElementSibling()?.text() ?: aTag.text()
-            println("StrimsyStreaming: Found team link: $teamName -> $href")
-            teamLinks.add(Pair(teamName, href))
-        }
-        println("StrimsyStreaming: Found ${teamLinks.size} team links for $sportUrl")
-        return teamLinks
-    }
-
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         println("StrimsyStreaming: getMainPage called with page=$page, request=$request")
-        // Fetch the main page and capture cookies
         val response = app.get(mainUrl, headers = baseHeaders)
         val cookies = response.cookies
         println("StrimsyStreaming: Cookies fetched: $cookies")
@@ -125,32 +107,16 @@ class StrimsyStreaming : MainAPI() {
                 val eventName = "$time - $translatedName"
                 println("StrimsyStreaming: Found event: $eventName -> $href")
 
-                if (href.contains("/NBA/") || href.contains("/NHL/")) {
-                    val teamPages = getTeamPages(href, cookies)
-                    teamPages.forEach { (teamName, teamUrl) ->
-                        println("StrimsyStreaming: Adding team event: $eventName - $teamName -> $teamUrl")
-                        events.add(
-                            newLiveSearchResponse(
-                                name = "$eventName - $teamName",
-                                url = teamUrl,
-                                type = TvType.Live
-                            ) {
-                                this.posterUrl = null
-                            }
-                        )
+                println("StrimsyStreaming: Adding event: $eventName -> $href")
+                events.add(
+                    newLiveSearchResponse(
+                        name = eventName,
+                        url = href,
+                        type = TvType.Live
+                    ) {
+                        this.posterUrl = null
                     }
-                } else {
-                    println("StrimsyStreaming: Adding event: $eventName -> $href")
-                    events.add(
-                        newLiveSearchResponse(
-                            name = eventName,
-                            url = href,
-                            type = TvType.Live
-                        ) {
-                            this.posterUrl = null
-                        }
-                    )
-                }
+                )
             }
 
             if (events.isNotEmpty()) {
@@ -170,7 +136,6 @@ class StrimsyStreaming : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         println("StrimsyStreaming: loadLinks called with data=$data, isCasting=$isCasting")
-        // Fetch the page and capture cookies
         val response = app.get(data, headers = baseHeaders)
         val cookies = response.cookies
         println("StrimsyStreaming: Cookies fetched: $cookies")
@@ -195,7 +160,7 @@ class StrimsyStreaming : MainAPI() {
             val fixedIframeUrl = fixUrl(iframeUrl)
             println("StrimsyStreaming: Processing iframe $fixedIframeUrl")
             val extractor = StrimsyExtractor()
-            extractor.cookies = cookies // Set the cookies on the extractor
+            extractor.cookies = cookies
             val links = extractor.getUrl(fixedIframeUrl, data)
             links?.forEach { link ->
                 println("StrimsyStreaming: Found link ${link.url}")
