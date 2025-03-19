@@ -172,16 +172,13 @@ class StrimsyStreaming : MainAPI() {
             val fixedIframeUrl = fixUrl(iframeUrl)
             println("StrimsyStreaming: Processing iframe $fixedIframeUrl")
             val extractor = StrimsyExtractor()
-            val links = extractor.getUrl(fixedIframeUrl, data, cookies)
-            if (links != null) {
-                links.forEach { link ->
-                    println("StrimsyStreaming: Found link ${link.url}")
-                    callback(link)
-                    linksFound = true
-                }
-            } else {
-                println("StrimsyStreaming: No links found for iframe $fixedIframeUrl")
-            }
+            extractor.cookies = cookies // Set the cookies on the extractor
+            val links = extractor.getUrl(fixedIframeUrl, data)
+            links?.forEach { link ->
+                println("StrimsyStreaming: Found link ${link.url}")
+                callback(link)
+                linksFound = true
+            } ?: println("StrimsyStreaming: No links found for iframe $fixedIframeUrl")
         }
 
         return linksFound
