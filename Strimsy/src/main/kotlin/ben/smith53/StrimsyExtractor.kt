@@ -14,7 +14,6 @@ class StrimsyExtractor : ExtractorApi() {
         "Referer" to "$mainUrl/"
     )
 
-    // Property to store cookies
     var cookies: Map<String, String> = emptyMap()
 
     private suspend fun followIframeChain(url: String, referer: String?, depth: Int = 0, maxDepth: Int = 3): String? {
@@ -33,7 +32,6 @@ class StrimsyExtractor : ExtractorApi() {
             return url
         }
 
-        // Fix relative URLs
         val fixedIframeSrc = if (iframeSrc.startsWith("/")) {
             "$mainUrl$iframeSrc"
         } else if (!iframeSrc.startsWith("http")) {
@@ -49,17 +47,14 @@ class StrimsyExtractor : ExtractorApi() {
 
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
         println("StrimsyExtractor: getUrl called with url=$url, referer=$referer")
-        // Follow iframe chain to get to the final page
         val finalUrl = followIframeChain(url, referer) ?: url
         val headersWithCookies = baseHeaders + mapOf("Cookie" to cookies.entries.joinToString("; ") { "${it.key}=${it.value}" })
         val response = app.get(finalUrl, headers = headersWithCookies, referer = referer)
         val document = response.document
 
-        // Log the response for debugging
         println("StrimsyExtractor: Final URL: $finalUrl")
-        println("StrimsyExtractor: Response body: ${response.text.take(500)}...") // First 500 chars for brevity
+        println("StrimsyExtractor: Response body: ${response.text.take(500)}...")
 
-        // Extract playbackURL or hlsUrl from JavaScript
         val scriptText = document.select("script").joinToString("\n") { it.html() }
         println("StrimsyExtractor: Script text: ${scriptText.take(500)}...")
         val playbackUrlRegex = Regex("(?:var\\s+playbackURL|hlsUrl)\\s*=\\s*\"(https?://[^\"']+\\.(?:m3u8|mpd)[^\"']*)\"")
@@ -71,7 +66,6 @@ class StrimsyExtractor : ExtractorApi() {
             val isM3u8 = streamUrl.endsWith(".m3u8")
             val isDash = streamUrl.endsWith(".mpd")
             if (isM3u8 || isDash) {
-                // Fetch the master playlist to find variant playlists (for m3u8 only)
                 if (isM3u8) {
                     val m3u8Response = app.get(streamUrl, headers = headersWithCookies, referer = finalUrl).text
                     println("StrimsyExtractor: Master playlist: ${m3u8Response.take(500)}...")
@@ -79,7 +73,6 @@ class StrimsyExtractor : ExtractorApi() {
                     val variantUrls = variantRegex.findAll(m3u8Response).map { it.value }.toList()
 
                     if (variantUrls.isNotEmpty()) {
-                        // Prefer a variant with "mono.m3u8" if available, otherwise take the first one
                         val selectedVariant = variantUrls.firstOrNull { it.contains("mono.m3u8") } ?: variantUrls.first()
                         println("StrimsyExtractor: Selected variant: $selectedVariant")
                         return listOf(
@@ -96,7 +89,6 @@ class StrimsyExtractor : ExtractorApi() {
                     }
                 }
 
-                // If no variants are found (or it's a DASH stream), use the stream URL directly
                 println("StrimsyExtractor: Using stream URL directly: $streamUrl")
                 return listOf(
                     ExtractorLink(
@@ -112,7 +104,6 @@ class StrimsyExtractor : ExtractorApi() {
             }
         }
 
-        // Fallback: Try to find m3u8 or mpd URLs directly in the page source
         val streamRegex = Regex("https?://[^\\s\"']+\\.(?:m3u8|mpd)(?:\\?[^\\s\"']+)?")
         val streamUrls = streamRegex.findAll(response.text).map { it.value }.toList()
 
