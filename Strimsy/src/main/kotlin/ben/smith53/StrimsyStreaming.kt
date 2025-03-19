@@ -5,7 +5,9 @@ import com.lagradost.cloudstream3.SearchResponse
 import com.lagradost.cloudstream3.LiveSearchResponse
 import com.lagradost.cloudstream3.TvType
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
-import com.lagradost.cloudstream3.network.requests.MainPageRequest
+import com.lagradost.cloudstream3.network.Requests.MainPageRequest
+import com.lagradost.cloudstream3.HomePageResponse
+import com.lagradost.cloudstream3.LoadResponse
 import com.lagradost.cloudstream3.newHomePageResponse
 import com.lagradost.cloudstream3.newLiveSearchResponse
 import com.lagradost.cloudstream3.newLiveStreamLoadResponse
@@ -122,10 +124,10 @@ class StrimsyStreaming : MainAPI() {
                     newLiveSearchResponse(
                         name = "${event.time} - ${event.name}",
                         url = event.url,
-                        apiName = this.name,
-                        type = TvType.Live,
-                        posterUrl = null
-                    )
+                        type = TvType.Live
+                    ) {
+                        this.poster = null
+                    }
                 }
             )
         }
@@ -143,10 +145,10 @@ class StrimsyStreaming : MainAPI() {
             newLiveSearchResponse(
                 name = "${event.time} - ${event.name}",
                 url = event.url,
-                apiName = this.name,
-                type = TvType.Live,
-                posterUrl = null
-            )
+                type = TvType.Live
+            ) {
+                this.poster = null
+            }
         }
     }
 
@@ -154,12 +156,12 @@ class StrimsyStreaming : MainAPI() {
         return newLiveStreamLoadResponse(
             name = url.substringAfterLast('/').substringBefore('.php'),
             url = url,
-            apiName = this.name,
-            dataUrl = url,
-            posterUrl = null,
-            year = 2025,
-            plot = "Live sports event",
-            contentRating = null
-        )
+            dataUrl = url
+        ) {
+            this.year = 2025
+            this.plot = "Live sports event"
+            this.contentRating = null
+            this.poster = null
+        }
     }
 }
