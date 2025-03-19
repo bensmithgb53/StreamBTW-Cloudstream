@@ -26,20 +26,19 @@ class StrimsyExtractor : ExtractorApi() {
         val masterM3u8Url = match?.groupValues?.get(1)
 
         if (masterM3u8Url != null) {
-            // Use M3u8Helper to resolve the master m3u8 to a variant playlist
-            val m3u8Helper = M3u8Helper()
-            val variants = m3u8Helper.m3u8Generation(
-                masterM3u8Url,
-                headers
-            )
-            val variantUrl = variants.firstOrNull() // Select the first variant (e.g., mono.m3u8)
+            // Fetch the master m3u8 playlist to find variant playlists
+            val m3u8Response = app.get(masterM3u8Url, headers = headers, referer = url).text
+            val variantRegex = Regex("https?://[^\\s\"']+\\.m3u8(?:\\?[^\\s\"']+)?")
+            val variantUrls = variantRegex.findAll(m3u8Response).map { it.value }.toList()
 
-            if (variantUrl != null) {
+            if (variantUrls.isNotEmpty()) {
+                // Prefer a variant with "mono.m3u8" if available, otherwise take the first one
+                val selectedVariant = variantUrls.firstOrNull { it.contains("mono.m3u8") } ?: variantUrls.first()
                 return listOf(
                     ExtractorLink(
                         source = name,
                         name = "$name (Live)",
-                        url = variantUrl.streamUrl,
+                        url = selectedVariant,
                         referer = url,
                         quality = -1, // Use -1 for unknown quality
                         isM3u8 = true,
@@ -47,6 +46,19 @@ class StrimsyExtractor : ExtractorApi() {
                     )
                 )
             }
+
+            // If no variants are found, try using the master m3u8 directly
+            return listOf(
+                ExtractorLink(
+                    source = name,
+                    name = "$name (Live)",
+                    url = masterM3u8Url,
+                    referer = url,
+                    quality = -1,
+                    isM3u8 = true,
+                    headers = headers
+                )
+            )
         }
 
         // Fallback: Try to find m3u8 URLs directly in the page source
@@ -60,7 +72,7 @@ class StrimsyExtractor : ExtractorApi() {
                     name = "$name (Live)",
                     url = m3u8Url,
                     referer = url,
-                    quality = -1, // Use -1 for unknown quality
+                    quality = -1,
                     isM3u8 = true,
                     headers = headers
                 )
