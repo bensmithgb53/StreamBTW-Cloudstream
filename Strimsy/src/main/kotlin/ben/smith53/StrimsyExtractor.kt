@@ -44,12 +44,12 @@ class StrimsyExtractor : ExtractorApi() {
                 links.forEach { link ->
                     callback(
                         ExtractorLink(
-                            source = link["source"] ?: "StrimsyExtractor",
-                            name = "${link["name"]} (${sourceName})",
-                            url = link["url"] ?: return@forEach,
-                            referer = link["referer"] ?: sourceUrl,
+                            source = link["source"] as? String ?: "StrimsyExtractor",
+                            name = "${link["name"] as? String ?: "StrimsyExtractor (Live)"} (${sourceName})",
+                            url = link["url"] as? String ?: return@forEach,
+                            referer = link["referer"] as? String ?: sourceUrl,
                             quality = Qualities.Unknown.value,
-                            isM3u8 = link["is_m3u8"] == true
+                            isM3u8 = link["is_m3u8"] as? Boolean ?: false
                         )
                     )
                 }
