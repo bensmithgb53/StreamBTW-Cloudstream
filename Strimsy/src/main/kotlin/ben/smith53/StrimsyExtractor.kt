@@ -28,22 +28,20 @@ class StrimsyExtractor : ExtractorApi() {
         if (masterM3u8Url != null) {
             // Use M3u8Helper to resolve the master m3u8 to a variant playlist
             val m3u8Helper = M3u8Helper()
-            val variantUrl = m3u8Helper.m3u8Generation(
-                M3u8Helper.M3u8Params(
-                    m3u8Url = masterM3u8Url,
-                    headers = headers,
-                    referer = url
-                )
-            ).firstOrNull() // Select the first variant (e.g., mono.m3u8)
+            val variants = m3u8Helper.m3u8Generation(
+                masterM3u8Url,
+                headers
+            )
+            val variantUrl = variants.firstOrNull() // Select the first variant (e.g., mono.m3u8)
 
             if (variantUrl != null) {
                 return listOf(
                     ExtractorLink(
                         source = name,
                         name = "$name (Live)",
-                        url = variantUrl.url,
+                        url = variantUrl.streamUrl,
                         referer = url,
-                        quality = Qualities.Unknown.value,
+                        quality = -1, // Use -1 for unknown quality
                         isM3u8 = true,
                         headers = headers
                     )
@@ -62,7 +60,7 @@ class StrimsyExtractor : ExtractorApi() {
                     name = "$name (Live)",
                     url = m3u8Url,
                     referer = url,
-                    quality = Qualities.Unknown.value,
+                    quality = -1, // Use -1 for unknown quality
                     isM3u8 = true,
                     headers = headers
                 )
