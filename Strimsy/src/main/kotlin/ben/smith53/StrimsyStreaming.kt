@@ -5,9 +5,11 @@ import com.lagradost.cloudstream3.SearchResponse
 import com.lagradost.cloudstream3.LiveSearchResponse
 import com.lagradost.cloudstream3.TvType
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
-import com.lagradost.cloudstream3.HomePageResponse
+import com.lagradost.cloudstream3.network.requests.MainPageRequest
+import com.lagradost.cloudstream3.newHomePageResponse
+import com.lagradost.cloudstream3.newLiveSearchResponse
+import com.lagradost.cloudstream3.newLiveStreamLoadResponse
 import com.lagradost.cloudstream3.HomePageList
-import com.lagradost.cloudstream3.LoadResponse
 import java.util.Calendar
 import java.util.Locale
 
@@ -100,7 +102,7 @@ class StrimsyStreaming : MainAPI() {
         val url: String
     )
 
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
         // Parse the hardcoded schedule
         val schedules = parseJson<List<Schedule>>(scheduleJson)
 
@@ -117,7 +119,7 @@ class StrimsyStreaming : MainAPI() {
             HomePageList(
                 name = translatedDay,
                 schedule.events.map { event ->
-                    LiveSearchResponse(
+                    newLiveSearchResponse(
                         name = "${event.time} - ${event.name}",
                         url = event.url,
                         apiName = this.name,
@@ -127,7 +129,7 @@ class StrimsyStreaming : MainAPI() {
                 }
             )
         }
-        return HomePageResponse(homePageLists)
+        return newHomePageResponse(homePageLists)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
@@ -138,7 +140,7 @@ class StrimsyStreaming : MainAPI() {
         return events.filter { event ->
             event.name.contains(query, ignoreCase = true) || event.time.contains(query, ignoreCase = true)
         }.map { event ->
-            LiveSearchResponse(
+            newLiveSearchResponse(
                 name = "${event.time} - ${event.name}",
                 url = event.url,
                 apiName = this.name,
@@ -149,17 +151,15 @@ class StrimsyStreaming : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        return LoadResponse(
+        return newLiveStreamLoadResponse(
             name = url.substringAfterLast('/').substringBefore('.php'),
             url = url,
             apiName = this.name,
-            type = TvType.Live,
             dataUrl = url,
             posterUrl = null,
             year = 2025,
             plot = "Live sports event",
-            episodes = null,
-            subtitles = emptyList()
+            contentRating = null
         )
     }
 }
