@@ -18,6 +18,7 @@ class StrimsyExtractor : ExtractorApi() {
     var cookies: Map<String, String> = emptyMap()
 
     private suspend fun followIframeChain(url: String, referer: String?, depth: Int = 0, maxDepth: Int = 3): String? {
+        println("StrimsyExtractor: Following iframe chain for $url at depth $depth")
         if (depth >= maxDepth) {
             println("StrimsyExtractor: Reached max iframe depth ($maxDepth) at $url")
             return url
@@ -47,6 +48,7 @@ class StrimsyExtractor : ExtractorApi() {
     }
 
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
+        println("StrimsyExtractor: getUrl called with url=$url, referer=$referer")
         // Follow iframe chain to get to the final page
         val finalUrl = followIframeChain(url, referer) ?: url
         val headersWithCookies = baseHeaders + mapOf("Cookie" to cookies.entries.joinToString("; ") { "${it.key}=${it.value}" })
@@ -59,6 +61,7 @@ class StrimsyExtractor : ExtractorApi() {
 
         // Extract playbackURL or hlsUrl from JavaScript
         val scriptText = document.select("script").joinToString("\n") { it.html() }
+        println("StrimsyExtractor: Script text: ${scriptText.take(500)}...")
         val playbackUrlRegex = Regex("(?:var\\s+playbackURL|hlsUrl)\\s*=\\s*\"(https?://[^\"']+\\.(?:m3u8|mpd)[^\"']*)\"")
         val match = playbackUrlRegex.find(scriptText)
         val streamUrl = match?.groupValues?.get(1)
@@ -71,6 +74,7 @@ class StrimsyExtractor : ExtractorApi() {
                 // Fetch the master playlist to find variant playlists (for m3u8 only)
                 if (isM3u8) {
                     val m3u8Response = app.get(streamUrl, headers = headersWithCookies, referer = finalUrl).text
+                    println("StrimsyExtractor: Master playlist: ${m3u8Response.take(500)}...")
                     val variantRegex = Regex("https?://[^\\s\"']+\\.m3u8(?:\\?[^\\s\"']+)?")
                     val variantUrls = variantRegex.findAll(m3u8Response).map { it.value }.toList()
 
@@ -93,6 +97,7 @@ class StrimsyExtractor : ExtractorApi() {
                 }
 
                 // If no variants are found (or it's a DASH stream), use the stream URL directly
+                println("StrimsyExtractor: Using stream URL directly: $streamUrl")
                 return listOf(
                     ExtractorLink(
                         source = name,
