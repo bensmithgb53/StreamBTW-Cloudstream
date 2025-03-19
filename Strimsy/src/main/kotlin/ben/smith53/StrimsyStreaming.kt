@@ -16,10 +16,9 @@ class StrimsyStreaming : MainAPI() {
         TvType.Live
     )
 
-    private val headers = mapOf(
+    private val baseHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
-        "Referer" to "$mainUrl/",
-        "Cookie" to "PHPSESSID=sr2ufaf1h3ha63dge62ahob"
+        "Referer" to "$mainUrl/"
     )
 
     private val dayTranslation = mapOf(
@@ -72,8 +71,9 @@ class StrimsyStreaming : MainAPI() {
         return iframeUrl.contains("/layout/chat") || iframeUrl.contains("/chatWalki2.php") || iframeUrl.contains("/chatWalki1.php")
     }
 
-    private suspend fun getTeamPages(sportUrl: String): List<Pair<String, String>> {
-        val doc = app.get(sportUrl, headers = headers).document
+    private suspend fun getTeamPages(sportUrl: String, cookies: Map<String, String>): List<Pair<String, String>> {
+        val headersWithCookies = baseHeaders + mapOf("Cookie" to cookies.entries.joinToString("; ") { "${it.key}=${it.value}" })
+        val doc = app.get(sportUrl, headers = headersWithCookies).document
         val teamLinks = mutableListOf<Pair<String, String>>()
         doc.select("a[href^='?team=']").forEach { aTag ->
             val href = fixUrl(aTag.attr("href"))
@@ -84,7 +84,12 @@ class StrimsyStreaming : MainAPI() {
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val document = app.get(mainUrl, headers = headers).document
+        // Fetch the main page and capture cookies
+        val response = app.get(mainUrl, headers = baseHeaders)
+        val cookies = response.cookies
+        val headersWithCookies = baseHeaders + mapOf("Cookie" to cookies.entries.joinToString("; ") { "${it.key}=${it.value}" })
+        val document = response.document
+
         val tabs = document.select("div.tabcontent")
         if (tabs.isEmpty()) throw ErrorLoadingException("No tabcontent found")
 
@@ -105,7 +110,7 @@ class StrimsyStreaming : MainAPI() {
                 val eventName = "$time - $translatedName"
 
                 if (href.contains("/NBA/") || href.contains("/NHL/")) {
-                    val teamPages = getTeamPages(href)
+                    val teamPages = getTeamPages(href, cookies)
                     teamPages.forEach { (teamName, teamUrl) ->
                         events.add(
                             newLiveSearchResponse(
@@ -144,20 +149,41 @@ class StrimsyStreaming : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val doc = app.get(data, headers = headers).document
-        val iframes = doc.select("iframe")
-        if (iframes.isEmpty()) return false
+        // Fetch the page and capture cookies
+        val response = app.get(data, headers = baseHeaders)
+        val cookies = response.cookies
+        val headersWithCookies = baseHeaders + mapOf("Cookie" to cookies.entries.joinToString("; ") { "${it.key}=${it.value}" })
+        val doc = response.document
 
+        val iframes = doc.select("iframe")
+        if (iframes.isEmpty()) {
+            println("StrimsyStreaming: No iframes found on page $data")
+            return false
+        }
+
+        var linksFound = false
         iframes.forEach { iframe ->
             val iframeUrl = iframe.attr("src").trim()
-            if (iframeUrl.isEmpty() || isChatIframe(iframeUrl)) return@forEach
+            if (iframeUrl.isEmpty() || isChatIframe(iframeUrl)) {
+                println("StrimsyStreaming: Skipping iframe $iframeUrl (empty or chat)")
+                return@forEach
+            }
 
             val fixedIframeUrl = fixUrl(iframeUrl)
-            StrimsyExtractor().getUrl(fixedIframeUrl)?.forEach { link ->
-                callback(link)
+            println("StrimsyStreaming: Processing iframe $fixedIframeUrl")
+            val extractor = StrimsyExtractor()
+            val links = extractor.getUrl(fixedIframeUrl, data, cookies)
+            if (links != null) {
+                links.forEach { link ->
+                    println("StrimsyStreaming: Found link ${link.url}")
+                    callback(link)
+                    linksFound = true
+                }
+            } else {
+                println("StrimsyStreaming: No links found for iframe $fixedIframeUrl")
             }
         }
 
-        return true
+        return linksFound
     }
 }
