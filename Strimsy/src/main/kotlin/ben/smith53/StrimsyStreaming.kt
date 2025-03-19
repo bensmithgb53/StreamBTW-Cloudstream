@@ -1,175 +1,165 @@
 package ben.smith53
 
-import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.*
-import org.jsoup.Jsoup
-import org.jsoup.nodes.Document
-import java.util.*
+import com.lagradost.cloudstream3.MainAPI
+import com.lagradost.cloudstream3.SearchResponse
+import com.lagradost.cloudstream3.LiveSearchResponse
+import com.lagradost.cloudstream3.TvType
+import com.lagradost.cloudstream3.utils.AppUtils.parseJson
+import com.lagradost.cloudstream3.HomePageResponse
+import com.lagradost.cloudstream3.HomePageList
+import com.lagradost.cloudstream3.LoadResponse
+import java.util.Calendar
+import java.util.Locale
 
 class StrimsyStreaming : MainAPI() {
-    override var mainUrl = "https://strimsy.top"
     override var name = "StrimsyStreaming"
-    override val hasMainPage = true
-    override val hasDownloadSupport = true
-    override val vpnStatus = VPNStatus.MightBeNeeded
+    override var mainUrl = "https://strimsy.top"
     override val supportedTypes = setOf(TvType.Live)
+    override val hasMainPage = true
 
-    private val baseHeaders = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
-        "Referer" to "$mainUrl/"
+    // Day translation dictionary (same as Python)
+    private val DAY_TRANSLATION = mapOf(
+        "Poniedziałek" to "Monday",
+        "Wtorek" to "Tuesday",
+        "Środa" to "Wednesday",
+        "Czwartek" to "Thursday",
+        "Piątek" to "Friday",
+        "Sobota" to "Saturday",
+        "Niedziela" to "Sunday"
     )
 
-    private val dayTranslation = mapOf(
-        "PONIEDZIAŁEK" to "Monday",
-        "WTOREK" to "Tuesday",
-        "ŚRODA" to "Wednesday",
-        "CZWARTEK" to "Thursday",
-        "PIĄTEK" to "Friday",
-        "SOBOTA" to "Saturday",
-        "NIEDZIELA" to "Sunday"
-    )
-
-    private val eventTranslation = mapOf(
+    // Event translation dictionary (same as Python)
+    private val EVENT_TRANSLATION = mapOf(
         "pilkanozna" to "Football",
         "koszykowka" to "Basketball",
         "kosz" to "Basketball",
         "nba" to "NBA",
         "hhokej" to "Hockey",
-        "walki" to "Fighting"
+        "walki" to "Fighting",
+        "kolarstwo" to "Cycling",
+        "siatkowka" to "Volleyball",
+        "pilkareczna" to "Handball",
+        "bilard" to "Snooker",
+        "tenis" to "Tennis",
+        "skoki" to "Ski Jumping",
+        "magazyn" to "Magazine"
     )
 
-    private fun fixUrl(url: String, baseUrl: String = mainUrl): String {
-        println("StrimsyStreaming: Fixing URL: $url with baseUrl: $baseUrl")
-        val fixedUrl = if (url.startsWith("//")) {
-            "https:$url"
-        } else if (url.startsWith("/")) {
-            "$baseUrl$url"
-        } else if (url.startsWith("?team=")) {
-            "$baseUrl/NBA/$url"
-        } else if (url.startsWith("?source=")) {
-            "$baseUrl/f1/$url"
-        } else if (!url.startsWith("http")) {
-            "$baseUrl/$url"
-        } else {
-            url
+    // Hardcoded schedule for March 19, 2025 (from Python's get_main_page())
+    private val scheduleJson = """
+    [
+        {
+            "day": "Wednesday",
+            "events": [
+                {"time": "16:00", "name": "Tennis: ATP Miami", "url": "https://strimsy.top/Tenis/ATPMiami.php"},
+                {"time": "16:00", "name": "Tennis: WTA Miami", "url": "https://strimsy.top/Tenis/WTAMiami.php"},
+                {"time": "16:00", "name": "Cycling: Nokere Koerse, Belgia", "url": "https://strimsy.top/Kolarstwo.php"},
+                {"time": "17:00", "name": "Volleyball: Ziraat Bankasi - Trentino", "url": "https://strimsy.top/ZiraatBankasiTrentino.php"},
+                {"time": "17:00", "name": "Hockey: JKH GKS - GKS Tychy", "url": "https://strimsy.top/JKHGKSGKSTychy.php"},
+                {"time": "18:00", "name": "Cross-country skiing: Biegi narciarskie", "url": "https://strimsy.top/BiegiNarciarskie.php"},
+                {"time": "18:00", "name": "Powerlifting: Trójbój siłowy", "url": "https://strimsy.top/TrojbojSilowy.php"},
+                {"time": "18:00", "name": "Volleyball: Novara K - Chieri 76 K", "url": "https://strimsy.top/NovaraKChieri76K.php"},
+                {"time": "18:00", "name": "Volleyball: Projekt Warszawa - Halkbank", "url": "https://strimsy.top/ProjektWarszawaHalkbank.php"},
+                {"time": "18:00", "name": "Handball: Kielce - Śląsk Wrocław", "url": "https://strimsy.top/KielceSlaskWroclaw.php"},
+                {"time": "18:00", "name": "Handball: Ostrów Wielkopolski - MMTS Kwidzyn", "url": "https://strimsy.top/WielkopolskiMMTSKwidzyn.php"},
+                {"time": "18:00", "name": "Handball: Wisła Płock - Gwardia Opole", "url": "https://strimsy.top/WislaPlockGwardiaOpole.php"},
+                {"time": "18:00", "name": "Basketball: AZS Poznań K - Sosnowiec K", "url": "https://strimsy.top/AZSPoznanKSosnowiecK.php"},
+                {"time": "18:00", "name": "Basketball: Gorzów K - AZS UMCS Lublin K", "url": "https://strimsy.top/GorzowKAZSUMCSLublinK.php"},
+                {"time": "18:30", "name": "Basketball: Petkim Spor - Tenerife", "url": "https://strimsy.top/PetkimSporTenerife.php"},
+                {"time": "18:30", "name": "Basketball: Wurzburg - Promitheas", "url": "https://strimsy.top/WurzburgPromitheas.php"},
+                {"time": "18:45", "name": "Football: Wolfsburg K - Barcelona K", "url": "https://strimsy.top/WolfsburgKBarcelonaK.php"},
+                {"time": "19:00", "name": "Basketball: Starogard Gdański - Śląsk Wrocław II", "url": "https://strimsy.top/StarogardGdanskiSlaskWroclawII.php"},
+                {"time": "20:00", "name": "Basketball: Nanterre - Murcia", "url": "https://strimsy.top/NanterreMurcia.php"},
+                {"time": "20:00", "name": "Snooker: Players Championship", "url": "https://strimsy.top/Snooker2.php"},
+                {"time": "20:00", "name": "Handball: Azoty-Puławy - Wybrzeże Gdańsk", "url": "https://strimsy.top/AzotyPulawyWybrzezeGdansk.php"},
+                {"time": "20:00", "name": "Volleyball: Tours - Resovia Rzeszów", "url": "https://strimsy.top/ToursResoviaRzeszow.php"},
+                {"time": "20:00", "name": "Basketball: Bamberg - Dziki Warszawa", "url": "https://strimsy.top/BambergDzikiWarszawa.php"},
+                {"time": "20:00", "name": "Basketball: Katarzynki Toruń K - VBW Gdynia K", "url": "https://strimsy.top/KatarzynkiTorunKVBWGdyniaK.php"},
+                {"time": "20:00", "name": "Basketball: Polkowice K - Ślęza Wrocław K", "url": "https://strimsy.top/PolkowiceKSlezaWroclawK.php"},
+                {"time": "20:30", "name": "Volleyball: Jastrzębski Węgiel - Olympiakos", "url": "https://strimsy.top/JastrzebskiWegielOlympiakos.php"},
+                {"time": "20:30", "name": "Volleyball: Lube Civitanova - Luk Lublin", "url": "https://strimsy.top/LubeCivitanovaLukLublin.php"},
+                {"time": "20:30", "name": "Handball: Legionowo - MKS Kalisz", "url": "https://strimsy.top/LegionowoMKSKalisz.php"},
+                {"time": "20:30", "name": "Basketball: Tortona - AEK Athens", "url": "https://strimsy.top/TortonaAEKAthens.php"},
+                {"time": "21:00", "name": "Football: Manchester City K - Chelsea K", "url": "https://strimsy.top/ManchesterCityKChelseaK.php"},
+                {"time": "00:00", "name": "NBA: WSZYSTKIE MECZE 🏀", "url": "https://strimsy.top/NBA/"},
+                {"time": "00:00", "name": "Hockey: NHL: WSZYSTKIE MECZE 🏒", "url": "https://strimsy.top/NHL/"},
+                {"time": "01:00", "name": "Fighting: AEW Dynamite", "url": "https://strimsy.top/fight/AEWDynamite.php"}
+            ]
         }
-        println("StrimsyStreaming: Fixed URL: $fixedUrl")
-        return fixedUrl
-    }
+    ]
+    """
 
-    private fun translateEventName(name: String, className: String?): String {
-        println("StrimsyStreaming: Translating event name: $name with class: $className")
-        val lowerName = name.lowercase(Locale.getDefault())
-        val translated = if (eventTranslation.containsKey(lowerName)) {
-            eventTranslation[lowerName]!!
-        } else if (className != null && eventTranslation.containsKey(className.lowercase(Locale.getDefault()))) {
-            "${eventTranslation[className.lowercase(Locale.getDefault())]}: $name"
-        } else {
-            name
-        }
-        println("StrimsyStreaming: Translated event name: $translated")
-        return translated
-    }
+    data class Schedule(
+        val day: String,
+        val events: List<Event>
+    )
 
-    private fun isChatIframe(iframeUrl: String): Boolean {
-        val isChat = iframeUrl.contains("/layout/chat") || iframeUrl.contains("/chatWalki2.php") || iframeUrl.contains("/chatWalki1.php")
-        println("StrimsyStreaming: Checking if iframe is chat: $iframeUrl -> $isChat")
-        return isChat
-    }
+    data class Event(
+        val time: String,
+        val name: String,
+        val url: String
+    )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        println("StrimsyStreaming: getMainPage called with page=$page, request=$request")
-        val response = app.get(mainUrl, headers = baseHeaders)
-        val cookies = response.cookies
-        println("StrimsyStreaming: Cookies fetched: $cookies")
-        val headersWithCookies = baseHeaders + mapOf("Cookie" to cookies.entries.joinToString("; ") { "${it.key}=${it.value}" })
-        val document = response.document
-        println("StrimsyStreaming: Main page response: ${document.html().take(500)}...")
+        // Parse the hardcoded schedule
+        val schedules = parseJson<List<Schedule>>(scheduleJson)
 
-        val tabs = document.select("div.tabcontent")
-        if (tabs.isEmpty()) throw ErrorLoadingException("No tabcontent found")
+        // Get the current day to filter the schedule (e.g., show only today's events)
+        val today = Calendar.getInstance().getDisplayName(Calendar.DAY_OF_WEEK, Calendar.LONG, Locale.ENGLISH)
 
-        val homePageLists = mutableListOf<HomePageList>()
-        tabs.forEachIndexed { index, tab ->
-            val tabButton = document.select("button.tablinks")[index]
-            val polishDayName = tabButton.text().trim().uppercase(Locale.getDefault())
-            val englishDayName = dayTranslation[polishDayName] ?: polishDayName
-            println("StrimsyStreaming: Processing tab: $englishDayName ($polishDayName)")
+        val homePageLists = schedules.mapNotNull { schedule ->
+            // Translate the day if needed (though the hardcoded schedule is already in English)
+            val translatedDay = DAY_TRANSLATION[schedule.day.split(" ")[1]] ?: schedule.day
+            // Only show events for the current day (optional filtering)
+            // Comment out the following line if you want to show all days
+            if (translatedDay != today) return@mapNotNull null
 
-            val events = mutableListOf<SearchResponse>()
-            tab.select("td").forEach { td ->
-                val linkElement = td.selectFirst("a") ?: return@forEach
-                val href = fixUrl(linkElement.attr("href"))
-                val rawName = linkElement.text().trim()
-                val className = linkElement.attr("class").ifEmpty { null }
-                val translatedName = translateEventName(rawName, className)
-                val time = td.text().split(" ")[0].trim().ifEmpty { "Unknown Time" }
-                val eventName = "$time - $translatedName"
-                println("StrimsyStreaming: Found event: $eventName -> $href")
-
-                println("StrimsyStreaming: Adding event: $eventName -> $href")
-                events.add(
-                    newLiveSearchResponse(
-                        name = eventName,
-                        url = href,
-                        type = TvType.Live
-                    ) {
-                        this.posterUrl = null
-                    }
-                )
-            }
-
-            if (events.isNotEmpty()) {
-                println("StrimsyStreaming: Adding HomePageList for $englishDayName with ${events.size} events")
-                homePageLists.add(HomePageList(englishDayName, events, true))
-            }
+            HomePageList(
+                name = translatedDay,
+                schedule.events.map { event ->
+                    LiveSearchResponse(
+                        name = "${event.time} - ${event.name}",
+                        url = event.url,
+                        apiName = this.name,
+                        type = TvType.Live,
+                        posterUrl = null
+                    )
+                }
+            )
         }
-
-        println("StrimsyStreaming: Returning HomePageResponse with ${homePageLists.size} lists")
-        return newHomePageResponse(homePageLists)
+        return HomePageResponse(homePageLists)
     }
 
-    override suspend fun loadLinks(
-        data: String,
-        isCasting: Boolean,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ): Boolean {
-        println("StrimsyStreaming: loadLinks called with data=$data, isCasting=$isCasting")
-        val response = app.get(data, headers = baseHeaders)
-        val cookies = response.cookies
-        println("StrimsyStreaming: Cookies fetched: $cookies")
-        val headersWithCookies = baseHeaders + mapOf("Cookie" to cookies.entries.joinToString("; ") { "${it.key}=${it.value}" })
-        val doc = response.document
-        println("StrimsyStreaming: Page response: ${doc.html().take(500)}...")
+    override suspend fun search(query: String): List<SearchResponse> {
+        // Parse the hardcoded schedule for search
+        val schedules = parseJson<List<Schedule>>(scheduleJson)
 
-        val iframes = doc.select("iframe")
-        if (iframes.isEmpty()) {
-            println("StrimsyStreaming: No iframes found on page $data")
-            return false
+        val events = schedules.flatMap { it.events }
+        return events.filter { event ->
+            event.name.contains(query, ignoreCase = true) || event.time.contains(query, ignoreCase = true)
+        }.map { event ->
+            LiveSearchResponse(
+                name = "${event.time} - ${event.name}",
+                url = event.url,
+                apiName = this.name,
+                type = TvType.Live,
+                posterUrl = null
+            )
         }
+    }
 
-        var linksFound = false
-        iframes.forEach { iframe ->
-            val iframeUrl = iframe.attr("src").trim()
-            if (iframeUrl.isEmpty() || isChatIframe(iframeUrl)) {
-                println("StrimsyStreaming: Skipping iframe $iframeUrl (empty or chat)")
-                return@forEach
-            }
-
-            val fixedIframeUrl = fixUrl(iframeUrl)
-            println("StrimsyStreaming: Processing iframe $fixedIframeUrl")
-            val extractor = StrimsyExtractor()
-            extractor.cookies = cookies
-            val links = extractor.getUrl(fixedIframeUrl, data)
-            links?.forEach { link ->
-                println("StrimsyStreaming: Found link ${link.url}")
-                callback(link)
-                linksFound = true
-            } ?: println("StrimsyStreaming: No links found for iframe $fixedIframeUrl")
-        }
-
-        println("StrimsyStreaming: loadLinks returning $linksFound")
-        return linksFound
+    override suspend fun load(url: String): LoadResponse {
+        return LoadResponse(
+            name = url.substringAfterLast('/').substringBefore('.php'),
+            url = url,
+            apiName = this.name,
+            type = TvType.Live,
+            dataUrl = url,
+            posterUrl = null,
+            year = 2025,
+            plot = "Live sports event",
+            episodes = null,
+            subtitles = emptyList()
+        )
     }
 }
