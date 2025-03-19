@@ -111,7 +111,6 @@ class StrimsyStreaming : MainAPI() {
                             newLiveSearchResponse(
                                 name = "$eventName - $teamName",
                                 url = teamUrl,
-                                apiName = this.name,
                                 type = TvType.Live
                             ) {
                                 this.posterUrl = null
@@ -123,7 +122,6 @@ class StrimsyStreaming : MainAPI() {
                         newLiveSearchResponse(
                             name = eventName,
                             url = href,
-                            apiName = this.name,
                             type = TvType.Live
                         ) {
                             this.posterUrl = null
@@ -133,7 +131,7 @@ class StrimsyStreaming : MainAPI() {
             }
 
             if (events.isNotEmpty()) {
-                homePageLists.add(newHomePageList(englishDayName, events, true))
+                homePageLists.add(HomePageList(englishDayName, events, true))
             }
         }
 
