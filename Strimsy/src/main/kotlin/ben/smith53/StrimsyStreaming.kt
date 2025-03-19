@@ -108,34 +108,36 @@ class StrimsyStreaming : MainAPI() {
                     val teamPages = getTeamPages(href)
                     teamPages.forEach { (teamName, teamUrl) ->
                         events.add(
-                            LiveSearchResponse(
+                            newLiveSearchResponse(
                                 name = "$eventName - $teamName",
                                 url = teamUrl,
                                 apiName = this.name,
-                                type = TvType.Live,
-                                posterUrl = null
-                            )
+                                type = TvType.Live
+                            ) {
+                                this.posterUrl = null
+                            }
                         )
                     }
                 } else {
                     events.add(
-                        LiveSearchResponse(
+                        newLiveSearchResponse(
                             name = eventName,
                             url = href,
                             apiName = this.name,
-                            type = TvType.Live,
-                            posterUrl = null
-                        )
+                            type = TvType.Live
+                        ) {
+                            this.posterUrl = null
+                        }
                     )
                 }
             }
 
             if (events.isNotEmpty()) {
-                homePageLists.add(HomePageList(englishDayName, events, true))
+                homePageLists.add(newHomePageList(englishDayName, events, true))
             }
         }
 
-        return HomePageResponse(homePageLists)
+        return newHomePageResponse(homePageLists)
     }
 
     override suspend fun loadLinks(
