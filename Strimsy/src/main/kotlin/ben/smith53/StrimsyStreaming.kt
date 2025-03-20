@@ -1,12 +1,16 @@
 package ben.smith53
 
-import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.newHomePageResponse
-import com.lagradost.cloudstream3.utils.newLiveSearchResponse
-import com.lagradost.cloudstream3.utils.newLiveStreamLoadResponse
+import com.lagradost.cloudstream3.MainAPI
+import com.lagradost.cloudstream3.SearchResponse
+import com.lagradost.cloudstream3.LiveSearchResponse
+import com.lagradost.cloudstream3.LiveStreamLoadResponse
+import com.lagradost.cloudstream3.TvType
+import com.lagradost.cloudstream3.HomePageList
+import com.lagradost.cloudstream3.HomePageResponse
+import com.lagradost.cloudstream3.SubtitleFile
+import com.lagradost.cloudstream3.ExtractorLink
+import com.lagradost.cloudstream3.app
 import org.jsoup.Jsoup
-import java.util.*
 
 class StrimsyStreaming : MainAPI() {
     override var mainUrl = "https://strimsy.top"
@@ -29,7 +33,7 @@ class StrimsyStreaming : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val doc = Jsoup.connect(mainUrl).get()
+        val doc = app.get(mainUrl).document
         val tabs = doc.select(".tab button.tablinks")
         val contents = doc.select(".tabcontent")
         val homePages = mutableListOf<HomePageList>()
@@ -45,17 +49,17 @@ class StrimsyStreaming : MainAPI() {
                 val name = eventTranslation[nameRaw.lowercase()] ?: if (className.isNotEmpty() && className.lowercase() in eventTranslation) {
                     "${eventTranslation[className.lowercase()]}: $nameRaw"
                 } else nameRaw
-                newLiveSearchResponse(
+                LiveSearchResponse(
                     name = "$time - $name",
                     url = fixUrl(link.attr("href")),
-                    apiName = this.name
+                    type = TvType.Live
                 )
             }
             if (events.isNotEmpty()) {
                 homePages.add(HomePageList(day, events))
             }
         }
-        return newHomePageResponse(homePages)
+        return HomePageResponse(homePages)
     }
 
     private fun fixUrl(url: String): String {
@@ -63,21 +67,20 @@ class StrimsyStreaming : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val doc = Jsoup.connect(url).get()
+        val doc = app.get(url).document
         val sources = doc.select("a[href*=\"?source=\"]").map {
             fixUrl(it.attr("href"))
         }.ifEmpty { listOf(url) }
 
         val streams = sources.flatMap { sourceUrl ->
-            val sourceDoc = Jsoup.connect(sourceUrl).get()
+            val sourceDoc = app.get(sourceUrl).document
             sourceDoc.select("iframe[src]").filter { !it.attr("src").contains("/layout/chat", ignoreCase = true) }
                 .map { fixUrl(it.attr("src")) }
         }
-        return newLiveStreamLoadResponse(
+        return LiveStreamLoadResponse(
             name = url.split("/").last().removeSuffix(".php"),
-            url = url,
-            apiName = this.name,
-            dataUrl = streams.first() // Pass first iframe URL to extractor
+            dataUrl = streams.first(), // Pass first iframe URL to extractor
+            url = url
         )
     }
 
