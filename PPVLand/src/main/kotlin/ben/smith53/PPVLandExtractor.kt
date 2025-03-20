@@ -30,16 +30,17 @@ class PPVLandExtractor : ExtractorApi() {
         )
 
         // Fetch the PPV Land stream page
-        println("Fetching PPV Land page: $url")
-        val response = app.get(url, headers = headers).text
+        println("Step 1: Fetching PPV Land page: $url")
+        val response = app.get(url, headers = headers, timeout = 10L).text // 10s timeout
         val doc = Jsoup.parse(response)
+        println("Step 1: Page fetched, length: ${response.length}")
 
         // Extract the embed iframe URL
         val embedCode = doc.selectFirst("#embedcode")?.text()
         val embedUrl = Regex("src=\"(https://www\\.vidembed\\.re/stream/[^\"]+)\"").find(embedCode ?: "")?.groupValues?.get(1)
         if (embedUrl != null) { // e.g., https://www.vidembed.re/stream/bbd1a638-c947-4b66-bd91-56fdadf38451
-            println("Found embed URL: $embedUrl")
-            val streamId = embedUrl.substringAfterLast("/") // e.g., bbd1a638-c947-4b66-bd91-56fdadf38451
+            println("Step 2: Found embed URL: $embedUrl")
+            val streamId = embedUrl.substringAfterLast("/")
             val initialM3u8Url = "https://eu02-hls.ppv.land/hls/$streamId/index.m3u8"
 
             val embedHeaders = mapOf(
@@ -49,25 +50,32 @@ class PPVLandExtractor : ExtractorApi() {
                 "Accept-Encoding" to "gzip, deflate, br, zstd",
                 "Connection" to "keep-alive",
                 "Origin" to "https://www.vidembed.re"
-                // Note: cf_clearance cookie omitted as it’s session-specific; may need dynamic fetching if 403 persists
             )
 
-            // Fetch the master .m3u8
-            println("Fetching master .m3u8: $initialM3u8Url")
-            val m3u8Response = app.get(initialM3u8Url, headers = embedHeaders, allowRedirects = true)
+            // Fetch the master .m3u8 with retries
+            println("Step 3: Fetching master .m3u8: $initialM3u8Url")
+            var m3u8Response = app.get(initialM3u8Url, headers = embedHeaders, timeout = 15L, allowRedirects = true)
+            var attempts = 1
+            while (!m3u8Response.isSuccessful && attempts < 3) {
+                println("Step 3: Retry $attempts - Status: ${m3u8Response.code}")
+                Thread.sleep(1000) // Wait 1s before retry
+                m3u8Response = app.get(initialM3u8Url, headers = embedHeaders, timeout = 15L, allowRedirects = true)
+                attempts++
+            }
+
             val finalM3u8Url = m3u8Response.url
-            println("Master status: ${m3u8Response.code}, Final URL: $finalM3u8Url")
-            println("Master body preview: ${m3u8Response.text.take(200)}")
+            println("Step 3: Master status: ${m3u8Response.code}, Final URL: $finalM3u8Url")
+            println("Step 3: Master body preview: ${m3u8Response.text.take(200)}")
 
             if (m3u8Response.isSuccessful) {
                 val m3u8Content = m3u8Response.text
-                // Check if it's a master playlist
                 if (m3u8Content.contains("#EXT-X-STREAM-INF")) {
-                    // Extract variant .m3u8
+                    println("Step 4: Master playlist detected")
                     val variantUrl = Regex("https?://[^\\s]+\\.m3u8[^\\s]*").find(m3u8Content)?.value
                     if (variantUrl != null) {
-                        println("Found variant .m3u8: $variantUrl")
-                        val variantResponse = app.get(variantUrl, headers = embedHeaders, allowRedirects = true)
+                        println("Step 5: Found variant .m3u8: $variantUrl")
+                        val variantResponse = app.get(variantUrl, headers = embedHeaders, timeout = 15L, allowRedirects = true)
+                        println("Step 5: Variant status: ${variantResponse.code}, URL: ${variantResponse.url}")
                         if (variantResponse.isSuccessful) {
                             callback(
                                 ExtractorLink(
@@ -82,14 +90,14 @@ class PPVLandExtractor : ExtractorApi() {
                             )
                             return
                         } else {
-                            println("Failed to fetch variant .m3u8 - Status: ${variantResponse.code}")
+                            println("Step 5: Failed to fetch variant - Status: ${variantResponse.code}")
                         }
                     } else {
-                        println("No variant .m3u8 found in master")
+                        println("Step 4: No variant .m3u8 found in master")
                     }
                 }
-                // Fallback to master if no variants or it's a media playlist
-                println("Using master .m3u8 as fallback")
+                // Fallback to master
+                println("Step 4: Using master .m3u8 as fallback")
                 callback(
                     ExtractorLink(
                         source = this.name,
@@ -103,11 +111,11 @@ class PPVLandExtractor : ExtractorApi() {
                 )
                 return
             } else {
-                println("Failed to fetch master .m3u8 - Status: ${m3u8Response.code}")
-                throw Exception("Master .m3u8 fetch failed; status: ${m3u8Response.code}")
+                println("Step 3: Master fetch failed after retries - Status: ${m3u8Response.code}")
+                throw Exception("Failed to fetch master .m3u8 - Status: ${m3u8Response.code}")
             }
         } else {
-            println("No embed URL found in HTML: ${response.take(500)}")
+            println("Step 2: No embed URL found in HTML: ${response.take(500)}")
             throw Exception("No embed URL found in PPV Land page")
         }
     }
