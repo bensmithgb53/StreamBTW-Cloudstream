@@ -5,6 +5,14 @@ import com.lagradost.cloudstream3.TvType
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.ExtractorLink
 import com.lagradost.cloudstream3.app
+import com.lagradost.cloudstream3.MainPageRequest
+import com.lagradost.cloudstream3.newHomePageResponse
+import com.lagradost.cloudstream3.newLiveSearchResponse
+import com.lagradost.cloudstream3.newLiveStreamLoadResponse
+import com.lagradost.cloudstream3.HomePageList
+import com.lagradost.cloudstream3.HomePageResponse
+import com.lagradost.cloudstream3.LoadResponse
+import com.lagradost.cloudstream3.mainPageOf
 import org.jsoup.nodes.Document
 
 class StrimsyStreaming : MainAPI() {
@@ -31,7 +39,7 @@ class StrimsyStreaming : MainAPI() {
         "" to "Events"
     )
 
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val doc = app.get(mainUrl).document
         val tabs = doc.select(".tab button.tablinks")
         val contents = doc.select(".tabcontent")
@@ -67,7 +75,7 @@ class StrimsyStreaming : MainAPI() {
         return if (url.startsWith("http")) url else "$mainUrl/$url"
     }
 
-    override suspend fun load(url: String): LoadResponse? {
+    override suspend fun load(url: String): LoadResponse {
         val doc = app.get(url).document
         val sources = doc.select("a[href*=\"?source=\"]").map {
             fixUrl(it.attr("href"))
