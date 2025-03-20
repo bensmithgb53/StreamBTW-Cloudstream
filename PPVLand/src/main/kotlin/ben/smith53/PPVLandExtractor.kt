@@ -48,8 +48,8 @@ class PPVLandExtractor : ExtractorApi() {
                 "Accept" to "*/*",
                 "Accept-Encoding" to "gzip, deflate, br, zstd",
                 "Connection" to "keep-alive",
-                "Cookie" to "cf_clearance=R069ic2bAS4UNiv32McrpDQk7wa1A39JXSELp57JyYI-1742497570-1.2.1.1-cI5WX2wC2MAzE9BeikYit2VsCpv3R2yrZ9iw95zpZcgT_J6S66MC.cXYgq99TRCBhzrTWtxm5DjvU.wkphHVPjJmkTHIWVBkfW4w258qhtvTWiLTF6ZDuNoYbE_Bbu1gyur8m.wWprE_3kvnjqEeW5ql3w4v_E8pmlGT3G663mJbyiFLFdHolCEhAv61TN2dSuzfrGm9JPUAURv7mBAby2QtSRiLUW1wrs5S2dhn6xnRfs5w91U1ulh9K55D87dgZrENuxLPshER.34ADz8.VFQ3M..RMl6aBxi.A0i1fapGF10oQrwPBU36xH26KuzDkPDRP.kTlvc9tAQxxxi0mt8RGtxyzOaAou.1afbkjxk",
                 "Origin" to "https://www.vidembed.re"
+                // Note: cf_clearance cookie omitted as it’s session-specific; may need dynamic fetching if 403 persists
             )
 
             // Fetch the master .m3u8
@@ -60,43 +60,48 @@ class PPVLandExtractor : ExtractorApi() {
             println("Master body preview: ${m3u8Response.text.take(200)}")
 
             if (m3u8Response.isSuccessful) {
-                // Parse the master .m3u8 for variant playlists
                 val m3u8Content = m3u8Response.text
-                val variantUrl = Regex("https?://[^\\s]+\\.m3u8[^\\s]*").find(m3u8Content)?.value
-                if (variantUrl != null) {
-                    println("Found variant .m3u8: $variantUrl")
-                    val variantResponse = app.get(variantUrl, headers = embedHeaders, allowRedirects = true)
-                    if (variantResponse.isSuccessful) {
-                        callback(
-                            ExtractorLink(
-                                source = this.name,
-                                name = this.name,
-                                url = variantResponse.url,
-                                referer = embedUrl,
-                                quality = Qualities.Unknown.value,
-                                isM3u8 = true,
-                                headers = mapOf("Referer" to embedUrl)
+                // Check if it's a master playlist
+                if (m3u8Content.contains("#EXT-X-STREAM-INF")) {
+                    // Extract variant .m3u8
+                    val variantUrl = Regex("https?://[^\\s]+\\.m3u8[^\\s]*").find(m3u8Content)?.value
+                    if (variantUrl != null) {
+                        println("Found variant .m3u8: $variantUrl")
+                        val variantResponse = app.get(variantUrl, headers = embedHeaders, allowRedirects = true)
+                        if (variantResponse.isSuccessful) {
+                            callback(
+                                ExtractorLink(
+                                    source = this.name,
+                                    name = this.name,
+                                    url = variantResponse.url,
+                                    referer = embedUrl,
+                                    quality = Qualities.Unknown.value,
+                                    isM3u8 = true,
+                                    headers = mapOf("Referer" to embedUrl)
+                                )
                             )
-                        )
-                        return
+                            return
+                        } else {
+                            println("Failed to fetch variant .m3u8 - Status: ${variantResponse.code}")
+                        }
                     } else {
-                        println("Failed to fetch variant .m3u8 - Status: ${variantResponse.code}")
+                        println("No variant .m3u8 found in master")
                     }
-                } else {
-                    // Use the master if no variants found
-                    callback(
-                        ExtractorLink(
-                            source = this.name,
-                            name = this.name,
-                            url = finalM3u8Url,
-                            referer = embedUrl,
-                            quality = Qualities.Unknown.value,
-                            isM3u8 = true,
-                            headers = mapOf("Referer" to embedUrl)
-                        )
-                    )
-                    return
                 }
+                // Fallback to master if no variants or it's a media playlist
+                println("Using master .m3u8 as fallback")
+                callback(
+                    ExtractorLink(
+                        source = this.name,
+                        name = this.name,
+                        url = finalM3u8Url,
+                        referer = embedUrl,
+                        quality = Qualities.Unknown.value,
+                        isM3u8 = true,
+                        headers = mapOf("Referer" to embedUrl)
+                    )
+                )
+                return
             } else {
                 println("Failed to fetch master .m3u8 - Status: ${m3u8Response.code}")
                 throw Exception("Master .m3u8 fetch failed; status: ${m3u8Response.code}")
