@@ -15,7 +15,7 @@ import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.newHomePageResponse
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
-import org.jsoup.Jsoup
+import org.json.JSONObject
 
 class PPVLandProvider : MainAPI() {
     override var mainUrl = "https://ppv.land"
@@ -35,81 +35,60 @@ class PPVLandProvider : MainAPI() {
     }
 
     private suspend fun fetchEvents(): List<HomePageList> {
-        val response = app.get(mainUrl, headers = mapOf("User-Agent" to userAgent)).text
-        val doc = Jsoup.parse(response)
-
+        val apiUrl = "$mainUrl/api/streams"
+        val response = app.get(apiUrl, headers = mapOf("User-Agent" to userAgent)).text
+        val json = JSONObject(response)
+        val streamsArray = json.getJSONArray("streams")
+        
         val homePageLists = mutableListOf<HomePageList>()
+        val categoryMap = mutableMapOf<String, MutableList<LiveSearchResponse>>()
 
-        // Live now section
-        val liveEvents = mutableListOf<LiveSearchResponse>()
-        val liveSection = doc.select("#livecards .px-2.py-2")
-        liveSection.forEach { card ->
-            val linkTag = card.selectFirst("a.item-card")
-            val imgTag = card.selectFirst("img.card-img-top")
-            val titleTag = card.selectFirst("h5.card-title")
+        // Initialize Live Now category
+        categoryMap["Live Now"] = mutableListOf()
 
-            if (linkTag != null && imgTag != null && titleTag != null) {
-                val eventLink = mainUrl + linkTag.attr("href")
-                val imgSrc = imgTag.attr("src")
-                val eventName = titleTag.text().trim()
+        for (i in 0 until streamsArray.length()) {
+            val categoryData = streamsArray.getJSONObject(i)
+            val categoryName = categoryData.getString("category")
+            val streams = categoryData.getJSONArray("streams")
+            val alwaysLive = categoryData.getInt("always_live") == 1
 
-                if ("english" in eventLink.lowercase() && !imgSrc.contains("data:image")) {
-                    liveEvents.add(
-                        LiveSearchResponse(
-                            name = eventName,
-                            url = eventLink,
-                            apiName = this.name,
-                            posterUrl = imgSrc
-                        )
-                    )
-                }
+            if (!categoryMap.containsKey(categoryName)) {
+                categoryMap[categoryName] = mutableListOf()
             }
-        }
-        if (liveEvents.isNotEmpty()) {
-            homePageLists.add(
-                HomePageList(
-                    name = "Live Now",
-                    list = liveEvents,
-                    isHorizontalImages = false
-                )
-            )
-        }
 
-        // Categories section
-        val categoriesSection = doc.select("#categories > div[id*=-container]")
-        categoriesSection.forEach { category ->
-            val categoryName = category.selectFirst("h2")?.text()?.trim() ?: return@forEach
-            val categoryEvents = mutableListOf<LiveSearchResponse>()
-            
-            val cards = category.select(".px-2.py-2")
-            cards.forEach { card ->
-                val linkTag = card.selectFirst("a.item-card")
-                val imgTag = card.selectFirst("img.card-img-top")
-                val titleTag = card.selectFirst("h5.card-title")
+            for (j in 0 until streams.length()) {
+                val stream = streams.getJSONObject(j)
+                val eventName = stream.getString("name")
+                val eventLink = "$mainUrl/live/${stream.getString("uri_name")}"
+                val poster = stream.getString("poster")
+                val startsAt = stream.getLong("starts_at")
+                val currentTime = System.currentTimeMillis() / 1000
 
-                if (linkTag != null && imgTag != null && titleTag != null) {
-                    val eventLink = mainUrl + linkTag.attr("href")
-                    val imgSrc = imgTag.attr("src")
-                    val eventName = titleTag.text().trim()
+                if ("english" in eventLink.lowercase() && !poster.contains("data:image")) {
+                    val event = LiveSearchResponse(
+                        name = eventName,
+                        url = eventLink,
+                        apiName = this.name,
+                        posterUrl = poster
+                    )
 
-                    if ("english" in eventLink.lowercase() && !imgSrc.contains("data:image")) {
-                        categoryEvents.add(
-                            LiveSearchResponse(
-                                name = eventName,
-                                url = eventLink,
-                                apiName = this.name,
-                                posterUrl = imgSrc
-                            )
-                        )
+                    // Add to appropriate category
+                    if (startsAt <= currentTime || alwaysLive || stream.getInt("always_live") == 1) {
+                        categoryMap[categoryName]?.add(event)
+                    } else {
+                        categoryMap["Live Now"]?.add(event)
                     }
                 }
             }
-            
-            if (categoryEvents.isNotEmpty()) {
+        }
+
+        // Convert category map to HomePageLists
+        categoryMap.forEach { (name, events) ->
+            if (events.isNotEmpty()) {
                 homePageLists.add(
                     HomePageList(
-                        name = categoryName,
-                        list = categoryEvents,
+                        name = name,
+                        list = events,
                         isHorizontalImages = false
                     )
                 )
