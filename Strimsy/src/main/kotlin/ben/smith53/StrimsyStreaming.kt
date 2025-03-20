@@ -3,7 +3,7 @@ package ben.smith53
 import com.lagradost.cloudstream3.MainAPI
 import com.lagradost.cloudstream3.TvType
 import com.lagradost.cloudstream3.SubtitleFile
-import com.lagradost.cloudstream3.ExtractorLink
+import com.lagradost.cloudstream3.ExtractorLink // Single import
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.MainPageRequest
 import com.lagradost.cloudstream3.newHomePageResponse
@@ -53,11 +53,11 @@ class StrimsyStreaming : MainAPI() {
                 val match = Regex("""(\d{2}:\d{2})\s*(.*)""").find(text) ?: return@mapNotNull null
                 val (time, nameRaw) = match.destructured
                 val className = link.className()
-                val name = eventTranslation[nameRaw.lowercase()] ?: if (className.isNotEmpty() && className.lowercase() in eventTranslation) {
+                val eventName = eventTranslation[nameRaw.lowercase()] ?: if (className.isNotEmpty() && className.lowercase() in eventTranslation) {
                     "${eventTranslation[className.lowercase()]}: $nameRaw"
                 } else nameRaw
                 newLiveSearchResponse(
-                    name = "$time - $name",
+                    name = "$time - $eventName",
                     url = fixUrl(link.attr("href")),
                     type = TvType.Live
                 ) {
