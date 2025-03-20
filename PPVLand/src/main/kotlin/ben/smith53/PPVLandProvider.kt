@@ -1,6 +1,5 @@
 package ben.smith53
 
-import ben.smith53.extractors.PPVLandExtractor // Added import
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
 import com.lagradost.cloudstream3.*
@@ -8,6 +7,7 @@ import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.Qualities
 
 class PPVLandProvider : MainAPI() {
     override var mainUrl = "https://ppv.land"
@@ -15,8 +15,17 @@ class PPVLandProvider : MainAPI() {
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.Live)
     private val userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0"
-
     private val interceptor = CloudflareKiller()
+
+    private val HEADERS = mapOf(
+        "User-Agent" to userAgent,
+        "Accept" to "*/*",
+        "Accept-Encoding" to "gzip, deflate, br, zstd",
+        "Connection" to "keep-alive",
+        "Accept-Language" to "en-US,en;q=0.5",
+        "X-FS-Client" to "FS WebClient 1.0",
+        "Cookie" to "cf_clearance=Spt9tCB2G5.prpsED77vIRRv_7DXvw__Jw_Esqm53yw-1742505249-1.2.1.1-VXaRZXapXOenQsbIVYelJXCR2YFju.WlikuWSiXF2DNtDyxt5gjuRRhQq6hznJq9xn11ZqLhHFH4QOaitqLCccDwUXy4T2hJwE9qQ7gxlychuZ8E1zpx_XF0eiriJjZ4sw2ORWwokajxGlnxMLnZVMUGXh9sPkOKGKKyldQaga9r8Xus9esujwBVbTRtv7fCAFrF5f5j18Y1A.Rv3zQ7dxmonhSWOsD4c.mUpqXXid7oUJaNPVPw0OZOtYv1CEAPbGDjr1tAkuSJg.ij.6695qjiZsAj8XipJLbXy5IjACJoGVq32ScAy4ABlsXSTLDAtmbtZLUcqiHzljQsxZmt9Ljb7jq0O_HDx8x2VQ83tvI"
+    )
 
     private suspend fun fetchEvents(): List<Map<String, Any>> {
         val response = app.get("$mainUrl/api/streams", headers = mapOf("User-Agent" to userAgent)).text
@@ -67,15 +76,37 @@ class PPVLandProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        return try {
-            val extractor = PPVLandExtractor()
-            val links: List<ExtractorLink>? = extractor.getUrl(data, referer = mainUrl)
-            links?.forEach { link ->
-                callback(link)
+        try {
+            val apiUrl = if (data.startsWith("$mainUrl/api/streams/")) {
+                data
+            } else {
+                val streamId = data.split("/").firstOrNull { it.matches(Regex("\\d+")) }
+                    ?: throw Exception("No numeric stream ID found in data: $data")
+                "$mainUrl/api/streams/$streamId"
             }
-            links?.isNotEmpty() == true
+
+            val response = app.get(apiUrl, headers = HEADERS, referer = "$mainUrl/").text
+            val mapper = jacksonObjectMapper()
+            val jsonData = mapper.readValue<Map<String, Any>>(response)
+
+            val jsonDataMap = jsonData["data"] as? Map<String, Any> 
+                ?: throw Exception("No 'data' field in JSON")
+            val m3u8Url = jsonDataMap["m3u8"] as? String 
+                ?: throw Exception("No 'm3u8' URL found in JSON")
+
+            callback(
+                ExtractorLink(
+                    source = this.name,
+                    name = this.name,
+                    url = m3u8Url,
+                    referer = "$mainUrl/",
+                    quality = Qualities.Unknown.value,
+                    isM3u8 = true
+                )
+            )
+            return true
         } catch (e: Exception) {
-            false
+            return false
         }
     }
 }
