@@ -3,7 +3,7 @@ package ben.smith53
 import com.lagradost.cloudstream3.MainAPI
 import com.lagradost.cloudstream3.TvType
 import com.lagradost.cloudstream3.SubtitleFile
-import com.lagradost.cloudstream3.ExtractorLink // Single import
+import com.lagradost.cloudstream3.ExtractorLink
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.MainPageRequest
 import com.lagradost.cloudstream3.newHomePageResponse
@@ -88,20 +88,4 @@ class StrimsyStreaming : MainAPI() {
         }
         return newLiveStreamLoadResponse(
             name = url.split("/").last().removeSuffix(".php"),
-            dataUrl = streams.first(), // Pass first iframe URL to extractor
-            url = url
-        ) {
-            this.apiName = this@StrimsyStreaming.name
-        }
-    }
-
-    override suspend fun loadLinks(
-        data: String,
-        isCasting: Boolean,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ): Boolean {
-        StrimsyExtractor().getUrl(data, referer = mainUrl).forEach(callback)
-        return true
-    }
-}
+            dataUrl = streams.first(), // Pass first ifram
