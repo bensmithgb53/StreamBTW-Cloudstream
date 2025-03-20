@@ -2,9 +2,10 @@ package ben.smith53
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.loadExtractor
+import com.lagradost.cloudstream3.utils.newHomePageResponse
+import com.lagradost.cloudstream3.utils.newLiveSearchResponse
+import com.lagradost.cloudstream3.utils.newLiveStreamLoadResponse
 import org.jsoup.Jsoup
-import java.text.SimpleDateFormat
 import java.util.*
 
 class StrimsyStreaming : MainAPI() {
@@ -44,19 +45,17 @@ class StrimsyStreaming : MainAPI() {
                 val name = eventTranslation[nameRaw.lowercase()] ?: if (className.isNotEmpty() && className.lowercase() in eventTranslation) {
                     "${eventTranslation[className.lowercase()]}: $nameRaw"
                 } else nameRaw
-                SearchResponse(
+                newLiveSearchResponse(
                     name = "$time - $name",
                     url = fixUrl(link.attr("href")),
-                    apiName = this.name,
-                    type = TvType.Live,
-                    posterUrl = null
+                    apiName = this.name
                 )
             }
             if (events.isNotEmpty()) {
                 homePages.add(HomePageList(day, events))
             }
         }
-        return HomePageResponse(homePages)
+        return newHomePageResponse(homePages)
     }
 
     private fun fixUrl(url: String): String {
@@ -74,12 +73,11 @@ class StrimsyStreaming : MainAPI() {
             sourceDoc.select("iframe[src]").filter { !it.attr("src").contains("/layout/chat", ignoreCase = true) }
                 .map { fixUrl(it.attr("src")) }
         }
-        return LiveStreamLoadResponse(
+        return newLiveStreamLoadResponse(
             name = url.split("/").last().removeSuffix(".php"),
             url = url,
             apiName = this.name,
-            dataUrl = streams.first(), // Pass first iframe URL to extractor
-            quality = 720 // Default, updated by extractor
+            dataUrl = streams.first() // Pass first iframe URL to extractor
         )
     }
 
@@ -89,6 +87,6 @@ class StrimsyStreaming : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        loadExtractor(data, mainUrl, subtitleCallback, callback)
+        StrimsyExtractor().getUrl(data, referer = mainUrl).forEach(callback)
     }
 }
