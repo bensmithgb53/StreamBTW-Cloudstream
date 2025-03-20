@@ -89,7 +89,7 @@ class StrimsyStreaming : MainAPI() {
         return newLiveStreamLoadResponse(
             name = url.split("/").last().removeSuffix(".php"),
             url = url,
-            dataUrl = streams.first() // Pass first iframe URL to extractor
+            dataUrl = streams.first()
         ) {
             this.apiName = this@StrimsyStreaming.name
         }
