@@ -1,16 +1,11 @@
 package ben.smith53
 
 import com.lagradost.cloudstream3.MainAPI
-import com.lagradost.cloudstream3.SearchResponse
-import com.lagradost.cloudstream3.LiveSearchResponse
-import com.lagradost.cloudstream3.LiveStreamLoadResponse
 import com.lagradost.cloudstream3.TvType
-import com.lagradost.cloudstream3.HomePageList
-import com.lagradost.cloudstream3.HomePageResponse
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.ExtractorLink
 import com.lagradost.cloudstream3.app
-import org.jsoup.Jsoup
+import org.jsoup.nodes.Document
 
 class StrimsyStreaming : MainAPI() {
     override var mainUrl = "https://strimsy.top"
@@ -32,7 +27,11 @@ class StrimsyStreaming : MainAPI() {
         "Niedziela" to "Sunday"
     )
 
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+    override val mainPage = mainPageOf(
+        "" to "Events"
+    )
+
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
         val doc = app.get(mainUrl).document
         val tabs = doc.select(".tab button.tablinks")
         val contents = doc.select(".tabcontent")
@@ -49,24 +48,26 @@ class StrimsyStreaming : MainAPI() {
                 val name = eventTranslation[nameRaw.lowercase()] ?: if (className.isNotEmpty() && className.lowercase() in eventTranslation) {
                     "${eventTranslation[className.lowercase()]}: $nameRaw"
                 } else nameRaw
-                LiveSearchResponse(
+                newLiveSearchResponse(
                     name = "$time - $name",
                     url = fixUrl(link.attr("href")),
                     type = TvType.Live
-                )
+                ) {
+                    this.apiName = this@StrimsyStreaming.name
+                }
             }
             if (events.isNotEmpty()) {
                 homePages.add(HomePageList(day, events))
             }
         }
-        return HomePageResponse(homePages)
+        return newHomePageResponse(homePages)
     }
 
     private fun fixUrl(url: String): String {
         return if (url.startsWith("http")) url else "$mainUrl/$url"
     }
 
-    override suspend fun load(url: String): LoadResponse {
+    override suspend fun load(url: String): LoadResponse? {
         val doc = app.get(url).document
         val sources = doc.select("a[href*=\"?source=\"]").map {
             fixUrl(it.attr("href"))
@@ -77,11 +78,13 @@ class StrimsyStreaming : MainAPI() {
             sourceDoc.select("iframe[src]").filter { !it.attr("src").contains("/layout/chat", ignoreCase = true) }
                 .map { fixUrl(it.attr("src")) }
         }
-        return LiveStreamLoadResponse(
+        return newLiveStreamLoadResponse(
             name = url.split("/").last().removeSuffix(".php"),
             dataUrl = streams.first(), // Pass first iframe URL to extractor
             url = url
-        )
+        ) {
+            this.apiName = this@StrimsyStreaming.name
+        }
     }
 
     override suspend fun loadLinks(
@@ -89,7 +92,8 @@ class StrimsyStreaming : MainAPI() {
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
-    ) {
+    ): Boolean {
         StrimsyExtractor().getUrl(data, referer = mainUrl).forEach(callback)
+        return true
     }
 }
