@@ -6,6 +6,7 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
+import com.lagradost.cloudstream3.utils.ExtractorLink // Added import
 
 class PPVLandProvider : MainAPI() {
     override var mainUrl = "https://ppv.land"
@@ -33,10 +34,10 @@ class PPVLandProvider : MainAPI() {
                 val posterUrl = stream["poster"] as String
                 if ("data:image" in posterUrl) return@mapNotNull null
 
-                newLiveSearchResponse(
+                LiveSearchResponse(
                     name = stream["name"] as String,
                     url = "$mainUrl/live/${stream["uri_name"]}",
-                    apiName = this.name,
+                    apiName = this.name, // Moved to constructor parameter
                     type = TvType.Live,
                     posterUrl = posterUrl,
                     id = (stream["id"] as Number).toInt()
@@ -65,7 +66,15 @@ class PPVLandProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        loadExtractor(data, mainUrl, subtitleCallback, callback)
-        return true
+        return try {
+            val extractor = PPVLandExtractor()
+            val links = extractor.getUrl(data, referer = mainUrl)
+            links?.forEach { link ->
+                callback(link)
+            }
+            links?.isNotEmpty() == true
+        } catch (e: Exception) {
+            false
+        }
     }
 }
