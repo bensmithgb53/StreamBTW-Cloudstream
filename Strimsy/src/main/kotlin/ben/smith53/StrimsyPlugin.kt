@@ -5,9 +5,9 @@ import com.lagradost.cloudstream3.plugins.Plugin
 import android.content.Context
 
 @CloudstreamPlugin
-class StrimsyPlugin : Plugin() {
+class PPVLand : Plugin() {
     override fun load(context: Context) {
-        registerMainAPI(StrimsyStreaming())
-        registerExtractorAPI(StrimsyExtractor())
+        registerMainAPI(PPVLandProvider())
+        registerExtractorAPI(PPVLandExtractor())
     }
 }
