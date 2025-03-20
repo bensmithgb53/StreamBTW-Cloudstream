@@ -41,7 +41,7 @@ class PPVLandProvider : MainAPI() {
             "Content-Type" to "application/json",
             "X-FS-Client" to "FS WebClient 1.0"
         )
-        
+
         val response = app.get(apiUrl, headers = headers)
         println("API Status Code: ${response.code}")
         println("API Response Body: ${response.text}")
@@ -87,10 +87,10 @@ class PPVLandProvider : MainAPI() {
                 val startsAt = stream.getLong("starts_at")
                 println("Stream: $eventName, URL: $eventLink, Starts At: $startsAt, Iframe: $iframe")
 
-                if ("english" in eventLink.lowercase() && !poster.contains("data:image")) {
+                if (!poster.contains("data:image")) { // Only keep the poster check
                     val event = LiveSearchResponse(
                         name = eventName,
-                        url = iframe ?: eventLink, // Use iframe if available, else fallback to eventLink
+                        url = iframe ?: eventLink,
                         apiName = this.name,
                         posterUrl = poster
                     )
@@ -142,10 +142,9 @@ class PPVLandProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        // If URL is already an iframe, use it directly; otherwise, scrape
         return if (url.startsWith("https://www.vidembed.re")) {
             LiveStreamLoadResponse(
-                name = "Stream", // Name will be set from search response
+                name = "Stream",
                 url = url,
                 apiName = this.name,
                 dataUrl = url,
