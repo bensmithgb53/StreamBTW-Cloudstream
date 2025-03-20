@@ -1,12 +1,13 @@
 package ben.smith53
 
+import ben.smith53.extractors.PPVLandExtractor // Added import
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
-import com.lagradost.cloudstream3.utils.ExtractorLink // Added import
+import com.lagradost.cloudstream3.utils.ExtractorLink
 
 class PPVLandProvider : MainAPI() {
     override var mainUrl = "https://ppv.land"
@@ -37,7 +38,7 @@ class PPVLandProvider : MainAPI() {
                 LiveSearchResponse(
                     name = stream["name"] as String,
                     url = "$mainUrl/live/${stream["uri_name"]}",
-                    apiName = this.name, // Moved to constructor parameter
+                    apiName = this.name,
                     type = TvType.Live,
                     posterUrl = posterUrl,
                     id = (stream["id"] as Number).toInt()
@@ -55,8 +56,8 @@ class PPVLandProvider : MainAPI() {
             name = url.substringAfterLast("/").replace("-", " ").capitalize(),
             url = url,
             apiName = this.name,
-            dataUrl = "$mainUrl/api/streams/$streamId", // Pass API URL directly
-            posterUrl = null // Poster already set in search response
+            dataUrl = "$mainUrl/api/streams/$streamId",
+            posterUrl = null
         )
     }
 
@@ -68,7 +69,7 @@ class PPVLandProvider : MainAPI() {
     ): Boolean {
         return try {
             val extractor = PPVLandExtractor()
-            val links = extractor.getUrl(data, referer = mainUrl)
+            val links: List<ExtractorLink>? = extractor.getUrl(data, referer = mainUrl)
             links?.forEach { link ->
                 callback(link)
             }
