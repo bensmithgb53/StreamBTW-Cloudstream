@@ -154,7 +154,7 @@ class PPVLandProvider : MainAPI() {
         } else {
             val response = app.get(url, headers = mapOf("User-Agent" to userAgent)).text
             val embedUrl = Regex("src=\"([^\"]+)\"").find(response)?.groupValues?.get(1)
-                ?: throw виключення("Embed URL not found")
+                ?: throw Exception("Embed URL not found")
             LiveStreamLoadResponse(
                 name = url.substringAfterLast("/").replace("-", " ").capitalize(),
                 url = url,
