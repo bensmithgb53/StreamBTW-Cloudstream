@@ -1,20 +1,7 @@
 package ben.smith53
 
-import com.lagradost.cloudstream3.HomePageList
-import com.lagradost.cloudstream3.HomePageResponse
-import com.lagradost.cloudstream3.LiveSearchResponse
-import com.lagradost.cloudstream3.LiveStreamLoadResponse
-import com.lagradost.cloudstream3.LoadResponse
-import com.lagradost.cloudstream3.MainAPI
-import com.lagradost.cloudstream3.MainPageRequest
-import com.lagradost.cloudstream3.SearchResponse
-import com.lagradost.cloudstream3.SubtitleFile
-import com.lagradost.cloudstream3.TvType
-import com.lagradost.cloudstream3.VPNStatus
-import com.lagradost.cloudstream3.app
-import com.lagradost.cloudstream3.newHomePageResponse
-import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.loadExtractor
+import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.utils.*
 import org.json.JSONObject
 
 class PPVLandProvider : MainAPI() {
@@ -65,12 +52,13 @@ class PPVLandProvider : MainAPI() {
                 val currentTime = System.currentTimeMillis() / 1000
 
                 if ("english" in eventLink.lowercase() && !poster.contains("data:image")) {
-                    val event = LiveSearchResponse(
+                    val event = newLiveSearchResponse(
                         name = eventName,
                         url = eventLink,
                         apiName = this.name,
-                        posterUrl = poster
-                    )
+                    ) {
+                        this.posterUrl = poster
+                    }
 
                     // Add to appropriate category
                     if (startsAt <= currentTime || alwaysLive || stream.getInt("always_live") == 1) {
@@ -100,7 +88,7 @@ class PPVLandProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val homePageLists = fetchEvents()
-        return newHomePageResponse(homePageLists, hasNext = false)
+        return newHomePageResponse(homePageLists)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
@@ -111,19 +99,18 @@ class PPVLandProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val doc = Jsoup.parse(app.get(url, headers = mapOf("User-Agent" to userAgent)).text)
-        val embedCode = doc.selectFirst("#embedcode")?.text()
-        val embedUrl = embedCode?.let {
-            Regex("src=\"([^\"]+)\"").find(it)?.groupValues?.get(1)
-        } ?: throw Exception("Embed URL not found")
+        val response = app.get(url, headers = mapOf("User-Agent" to userAgent)).text
+        val embedUrl = Regex("src=\"([^\"]+)\"").find(response)?.groupValues?.get(1)
+            ?: throw Exception("Embed URL not found")
 
-        return LiveStreamLoadResponse(
+        return newLiveStreamLoadResponse(
             name = url.substringAfterLast("/").replace("-", " ").capitalize(),
             url = url,
             apiName = this.name,
-            dataUrl = embedUrl,
-            posterUrl = posterUrl
-        )
+            dataUrl = embedUrl
+        ) {
+            this.posterUrl = posterUrl
+        }
     }
 
     override suspend fun loadLinks(
