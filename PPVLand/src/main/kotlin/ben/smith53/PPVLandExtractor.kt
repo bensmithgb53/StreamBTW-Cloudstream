@@ -16,7 +16,7 @@ class PPVLandExtractor : ExtractorApi() {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36"
 
     override suspend fun getUrl(
-        url: String, // e.g., https://ppv.land/live/1742487300/CBS
+        url: String, // e.g., https://ppv.land/live/uefa-nations-league-turkey-vs-hungary or https://ppv.land/live/1742487300/CBS
         referer: String?,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
@@ -33,29 +33,17 @@ class PPVLandExtractor : ExtractorApi() {
         // Extract the embed iframe URL from the modal
         val embedCode = doc.selectFirst("#embedcode")?.text()
         val embedUrl = Regex("src=\"(https://www\\.vidembed\\.re/stream/[^\"]+)\"").find(embedCode ?: "")?.groupValues?.get(1)
-        if (embedUrl != null) { // e.g., https://www.vidembed.re/stream/977b47d5-ec7c-4211-a25d-bfb1f579c6aa
+        if (embedUrl != null) { // e.g., https://www.vidembed.re/stream/bbd1a638-c947-4b66-bd91-56fdadf38451
+            val streamId = embedUrl.substringAfterLast("/") // e.g., bbd1a638-c947-4b66-bd91-56fdadf38451
+            val m3u8Url = "https://eu02-hls.ppv.land/hls/$streamId/index.m3u8" // Constructed URL
+
+            // Verify the .m3u8 URL (optional, but ensures it’s live)
             val embedHeaders = mapOf(
                 "User-Agent" to userAgent,
-                "Referer" to url
+                "Referer" to embedUrl
             )
-            val embedResponse = app.get(embedUrl, headers = embedHeaders).text
-            val embedDoc = Jsoup.parse(embedResponse)
-
-            // Check if stream is not live yet
-            val notifText = embedDoc.selectFirst("#notif")?.text()
-            if (notifText?.contains("not live yet", ignoreCase = true) == true) {
-                println("Stream not live yet: $embedUrl")
-                return
-            }
-
-            // Fetch base.js
-            val baseJsUrl = "https://www.vidembed.re/assets/base.js?v=0.1.0"
-            val baseJsResponse = app.get(baseJsUrl, headers = embedHeaders).text
-
-            // Look for .m3u8 in base.js
-            val m3u8Url = Regex("https?://[^\"'\\s]+\\.m3u8").find(baseJsResponse)?.value
-                ?: Regex("file:\\s*['\"]?(https?://[^\"'\\s]+\\.m3u8)['\"]?").find(baseJsResponse)?.groupValues?.get(1)
-            if (m3u8Url != null) {
+            val m3u8Response = app.get(m3u8Url, headers = embedHeaders, allowRedirects = true)
+            if (m3u8Response.isSuccessful) {
                 callback(
                     ExtractorLink(
                         source = this.name,
@@ -68,30 +56,12 @@ class PPVLandExtractor : ExtractorApi() {
                     )
                 )
                 return
-            }
-
-            // Fallback: Try stream ID-based API (speculative)
-            val streamId = embedUrl.substringAfterLast("/")
-            val potentialApiUrl = "https://www.vidembed.re/api/stream/$streamId"
-            val apiResponse = app.get(potentialApiUrl, headers = embedHeaders).text
-            val apiM3u8 = Regex("https?://[^\"'\\s]+\\.m3u8").find(apiResponse)?.value
-            if (apiM3u8 != null) {
-                callback(
-                    ExtractorLink(
-                        source = this.name,
-                        name = this.name,
-                        url = apiM3u8,
-                        referer = embedUrl,
-                        quality = Qualities.Unknown.value,
-                        isM3u8 = true,
-                        headers = mapOf("Referer" to embedUrl)
-                    )
-                )
-                return
+            } else {
+                println("Failed to fetch .m3u8: $m3u8Url - Status: ${m3u8Response.code}")
             }
         }
 
-        println("No .m3u8 found for $url")
-        throw Exception("No .m3u8 URL found; check base.js or Network tab.")
+        println("No embed URL found for $url")
+        throw Exception("No .m3u8 URL found; embed URL missing or invalid.")
     }
 }
