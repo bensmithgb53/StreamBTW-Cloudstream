@@ -4,8 +4,7 @@ import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.lagradost.cloudstream3.utils.getQualityFromName
-import com.lagradost.cloudstream3.network.CloudflareKiller
-import org.jsoup.Jsoup
+import com.lagradost.cloudstream3.app
 import java.util.regex.Pattern
 import android.util.Base64
 
@@ -14,16 +13,14 @@ class StrimsyExtractor : ExtractorApi() {
     override val mainUrl = "https://strimsy.top"
     override val requiresReferer = true
 
-    private val cloudflareKiller = CloudflareKiller()
-
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink> {
         val headers = mapOf(
             "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
             "Referer" to (referer ?: mainUrl)
         )
-        val response = app.get(url, headers = headers, interceptor = cloudflareKiller).text
-        val doc = Jsoup.parse(response)
-        val scriptText = doc.select("script").joinToString("\n") { it.html() }
+        val response = app.get(url, headers = headers).text
+        val doc = app.get(url, headers = headers).document
+        val scriptText = doc.select("script").joinToString("\n") { it.html() ?: "" }
 
         val links = mutableListOf<ExtractorLink>()
 
@@ -62,7 +59,7 @@ class StrimsyExtractor : ExtractorApi() {
         return links
     }
 
-    private fun addM3u8Link(links: MutableList<ExtractorLink>, url: String, referer: String, nameSuffix: String) {
+    private suspend fun addM3u8Link(links: MutableList<ExtractorLink>, url: String, referer: String, nameSuffix: String) {
         try {
             val m3u8Response = app.get(url, headers = mapOf("Referer" to referer)).text
             val qualityMatch = Pattern.compile("""RESOLUTION=(\d+x\d+)""").matcher(m3u8Response)
@@ -71,13 +68,15 @@ class StrimsyExtractor : ExtractorApi() {
             } else {
                 getQualityFromName("720p")
             }
-            M3u8Helper.generateM3u8(
-                source = name,
-                streamUrl = url,
-                referer = referer,
-                quality = quality,
-                name = "$name - $nameSuffix"
-            ).forEach { links.add(it) }
+            links.addAll(
+                M3u8Helper.generateM3u8(
+                    source = name,
+                    streamUrl = url,
+                    referer = referer,
+                    quality = quality,
+                    name = "$name - $nameSuffix"
+                )
+            )
         } catch (e: Exception) {
             links.add(
                 ExtractorLink(
