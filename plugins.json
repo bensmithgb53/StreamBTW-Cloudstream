@@ -1,0 +1,40 @@
+[
+    {
+        "iconUrl": "https://i.imgur.com/JqgVon6.png",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/bensmithgb53/StreamBTW-Cloudstream",
+        "fileSize": 21400,
+        "status": 1,
+        "language": "en",
+        "authors": [
+            "Ben"
+        ],
+        "tvTypes": [
+            "Live"
+        ],
+        "version": 13,
+        "internalName": "PPVLand",
+        "description": "Live streams from the PPV.",
+        "url": "https://raw.githubusercontent.com/bensmithgb53/StreamBTW-Cloudstream/builds/PPVLand.cs3",
+        "name": "PPVLand"
+    },
+    {
+        "iconUrl": "https://streamed.pk/api/images/poster/fallback.webp",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/bensmithgb53/StreamBTW-Cloudstream",
+        "fileSize": 38194,
+        "status": 1,
+        "language": "en",
+        "authors": [
+            "Ben"
+        ],
+        "tvTypes": [
+            "Live"
+        ],
+        "version": 13,
+        "internalName": "Streamed",
+        "description": "Live streams from the Streamed.",
+        "url": "https://raw.githubusercontent.com/bensmithgb53/StreamBTW-Cloudstream/builds/Streamed.cs3",
+        "name": "Streamed"
+    }
+]
