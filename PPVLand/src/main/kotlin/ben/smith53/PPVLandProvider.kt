@@ -34,13 +34,14 @@ class PPVLandProvider : MainAPI() {
         private const val posterUrl = "https://ppv.land/assets/img/ppvland.png"
     }
 
-    private suspend fun fetchEvents(): List<LiveSearchResponse> {
+    private suspend fun fetchEvents(): List<HomePageList> {
         val response = app.get(mainUrl, headers = mapOf("User-Agent" to userAgent)).text
         val doc = Jsoup.parse(response)
 
-        val events = mutableListOf<LiveSearchResponse>()
+        val homePageLists = mutableListOf<HomePageList>()
 
         // Live now section
+        val liveEvents = mutableListOf<LiveSearchResponse>()
         val liveSection = doc.select("#livecards .px-2.py-2")
         liveSection.forEach { card ->
             val linkTag = card.selectFirst("a.item-card")
@@ -52,8 +53,8 @@ class PPVLandProvider : MainAPI() {
                 val imgSrc = imgTag.attr("src")
                 val eventName = titleTag.text().trim()
 
-                if ("english" in eventLink.lowercase()) {
-                    events.add(
+                if ("english" in eventLink.lowercase() && !imgSrc.contains("data:image")) {
+                    liveEvents.add(
                         LiveSearchResponse(
                             name = eventName,
                             url = eventLink,
@@ -64,11 +65,23 @@ class PPVLandProvider : MainAPI() {
                 }
             }
         }
+        if (liveEvents.isNotEmpty()) {
+            homePageLists.add(
+                HomePageList(
+                    name = "Live Now",
+                    list = liveEvents,
+                    isHorizontalImages = false
+                )
+            )
+        }
 
         // Categories section
-        val categoriesSection = doc.select("#categories .mt-5")
-        categoriesSection.forEach { container ->
-            val cards = container.select(".px-2.py-2")
+        val categoriesSection = doc.select("#categories > div[id*=-container]")
+        categoriesSection.forEach { category ->
+            val categoryName = category.selectFirst("h2")?.text()?.trim() ?: return@forEach
+            val categoryEvents = mutableListOf<LiveSearchResponse>()
+            
+            val cards = category.select(".px-2.py-2")
             cards.forEach { card ->
                 val linkTag = card.selectFirst("a.item-card")
                 val imgTag = card.selectFirst("img.card-img-top")
@@ -79,8 +92,8 @@ class PPVLandProvider : MainAPI() {
                     val imgSrc = imgTag.attr("src")
                     val eventName = titleTag.text().trim()
 
-                    if ("english" in eventLink.lowercase()) {
-                        events.add(
+                    if ("english" in eventLink.lowercase() && !imgSrc.contains("data:image")) {
+                        categoryEvents.add(
                             LiveSearchResponse(
                                 name = eventName,
                                 url = eventLink,
@@ -91,24 +104,29 @@ class PPVLandProvider : MainAPI() {
                     }
                 }
             }
+            
+            if (categoryEvents.isNotEmpty()) {
+                homePageLists.add(
+                    HomePageList(
+                        name = categoryName,
+                        list = categoryEvents,
+                        isHorizontalImages = false
+                    )
+                )
+            }
         }
 
-        return events
+        return homePageLists
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val events = fetchEvents()
-        val homePageList = HomePageList(
-            name = "Live Events",
-            list = events,
-            isHorizontalImages = false
-        )
-        return newHomePageResponse(listOf(homePageList), hasNext = false)
+        val homePageLists = fetchEvents()
+        return newHomePageResponse(homePageLists, hasNext = false)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val events = fetchEvents()
-        return events.filter {
+        val homePageLists = fetchEvents()
+        return homePageLists.flatMap { it.list }.filter {
             query.lowercase().replace(" ", "") in it.name.lowercase().replace(" ", "")
         }
     }
@@ -124,7 +142,7 @@ class PPVLandProvider : MainAPI() {
             name = url.substringAfterLast("/").replace("-", " ").capitalize(),
             url = url,
             apiName = this.name,
-            dataUrl = embedUrl,  // Pass VidEmbed URL to extractor
+            dataUrl = embedUrl,
             posterUrl = posterUrl
         )
     }
