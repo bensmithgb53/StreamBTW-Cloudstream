@@ -25,25 +25,21 @@ class PPVLandExtractor : ExtractorApi() {
 
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
         try {
-            // Extract stream ID from the URL (e.g., "38000" from "/live/pdctv/38000/...")
-            val streamId = url.split("/").firstOrNull { it.matches(Regex("\\d+")) }
-                ?: throw Exception("No numeric stream ID found in URL: $url")
-            val apiUrl = "$mainUrl/api/streams/$streamId"
+            val apiUrl = if (url.startsWith("$mainUrl/api/streams/")) {
+                url
+            } else {
+                val streamId = url.split("/").firstOrNull { it.matches(Regex("\\d+")) }
+                    ?: throw Exception("No numeric stream ID found in URL: $url")
+                "$mainUrl/api/streams/$streamId"
+            }
 
-            println("Extracted stream ID: $streamId, Fetching API: $apiUrl")
-
-            // Fetch the API response
-            val response = app.get(apiUrl, headers = HEADERS, referer = referer).text
+            val response = app.get(apiUrl, headers = HEADERS, referer = referer ?: "$mainUrl/").text
             val mapper = jacksonObjectMapper()
             val jsonData = mapper.readValue<Map<String, Any>>(response)
 
-            // Extract the m3u8 URL from the JSON
             val data = jsonData["data"] as? Map<String, Any> ?: throw Exception("No 'data' field in JSON")
             val m3u8Url = data["m3u8"] as? String ?: throw Exception("No 'm3u8' URL found in JSON")
 
-            println("Found m3u8 URL: $m3u8Url")
-
-            // Return the extracted stream link
             return listOf(
                 ExtractorLink(
                     source = this.name,
@@ -55,7 +51,6 @@ class PPVLandExtractor : ExtractorApi() {
                 )
             )
         } catch (e: Exception) {
-            println("Error extracting stream: ${e.message}")
             return null
         }
     }
