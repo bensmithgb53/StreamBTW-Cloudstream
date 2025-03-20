@@ -88,4 +88,20 @@ class StrimsyStreaming : MainAPI() {
         }
         return newLiveStreamLoadResponse(
             name = url.split("/").last().removeSuffix(".php"),
-            dataUrl = streams.first(), // Pass first ifram
+            url = url, // Required parameter
+            dataUrl = streams.first() // Pass first iframe URL to extractor
+        ) {
+            this.apiName = this@StrimsyStreaming.name
+        }
+    }
+
+    override suspend fun loadLinks(
+        data: String,
+        isCasting: Boolean,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        StrimsyExtractor().getUrl(data, referer = mainUrl).forEach(callback)
+        return true
+    }
+}
