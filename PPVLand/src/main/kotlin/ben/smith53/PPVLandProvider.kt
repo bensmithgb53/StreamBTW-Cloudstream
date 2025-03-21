@@ -14,7 +14,6 @@ import com.lagradost.cloudstream3.VPNStatus
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.newHomePageResponse
 import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.loadExtractor
 import org.json.JSONObject
 
 class PPVLandProvider : MainAPI() {
@@ -81,16 +80,15 @@ class PPVLandProvider : MainAPI() {
             for (j in 0 until streams.length()) {
                 val stream = streams.getJSONObject(j)
                 val eventName = stream.getString("name")
-                val eventLink = "$mainUrl/live/${stream.getString("uri_name")}"
+                val streamId = stream.getString("id") // Use stream ID as the URL
                 val poster = stream.getString("poster")
-                val iframe = stream.optString("iframe", null)
                 val startsAt = stream.getLong("starts_at")
-                println("Stream: $eventName, URL: $eventLink, Starts At: $startsAt, Iframe: $iframe")
+                println("Stream: $eventName, ID: $streamId, Starts At: $startsAt")
 
-                if (!poster.contains("data:image")) { // Only keep the poster check
+                if (!poster.contains("data:image")) {
                     val event = LiveSearchResponse(
                         name = eventName,
-                        url = iframe ?: eventLink,
+                        url = streamId, // Store the stream ID to fetch m3u8 later
                         apiName = this.name,
                         posterUrl = poster
                     )
@@ -115,7 +113,7 @@ class PPVLandProvider : MainAPI() {
                 list = listOf(
                     LiveSearchResponse(
                         name = "Test Event",
-                        url = "$mainUrl/live/test-event",
+                        url = "test123", // Dummy ID for testing
                         apiName = this.name,
                         posterUrl = posterUrl
                     )
@@ -142,26 +140,32 @@ class PPVLandProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        return if (url.startsWith("https://www.vidembed.re")) {
-            LiveStreamLoadResponse(
-                name = "Stream",
-                url = url,
-                apiName = this.name,
-                dataUrl = url,
-                posterUrl = posterUrl
-            )
-        } else {
-            val response = app.get(url, headers = mapOf("User-Agent" to userAgent)).text
-            val embedUrl = Regex("src=\"([^\"]+)\"").find(response)?.groupValues?.get(1)
-                ?: throw Exception("Embed URL not found")
-            LiveStreamLoadResponse(
-                name = url.substringAfterLast("/").replace("-", " ").capitalize(),
-                url = url,
-                apiName = this.name,
-                dataUrl = embedUrl,
-                posterUrl = posterUrl
-            )
+        // URL is the stream ID
+        val apiUrl = "$mainUrl/api/streams/$url"
+        val headers = mapOf(
+            "User-Agent" to userAgent,
+            "X-FS-Client" to "FS WebClient 1.0"
+        )
+        val response = app.get(apiUrl, headers = headers)
+        println("Stream API Status Code: ${response.code}")
+        println("Stream API Response Body: ${response.text}")
+
+        if (response.code != 200) {
+            throw Exception("Failed to load stream details: HTTP ${response.code}")
         }
+
+        val json = JSONObject(response.text)
+        val data = json.getJSONObject("data")
+        val m3u8Url = data.getString("m3u8")
+        val streamName = data.optString("name", "Stream")
+
+        return LiveStreamLoadResponse(
+            name = streamName,
+            url = m3u8Url,
+            apiName = this.name,
+            dataUrl = m3u8Url,
+            posterUrl = posterUrl
+        )
     }
 
     override suspend fun loadLinks(
@@ -170,6 +174,18 @@ class PPVLandProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        return loadExtractor(data, mainUrl, subtitleCallback, callback)
+        // Directly return the m3u8 URL as a link
+        callback(
+            ExtractorLink(
+                source = this.name,
+                name = "PPVLand",
+                url = data, // The m3u8 URL from load()
+                referer = mainUrl,
+                quality = -1, // Quality unknown
+                isM3u8 = true
+            )
+        )
+        println("Provided m3u8 link: $data")
+        return true
     }
 }
