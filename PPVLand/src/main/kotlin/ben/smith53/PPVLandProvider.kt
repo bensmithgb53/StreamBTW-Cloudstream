@@ -144,7 +144,6 @@ class PPVLandProvider : MainAPI() {
         val headers = mapOf(
             "User-Agent" to userAgent,
             "Accept" to "*/*",
-            "Accept-Encoding" to "gzip, deflate, br, zstd",
             "Connection" to "keep-alive",
             "Accept-Language" to "en-US,en;q=0.5",
             "X-FS-Client" to "FS WebClient 1.0",
