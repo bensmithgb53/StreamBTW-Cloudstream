@@ -1,74 +1,175 @@
 package ben.smith53
 
-import android.util.Log
-import com.fasterxml.jackson.databind.DeserializationFeature
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
-import com.fasterxml.jackson.module.kotlin.readValue
-import com.lagradost.cloudstream3.ErrorLoadingException
 import com.lagradost.cloudstream3.HomePageList
 import com.lagradost.cloudstream3.HomePageResponse
+import com.lagradost.cloudstream3.LiveSearchResponse
+import com.lagradost.cloudstream3.LiveStreamLoadResponse
+import com.lagradost.cloudstream3.LoadResponse
 import com.lagradost.cloudstream3.MainAPI
+import com.lagradost.cloudstream3.MainPageRequest
 import com.lagradost.cloudstream3.SearchResponse
-import com.lagradost.cloudstream3.TvSeriesSearchResponse
+import com.lagradost.cloudstream3.SubtitleFile
+import com.lagradost.cloudstream3.TvType
+import com.lagradost.cloudstream3.VPNStatus
 import com.lagradost.cloudstream3.app
-import com.lagradost.cloudstream3.mainPageOf
-import java.util.zip.GZIPInputStream
+import com.lagradost.cloudstream3.newHomePageResponse
+import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.loadExtractor
+import org.json.JSONObject
 
 class PPVLandProvider : MainAPI() {
     override var mainUrl = "https://ppv.land"
-    override var name = "PPVLand"
-    override val hasMainPage = true
+    override var name = "PPV Land"
     override val supportedTypes = setOf(TvType.Live)
     override var lang = "en"
+    override val hasMainPage = true
+    override val vpnStatus = VPNStatus.MightBeNeeded
+    override val hasDownloadSupport = false
+    override val instantLinkLoading = true
 
-    override val mainPage = mainPageOf(
-        "streams" to "Live Streams"
-    )
+    private val userAgent =
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36"
 
-    private val mapper = jacksonObjectMapper().apply {
-        configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
+    companion object {
+        private const val posterUrl = "https://ppv.land/assets/img/ppvland.png"
     }
 
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
-        try {
-            val response = app.get("$mainUrl/api/streams").response
-            val bodyBytes = response.body.bytes() // Read raw bytes once
+    private suspend fun fetchEvents(): List<HomePageList> {
+        val apiUrl = "$mainUrl/api/streams"
+        val headers = mapOf(
+            "User-Agent" to userAgent,
+            "Content-Type" to "application/json",
+            "X-FS-Client" to "FS WebClient 1.0"
+        )
 
-            // Check if response is gzip-compressed
-            val responseText = if (response.headers["content-encoding"]?.contains("gzip") == true) {
-                GZIPInputStream(bodyBytes.inputStream()).bufferedReader().use { it.readText() }
-            } else {
-                bodyBytes.decodeToString()
-            }
+        val response = app.get(apiUrl, headers = headers)
+        println("API Status Code: ${response.code}")
+        println("API Response Body: ${response.text}")
 
-            Log.d("PPVLandProvider", "API Response: $responseText")
-            Log.d("PPVLandProvider", "API Headers: ${response.headers}")
+        if (response.code != 200) {
+            println("API Error: Received status code ${response.code}")
+            return listOf(
+                HomePageList(
+                    name = "API Error",
+                    list = listOf(
+                        LiveSearchResponse(
+                            name = "API Failed",
+                            url = mainUrl,
+                            apiName = this.name,
+                            posterUrl = posterUrl
+                        )
+                    ),
+                    isHorizontalImages = false
+                )
+            )
+        }
 
-            // Parse JSON using Jackson (more robust than JSONObject)
-            val data: Map<String, List<Map<String, Any>>> = mapper.readValue(responseText)
-            val streamsArray = data["streams"] ?: throw Exception("No 'streams' key in response")
+        val json = JSONObject(response.text)
+        val streamsArray = json.getJSONArray("streams")
+        println("Number of categories: ${streamsArray.length()}")
 
-            val homePageList = streamsArray.map { category ->
-                val categoryName = category["category"] as? String ?: "Unknown"
-                val streams = category["streams"] as? List<Map<String, Any>> ?: emptyList()
-                val items = streams.map { stream ->
-                    val name = stream["name"] as? String ?: "Unnamed"
-                    val id = stream["id"] as? String ?: ""
-                    val poster = stream["poster"] as? String
-                    TvSeriesSearchResponse(
-                        name = name,
-                        url = "$mainUrl/stream/$id",
+        val categoryMap = mutableMapOf<String, MutableList<LiveSearchResponse>>()
+
+        for (i in 0 until streamsArray.length()) {
+            val categoryData = streamsArray.getJSONObject(i)
+            val categoryName = categoryData.getString("category")
+            val streams = categoryData.getJSONArray("streams")
+            println("Processing Category: $categoryName with ${streams.length()} streams")
+
+            val categoryEvents = categoryMap.getOrPut(categoryName) { mutableListOf() }
+
+            for (j in 0 until streams.length()) {
+                val stream = streams.getJSONObject(j)
+                val eventName = stream.getString("name")
+                val eventLink = "$mainUrl/live/${stream.getString("uri_name")}"
+                val poster = stream.getString("poster")
+                val iframe = stream.optString("iframe", null)
+                val startsAt = stream.getLong("starts_at")
+                println("Stream: $eventName, URL: $eventLink, Starts At: $startsAt, Iframe: $iframe")
+
+                if (!poster.contains("data:image")) { // Only keep the poster check
+                    val event = LiveSearchResponse(
+                        name = eventName,
+                        url = iframe ?: eventLink,
                         apiName = this.name,
                         posterUrl = poster
                     )
+                    categoryEvents.add(event)
                 }
-                HomePageList(categoryName, items)
             }
-
-            return HomePageResponse(homePageList)
-        } catch (e: Exception) {
-            Log.e("PPVLandProvider", "Error in getMainPage: ${e.message}", e)
-            throw ErrorLoadingException("Failed to parse API response: ${e.message}", e)
         }
+
+        val homePageLists = categoryMap.map { (name, events) ->
+            println("Adding category: $name with ${events.size} events")
+            HomePageList(
+                name = name,
+                list = events,
+                isHorizontalImages = false
+            )
+        }.toMutableList()
+
+        // Add test category
+        homePageLists.add(
+            HomePageList(
+                name = "Test Category",
+                list = listOf(
+                    LiveSearchResponse(
+                        name = "Test Event",
+                        url = "$mainUrl/live/test-event",
+                        apiName = this.name,
+                        posterUrl = posterUrl
+                    )
+                ),
+                isHorizontalImages = false
+            )
+        )
+        println("Total categories including test: ${homePageLists.size}")
+
+        return homePageLists
+    }
+
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        val homePageLists = fetchEvents()
+        println("Returning ${homePageLists.size} categories to Cloudstream")
+        return newHomePageResponse(homePageLists)
+    }
+
+    override suspend fun search(query: String): List<SearchResponse> {
+        val homePageLists = fetchEvents()
+        return homePageLists.flatMap { it.list }.filter {
+            query.lowercase().replace(" ", "") in it.name.lowercase().replace(" ", "")
+        }
+    }
+
+    override suspend fun load(url: String): LoadResponse {
+        return if (url.startsWith("https://www.vidembed.re")) {
+            LiveStreamLoadResponse(
+                name = "Stream",
+                url = url,
+                apiName = this.name,
+                dataUrl = url,
+                posterUrl = posterUrl
+            )
+        } else {
+            val response = app.get(url, headers = mapOf("User-Agent" to userAgent)).text
+            val embedUrl = Regex("src=\"([^\"]+)\"").find(response)?.groupValues?.get(1)
+                ?: throw Exception("Embed URL not found")
+            LiveStreamLoadResponse(
+                name = url.substringAfterLast("/").replace("-", " ").capitalize(),
+                url = url,
+                apiName = this.name,
+                dataUrl = embedUrl,
+                posterUrl = posterUrl
+            )
+        }
+    }
+
+    override suspend fun loadLinks(
+        data: String,
+        isCasting: Boolean,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        return loadExtractor(data, mainUrl, subtitleCallback, callback)
     }
 }
