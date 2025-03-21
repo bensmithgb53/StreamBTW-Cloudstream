@@ -2,6 +2,7 @@ package ben.smith53
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.network.CloudflareKiller
+import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import org.json.JSONObject
 
@@ -23,81 +24,111 @@ class PPVLandProvider : MainAPI() {
         "Cookie" to "cf_clearance=Spt9tCB2G5.prpsED77vIRRv_7DXvw__Jw_Esqm53yw-1742505249-1.2.1.1-VXaRZXapXOenQsbIVYelJXCR2YFju.WlikuWSiXF2DNtDyxt5gjuRRhQq6hznJ"
     )
 
-    // Initialize CloudflareKiller
     private val cloudflareKiller by lazy { CloudflareKiller() }
 
-    // Fetch the main page with all available streams
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val response = app.get(
-            apiUrl,
-            headers = headers,
-            timeout = 15,
-            interceptor = cloudflareKiller
-        ).text
-        val json = JSONObject(response)
-        val streamsArray = json.getJSONArray("streams")
+        try {
+            val response = app.get(
+                apiUrl,
+                headers = headers,
+                timeout = 15,
+                interceptor = cloudflareKiller
+            )
 
-        val homePageList = mutableListOf<HomePageList>()
-        for (i in 0 until streamsArray.length()) {
-            val categoryData = streamsArray.getJSONObject(i)
-            val categoryName = categoryData.optString("category", "Unknown")
-            val streams = categoryData.getJSONArray("streams")
-            val streamList = mutableListOf<SearchResponse>()
+            // Log the raw response body and headers for debugging
+            logcat(LogPriority.DEBUG) { "PPVLand API Response: ${response.body.string()}" }
+            logcat(LogPriority.DEBUG) { "PPVLand API Headers: ${response.headers.toJson()}" }
 
-            for (j in 0 until streams.length()) {
-                val stream = streams.getJSONObject(j)
-                val poster = stream.optString("poster")
-                if ("data:image" in poster) continue
-
-                val streamName = stream.getString("name")
-                val streamId = stream.getString("id")
-
-                streamList.add(
-                    newLiveSearchResponse(
-                        name = streamName,
-                        url = "$mainUrl/api/streams/$streamId",
-                        type = TvType.Live
-                    ) {
-                        this.posterUrl = poster
-                    }
-                )
+            // Get the response as text, ensuring decompression
+            val responseText = response.text
+            if (responseText.isBlank()) {
+                throw ErrorLoadingException("Empty response from API")
             }
-            if (streamList.isNotEmpty()) {
-                homePageList.add(HomePageList(categoryName, streamList))
+
+            // Attempt to parse as JSON
+            val json = try {
+                JSONObject(responseText)
+            } catch (e: Exception) {
+                logcat(LogPriority.ERROR) { "Failed to parse JSON: $responseText" }
+                throw ErrorLoadingException("Failed to parse API response as JSON: ${e.message}")
             }
+
+            val streamsArray = json.optJSONArray("streams")
+                ?: throw ErrorLoadingException("No 'streams' array in API response")
+
+            val homePageList = mutableListOf<HomePageList>()
+            for (i in 0 until streamsArray.length()) {
+                val categoryData = streamsArray.getJSONObject(i)
+                val categoryName = categoryData.optString("category", "Unknown")
+                val streams = categoryData.optJSONArray("streams") ?: continue
+                val streamList = mutableListOf<SearchResponse>()
+
+                for (j in 0 until streams.length()) {
+                    val stream = streams.getJSONObject(j)
+                    val poster = stream.optString("poster")
+                    if ("data:image" in poster) continue
+
+                    val streamName = stream.getString("name")
+                    val streamId = stream.getString("id")
+
+                    streamList.add(
+                        newLiveSearchResponse(
+                            name = streamName,
+                            url = "$mainUrl/api/streams/$streamId",
+                            type = TvType.Live
+                        ) {
+                            this.posterUrl = poster
+                        }
+                    )
+                }
+                if (streamList.isNotEmpty()) {
+                    homePageList.add(HomePageList(categoryName, streamList))
+                }
+            }
+            return newHomePageResponse(homePageList)
+        } catch (e: Exception) {
+            logcat(LogPriority.ERROR) { "Error in getMainPage: ${e.stackTraceToString()}" }
+            throw ErrorLoadingException("Failed to load main page: ${e.message}")
         }
-        return newHomePageResponse(homePageList)
     }
 
-    // Load the stream details and extract the m3u8 URL
     override suspend fun load(url: String): LoadResponse? {
-        val response = app.get(
-            url,
-            headers = headers,
-            timeout = 15,
-            interceptor = cloudflareKiller
-        ).text
-        val json = JSONObject(response)
-        val data = json.getJSONObject("data")
-        val m3u8Url = data.optString("m3u8") ?: return null
-        val streamId = url.substringAfterLast("/")
+        try {
+            val response = app.get(
+                url,
+                headers = headers,
+                timeout = 15,
+                interceptor = cloudflareKiller
+            )
 
-        val streamJson = app.get(
-            "$mainUrl/api/streams/$streamId",
-            headers = headers,
-            interceptor = cloudflareKiller
-        ).parsed<StreamJson>()
+            logcat(LogPriority.DEBUG) { "PPVLand Stream Response: ${response.body.string()}" }
+            val responseText = response.text
+            if (responseText.isBlank()) return null
 
-        return newLiveStreamLoadResponse(
-            name = streamJson.name,
-            url = m3u8Url,
-            dataUrl = m3u8Url
-        ) {
-            this.posterUrl = streamJson.poster
+            val json = JSONObject(responseText)
+            val data = json.getJSONObject("data")
+            val m3u8Url = data.optString("m3u8") ?: return null
+            val streamId = url.substringAfterLast("/")
+
+            val streamJson = app.get(
+                "$mainUrl/api/streams/$streamId",
+                headers = headers,
+                interceptor = cloudflareKiller
+            ).parsed<StreamJson>()
+
+            return newLiveStreamLoadResponse(
+                name = streamJson.name,
+                url = m3u8Url,
+                dataUrl = m3u8Url
+            ) {
+                this.posterUrl = streamJson.poster
+            }
+        } catch (e: Exception) {
+            logcat(LogPriority.ERROR) { "Error loading stream: ${e.stackTraceToString()}" }
+            return null
         }
     }
 
-    // Extract the stream link
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -110,14 +141,13 @@ class PPVLandProvider : MainAPI() {
                 name = this.name,
                 url = data,
                 referer = mainUrl,
-                quality = -1, // Use -1 for unknown quality if Qualities enum is unavailable
+                quality = -1,
                 isM3u8 = true
             )
         )
         return true
     }
 
-    // Helper data class for parsing stream JSON
     data class StreamJson(
         val name: String,
         val poster: String
