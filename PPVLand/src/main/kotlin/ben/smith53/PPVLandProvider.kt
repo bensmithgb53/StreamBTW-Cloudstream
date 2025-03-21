@@ -1,112 +1,130 @@
 package ben.smith53
 
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
-import com.fasterxml.jackson.module.kotlin.readValue
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.network.CloudflareKiller
-import com.lagradost.cloudstream3.utils.AppUtils.toJson
-import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.Qualities
+import com.lagradost.cloudstream3.utils.loadExtractor
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
 
 class PPVLandProvider : MainAPI() {
     override var mainUrl = "https://ppv.land"
-    override var name = "PPV Land"
-    override val hasMainPage = true
+    override var name = "PPVLand"
     override val supportedTypes = setOf(TvType.Live)
-    private val userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0"
-    private val interceptor = CloudflareKiller()
+    override var lang = "en"
+    override val hasMainPage = true
+    override val hasSearch = false
 
-    private val HEADERS = mapOf(
-        "User-Agent" to userAgent,
+    private val apiUrl = "$mainUrl/api/streams"
+    private val headers = mapOf(
+        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0",
         "Accept" to "*/*",
         "Accept-Encoding" to "gzip, deflate, br, zstd",
         "Connection" to "keep-alive",
         "Accept-Language" to "en-US,en;q=0.5",
         "X-FS-Client" to "FS WebClient 1.0",
-        "Cookie" to "cf_clearance=Spt9tCB2G5.prpsED77vIRRv_7DXvw__Jw_Esqm53yw-1742505249-1.2.1.1-VXaRZXapXOenQsbIVYelJXCR2YFju.WlikuWSiXF2DNtDyxt5gjuRRhQq6hznJq9xn11ZqLhHFH4QOaitqLCccDwUXy4T2hJwE9qQ7gxlychuZ8E1zpx_XF0eiriJjZ4sw2ORWwokajxGlnxMLnZVMUGXh9sPkOKGKKyldQaga9r8Xus9esujwBVbTRtv7fCAFrF5f5j18Y1A.Rv3zQ7dxmonhSWOsD4c.mUpqXXid7oUJaNPVPw0OZOtYv1CEAPbGDjr1tAkuSJg.ij.6695qjiZsAj8XipJLbXy5IjACJoGVq32ScAy4ABlsXSTLDAtmbtZLUcqiHzljQsxZmt9Ljb7jq0O_HDx8x2VQ83tvI"
+        "Cookie" to "cf_clearance=Spt9tCB2G5.prpsED77vIRRv_7DXvw__Jw_Esqm53yw-1742505249-1.2.1.1-VXaRZXapXOenQsbIVYelJXCR2YFju.WlikuWSiXF2DNtDyxt5gjuRRhQq6hznJ"
     )
 
-    private suspend fun fetchEvents(): List<Map<String, Any>> {
-        val response = app.get("$mainUrl/api/streams", headers = mapOf("User-Agent" to userAgent)).text
-        val mapper = jacksonObjectMapper()
-        val jsonData = mapper.readValue<Map<String, Any>>(response)
-        return jsonData["streams"] as List<Map<String, Any>>
-    }
+    // Initialize CloudflareKiller
+    private val cloudflareKiller by lazy { CloudflareKiller() }
 
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
-        val streamsArray = fetchEvents()
-        val homePageList = streamsArray.map { categoryData ->
-            val categoryName = categoryData["category"] as String
-            val streams = categoryData["streams"] as List<Map<String, Any>>
+    // Fetch the main page with all available streams
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        // Use CloudflareKiller for the HTTP request
+        val response = app.get(
+            apiUrl,
+            headers = headers,
+            timeout = 15,
+            interceptor = cloudflareKiller
+        ).text
+        val json = JSONObject(response)
+        val streamsArray = json.getJSONArray("streams")
 
-            val searchResponses = streams.mapNotNull { stream ->
-                val posterUrl = stream["poster"] as String
-                if ("data:image" in posterUrl) return@mapNotNull null
+        val homePageList = mutableListOf<HomePageList>()
+        for (i in 0 until streamsArray.length()) {
+            val categoryData = streamsArray.getJSONObject(i)
+            val categoryName = categoryData.optString("category", "Unknown")
+            val streams = categoryData.getJSONArray("streams")
+            val streamList = mutableListOf<LiveSearchResponse>()
 
-                LiveSearchResponse(
-                    name = stream["name"] as String,
-                    url = "$mainUrl/live/${stream["uri_name"]}",
-                    apiName = this.name,
-                    type = TvType.Live,
-                    posterUrl = posterUrl,
-                    id = (stream["id"] as Number).toInt()
+            for (j in 0 until streams.length()) {
+                val stream = streams.getJSONObject(j)
+                val poster = stream.optString("poster")
+                if ("data:image" in poster) continue // Filter base64 images like in Python
+
+                val streamName = stream.getString("name")
+                val streamId = stream.getString("id")
+                val uriName = stream.getString("uri_name")
+
+                streamList.add(
+                    LiveSearchResponse(
+                        name = streamName,
+                        url = "$mainUrl/api/streams/$streamId",
+                        posterUrl = poster,
+                        apiName = this.name
+                    )
                 )
             }
-            HomePageList(categoryName, searchResponses)
+            if (streamList.isNotEmpty()) {
+                homePageList.add(HomePageList(categoryName, streamList))
+            }
         }
         return HomePageResponse(homePageList)
     }
 
-    override suspend fun load(url: String): LoadResponse {
-        val streamId = url.split("/").firstOrNull { it.matches(Regex("\\d+")) } 
-            ?: throw Exception("No stream ID found in URL: $url")
+    // Load the stream details and extract the m3u8 URL
+    override suspend fun load(url: String): LoadResponse? {
+        // Use CloudflareKiller for the HTTP request
+        val response = app.get(
+            url,
+            headers = headers,
+            timeout = 15,
+            interceptor = cloudflareKiller
+        ).text
+        val json = JSONObject(response)
+        val data = json.getJSONObject("data")
+        val m3u8Url = data.optString("m3u8") ?: return null
+        val streamId = url.substringAfterLast("/")
+
+        val streamJson = app.get(
+            "$mainUrl/api/streams/$streamId",
+            headers = headers,
+            interceptor = cloudflareKiller
+        ).parsed<StreamJson>()
         return LiveStreamLoadResponse(
-            name = url.substringAfterLast("/").replace("-", " ").capitalize(),
-            url = url,
+            name = streamJson.name,
+            url = m3u8Url,
             apiName = this.name,
-            dataUrl = "$mainUrl/api/streams/$streamId",
-            posterUrl = null
+            dataUrl = m3u8Url,
+            posterUrl = streamJson.poster
         )
     }
 
+    // Extract the stream link
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        try {
-            val apiUrl = if (data.startsWith("$mainUrl/api/streams/")) {
-                data
-            } else {
-                val streamId = data.split("/").firstOrNull { it.matches(Regex("\\d+")) }
-                    ?: throw Exception("No numeric stream ID found in data: $data")
-                "$mainUrl/api/streams/$streamId"
-            }
-
-            val response = app.get(apiUrl, headers = HEADERS, referer = "$mainUrl/").text
-            val mapper = jacksonObjectMapper()
-            val jsonData = mapper.readValue<Map<String, Any>>(response)
-
-            val jsonDataMap = jsonData["data"] as? Map<String, Any> 
-                ?: throw Exception("No 'data' field in JSON")
-            val m3u8Url = jsonDataMap["m3u8"] as? String 
-                ?: throw Exception("No 'm3u8' URL found in JSON")
-
-            callback(
-                ExtractorLink(
-                    source = this.name,
-                    name = this.name,
-                    url = m3u8Url,
-                    referer = "$mainUrl/",
-                    quality = Qualities.Unknown.value,
-                    isM3u8 = true
-                )
+        callback(
+            ExtractorLink(
+                source = this.name,
+                name = this.name,
+                url = data,
+                referer = mainUrl,
+                quality = Qualities.Unknown.value,
+                isM3u8 = true
             )
-            return true
-        } catch (e: Exception) {
-            return false
-        }
+        )
+        return true
     }
+
+    // Helper data class for parsing stream JSON
+    data class StreamJson(
+        val name: String,
+        val poster: String
+    )
 }
