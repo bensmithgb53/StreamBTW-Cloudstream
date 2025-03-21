@@ -36,12 +36,11 @@ class PPVLandProvider : MainAPI() {
                 interceptor = cloudflareKiller
             )
 
-            // Log the raw response body and headers for debugging
-            Log.d("PPVLandProvider", "API Response: ${response.body.string()}")
+            // Read the response body once and reuse it
+            val responseText = response.text // This handles decompression automatically
+            Log.d("PPVLandProvider", "API Response: $responseText")
             Log.d("PPVLandProvider", "API Headers: ${response.headers.toJson()}")
 
-            // Get the response as text, ensuring decompression
-            val responseText = response.text
             if (responseText.isBlank()) {
                 throw ErrorLoadingException("Empty response from API")
             }
@@ -102,8 +101,8 @@ class PPVLandProvider : MainAPI() {
                 interceptor = cloudflareKiller
             )
 
-            Log.d("PPVLandProvider", "Stream Response: ${response.body.string()}")
             val responseText = response.text
+            Log.d("PPVLandProvider", "Stream Response: $responseText")
             if (responseText.isBlank()) return null
 
             val json = JSONObject(responseText)
