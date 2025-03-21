@@ -3,9 +3,6 @@ package ben.smith53
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.loadExtractor
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
 class PPVLandProvider : MainAPI() {
@@ -14,7 +11,6 @@ class PPVLandProvider : MainAPI() {
     override val supportedTypes = setOf(TvType.Live)
     override var lang = "en"
     override val hasMainPage = true
-    override val hasSearch = false
 
     private val apiUrl = "$mainUrl/api/streams"
     private val headers = mapOf(
@@ -32,7 +28,6 @@ class PPVLandProvider : MainAPI() {
 
     // Fetch the main page with all available streams
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        // Use CloudflareKiller for the HTTP request
         val response = app.get(
             apiUrl,
             headers = headers,
@@ -47,36 +42,35 @@ class PPVLandProvider : MainAPI() {
             val categoryData = streamsArray.getJSONObject(i)
             val categoryName = categoryData.optString("category", "Unknown")
             val streams = categoryData.getJSONArray("streams")
-            val streamList = mutableListOf<LiveSearchResponse>()
+            val streamList = mutableListOf<SearchResponse>()
 
             for (j in 0 until streams.length()) {
                 val stream = streams.getJSONObject(j)
                 val poster = stream.optString("poster")
-                if ("data:image" in poster) continue // Filter base64 images like in Python
+                if ("data:image" in poster) continue
 
                 val streamName = stream.getString("name")
                 val streamId = stream.getString("id")
-                val uriName = stream.getString("uri_name")
 
                 streamList.add(
-                    LiveSearchResponse(
+                    newLiveSearchResponse(
                         name = streamName,
                         url = "$mainUrl/api/streams/$streamId",
-                        posterUrl = poster,
-                        apiName = this.name
-                    )
+                        type = TvType.Live
+                    ) {
+                        this.posterUrl = poster
+                    }
                 )
             }
             if (streamList.isNotEmpty()) {
                 homePageList.add(HomePageList(categoryName, streamList))
             }
         }
-        return HomePageResponse(homePageList)
+        return newHomePageResponse(homePageList)
     }
 
     // Load the stream details and extract the m3u8 URL
     override suspend fun load(url: String): LoadResponse? {
-        // Use CloudflareKiller for the HTTP request
         val response = app.get(
             url,
             headers = headers,
@@ -93,13 +87,14 @@ class PPVLandProvider : MainAPI() {
             headers = headers,
             interceptor = cloudflareKiller
         ).parsed<StreamJson>()
-        return LiveStreamLoadResponse(
+
+        return newLiveStreamLoadResponse(
             name = streamJson.name,
             url = m3u8Url,
-            apiName = this.name,
-            dataUrl = m3u8Url,
-            posterUrl = streamJson.poster
-        )
+            dataUrl = m3u8Url
+        ) {
+            this.posterUrl = streamJson.poster
+        }
     }
 
     // Extract the stream link
@@ -115,7 +110,7 @@ class PPVLandProvider : MainAPI() {
                 name = this.name,
                 url = data,
                 referer = mainUrl,
-                quality = Qualities.Unknown.value,
+                quality = -1, // Use -1 for unknown quality if Qualities enum is unavailable
                 isM3u8 = true
             )
         )
