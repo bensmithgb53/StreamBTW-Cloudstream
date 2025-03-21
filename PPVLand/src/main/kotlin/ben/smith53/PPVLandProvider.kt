@@ -5,6 +5,7 @@ import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import org.json.JSONObject
+import android.util.Log
 
 class PPVLandProvider : MainAPI() {
     override var mainUrl = "https://ppv.land"
@@ -36,8 +37,8 @@ class PPVLandProvider : MainAPI() {
             )
 
             // Log the raw response body and headers for debugging
-            logcat(LogPriority.DEBUG) { "PPVLand API Response: ${response.body.string()}" }
-            logcat(LogPriority.DEBUG) { "PPVLand API Headers: ${response.headers.toJson()}" }
+            Log.d("PPVLandProvider", "API Response: ${response.body.string()}")
+            Log.d("PPVLandProvider", "API Headers: ${response.headers.toJson()}")
 
             // Get the response as text, ensuring decompression
             val responseText = response.text
@@ -49,7 +50,7 @@ class PPVLandProvider : MainAPI() {
             val json = try {
                 JSONObject(responseText)
             } catch (e: Exception) {
-                logcat(LogPriority.ERROR) { "Failed to parse JSON: $responseText" }
+                Log.e("PPVLandProvider", "Failed to parse JSON: $responseText", e)
                 throw ErrorLoadingException("Failed to parse API response as JSON: ${e.message}")
             }
 
@@ -87,7 +88,7 @@ class PPVLandProvider : MainAPI() {
             }
             return newHomePageResponse(homePageList)
         } catch (e: Exception) {
-            logcat(LogPriority.ERROR) { "Error in getMainPage: ${e.stackTraceToString()}" }
+            Log.e("PPVLandProvider", "Error in getMainPage: ${e.stackTraceToString()}", e)
             throw ErrorLoadingException("Failed to load main page: ${e.message}")
         }
     }
@@ -101,7 +102,7 @@ class PPVLandProvider : MainAPI() {
                 interceptor = cloudflareKiller
             )
 
-            logcat(LogPriority.DEBUG) { "PPVLand Stream Response: ${response.body.string()}" }
+            Log.d("PPVLandProvider", "Stream Response: ${response.body.string()}")
             val responseText = response.text
             if (responseText.isBlank()) return null
 
@@ -124,7 +125,7 @@ class PPVLandProvider : MainAPI() {
                 this.posterUrl = streamJson.poster
             }
         } catch (e: Exception) {
-            logcat(LogPriority.ERROR) { "Error loading stream: ${e.stackTraceToString()}" }
+            Log.e("PPVLandProvider", "Error loading stream: ${e.stackTraceToString()}", e)
             return null
         }
     }
