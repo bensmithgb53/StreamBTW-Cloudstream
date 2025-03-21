@@ -15,6 +15,7 @@ import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.newHomePageResponse
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import org.json.JSONObject
+import java.util.zip.GZIPInputStream
 
 class PPVLandProvider : MainAPI() {
     override var mainUrl = "https://ppv.land"
@@ -33,7 +34,7 @@ class PPVLandProvider : MainAPI() {
         "Connection" to "keep-alive",
         "Accept-Language" to "en-US,en;q=0.5",
         "X-FS-Client" to "FS WebClient 1.0",
-        "Cookie" to "cf_clearance=Spt9tCB2G5.prpsED77vIRRv_7DXvw__Jw_Esqm53yw-1742505249-1.2.1.1-VXaRZXapXOenQsbIVYelJXCR2YFju.WlikuWSiXF2DNtDyxt5gjuRRhQq6hznJ"
+        "Cookie" to "cf_clearance=Spt9tCB2G5.prpsED77vIRRv_7DXvw__Jw_Esqm53yw-1742505249-1.2.1.1-VXaRZXapXOenQsbIVYelJXCR2YFju.WlikuWSiXF2DNtDyxt5gjuRRhQq6hznJq9xn11ZqLhHFH4QOaitqLCccDwUXy4T2hJwE9qQ7gxlychuZ8E1zpx_XF0eiriJjZ4sw2ORWwokajxGlnxMLnZVMUGXh9sPkOKGKKyldQaga9r8Xus9esujwBVbTRtv7fCAFrF5f5j18Y1A.Rv3zQ7dxmonhSWOsD4c.mUpqXXid7oUJaNPVPw0OZOtYv1CEAPbGDjr1tAkuSJg.ij.6695qjiZsAj8XipJLbXy5IjACJoGVq32ScAy4ABlsXSTLDAtmbtZLUcqiHzljQsxZmt9Ljb7jq0O_HDx8x2VQ83tvI; fs_last_error=232011"
     )
 
     companion object {
@@ -44,18 +45,89 @@ class PPVLandProvider : MainAPI() {
         val apiUrl = "$mainUrl/api/streams"
         println("Fetching all streams from: $apiUrl")
         println("Request Headers: $headers")
-        val response = app.get(apiUrl, headers = headers, timeout = 15)
-        println("Main API Status Code: ${response.code}")
-        println("Main API Response Body: ${response.text}")
+        try {
+            val response = app.get(apiUrl, headers = headers, timeout = 15)
+            println("Main API Status Code: ${response.code}")
+            
+            // Decompress gzip response
+            val decompressedText = if (response.headers["Content-Encoding"] == "gzip") {
+                GZIPInputStream(response.body.byteStream()).bufferedReader().use { it.readText() }
+            } else {
+                response.text
+            }
+            println("Main API Response Body: $decompressedText")
 
-        if (response.code != 200) {
-            println("API Error: Received status code ${response.code}")
+            if (response.code != 200) {
+                println("API Error: Received status code ${response.code}")
+                return listOf(
+                    HomePageList(
+                        name = "API Error",
+                        list = listOf(
+                            LiveSearchResponse(
+                                name = "API Failed",
+                                url = mainUrl,
+                                apiName = this.name,
+                                posterUrl = posterUrl
+                            )
+                        ),
+                        isHorizontalImages = false
+                    )
+                )
+            }
+
+            val json = JSONObject(decompressedText)
+            val streamsArray = json.getJSONArray("streams")
+            println("Found ${streamsArray.length()} categories")
+
+            val categoryMap = mutableMapOf<String, MutableList<LiveSearchResponse>>()
+
+            for (i in 0 until streamsArray.length()) {
+                val categoryData = streamsArray.getJSONObject(i)
+                val categoryName = categoryData.getString("category")
+                val streams = categoryData.getJSONArray("streams")
+                println("Processing Category: $categoryName with ${streams.length()} streams")
+
+                val categoryEvents = categoryMap.getOrPut(categoryName) { mutableListOf() }
+
+                for (j in 0 until streams.length()) {
+                    val stream = streams.getJSONObject(j)
+                    val eventName = stream.getString("name")
+                    val streamId = stream.getString("id")
+                    val poster = stream.getString("poster")
+                    val startsAt = stream.getLong("starts_at")
+                    println("Stream: $eventName, ID: $streamId, Starts At: $startsAt")
+
+                    if (!poster.contains("data:image")) {
+                        val event = LiveSearchResponse(
+                            name = eventName,
+                            url = streamId,
+                            apiName = this.name,
+                            posterUrl = poster
+                        )
+                        categoryEvents.add(event)
+                    }
+                }
+            }
+
+            val homePageLists = categoryMap.map { (name, events) ->
+                println("Adding category: $name with ${events.size} events")
+                HomePageList(
+                    name = name,
+                    list = events,
+                    isHorizontalImages = false
+                )
+            }.toMutableList()
+
+            println("Total categories: ${homePageLists.size}")
+            return homePageLists
+        } catch (e: Exception) {
+            println("fetchEvents failed: ${e.message}")
             return listOf(
                 HomePageList(
-                    name = "API Error",
+                    name = "Error",
                     list = listOf(
                         LiveSearchResponse(
-                            name = "API Failed",
+                            name = "Failed to load events: ${e.message}",
                             url = mainUrl,
                             apiName = this.name,
                             posterUrl = posterUrl
@@ -65,52 +137,6 @@ class PPVLandProvider : MainAPI() {
                 )
             )
         }
-
-        val json = JSONObject(response.text)
-        val streamsArray = json.getJSONArray("streams")
-        println("Found ${streamsArray.length()} categories")
-
-        val categoryMap = mutableMapOf<String, MutableList<LiveSearchResponse>>()
-
-        for (i in 0 until streamsArray.length()) {
-            val categoryData = streamsArray.getJSONObject(i)
-            val categoryName = categoryData.getString("category")
-            val streams = categoryData.getJSONArray("streams")
-            println("Processing Category: $categoryName with ${streams.length()} streams")
-
-            val categoryEvents = categoryMap.getOrPut(categoryName) { mutableListOf() }
-
-            for (j in 0 until streams.length()) {
-                val stream = streams.getJSONObject(j)
-                val eventName = stream.getString("name")
-                val streamId = stream.getString("id")
-                val poster = stream.getString("poster")
-                val startsAt = stream.getLong("starts_at")
-                println("Stream: $eventName, ID: $streamId, Starts At: $startsAt")
-
-                if (!poster.contains("data:image")) {
-                    val event = LiveSearchResponse(
-                        name = eventName,
-                        url = streamId,
-                        apiName = this.name,
-                        posterUrl = poster
-                    )
-                    categoryEvents.add(event)
-                }
-            }
-        }
-
-        val homePageLists = categoryMap.map { (name, events) ->
-            println("Adding category: $name with ${events.size} events")
-            HomePageList(
-                name = name,
-                list = events,
-                isHorizontalImages = false
-            )
-        }.toMutableList()
-
-        println("Total categories: ${homePageLists.size}")
-        return homePageLists
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -127,18 +153,26 @@ class PPVLandProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val apiUrl = "$mainUrl/api/streams/$url"
-        println("Fetching m3u8 for stream ID $url: $apiUrl")
+        val streamId = url.substringAfterLast("/").substringAfterLast(":")
+        val apiUrl = "$mainUrl/api/streams/$streamId"
+        println("Fetching m3u8 for stream ID $streamId: $apiUrl")
         println("Request Headers: $headers")
         val response = app.get(apiUrl, headers = headers, timeout = 15)
         println("Stream API Status Code: ${response.code}")
-        println("Stream API Response Body: ${response.text}")
+
+        // Decompress gzip response
+        val decompressedText = if (response.headers["Content-Encoding"] == "gzip") {
+            GZIPInputStream(response.body.byteStream()).bufferedReader().use { it.readText() }
+        } else {
+            response.text
+        }
+        println("Stream API Response Body: $decompressedText")
 
         if (response.code != 200) {
             throw Exception("Failed to load stream details: HTTP ${response.code}")
         }
 
-        val json = JSONObject(response.text)
+        val json = JSONObject(decompressedText)
         if (!json.optBoolean("success", true)) {
             throw Exception("API Error: ${json.optString("error", "Unknown error")}")
         }
@@ -147,7 +181,7 @@ class PPVLandProvider : MainAPI() {
             ?: json.optString("m3u8")
             ?: throw Exception("No m3u8 URL found in response")
         val streamName = json.optJSONObject("data")?.optString("name")
-            ?: json.optString("name", "Stream $url")
+            ?: json.optString("name", "Stream $streamId")
 
         println("Found m3u8 URL: $m3u8Url")
         return LiveStreamLoadResponse(
