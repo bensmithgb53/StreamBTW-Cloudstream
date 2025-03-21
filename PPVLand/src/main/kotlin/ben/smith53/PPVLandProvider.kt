@@ -42,8 +42,8 @@ class PPVLandProvider : MainAPI() {
         )
 
         val response = app.get(apiUrl, headers = headers)
-        println("API Status Code: ${response.code}")
-        println("API Response Body: ${response.text}")
+        println("Main API Status Code: ${response.code}")
+        println("Main API Response Body: ${response.text}")
 
         if (response.code != 200) {
             println("API Error: Received status code ${response.code}")
@@ -80,7 +80,7 @@ class PPVLandProvider : MainAPI() {
             for (j in 0 until streams.length()) {
                 val stream = streams.getJSONObject(j)
                 val eventName = stream.getString("name")
-                val streamId = stream.getString("id") // Use stream ID as the URL
+                val streamId = stream.getString("id")
                 val poster = stream.getString("poster")
                 val startsAt = stream.getLong("starts_at")
                 println("Stream: $eventName, ID: $streamId, Starts At: $startsAt")
@@ -88,7 +88,7 @@ class PPVLandProvider : MainAPI() {
                 if (!poster.contains("data:image")) {
                     val event = LiveSearchResponse(
                         name = eventName,
-                        url = streamId, // Store the stream ID to fetch m3u8 later
+                        url = streamId,
                         apiName = this.name,
                         posterUrl = poster
                     )
@@ -106,14 +106,13 @@ class PPVLandProvider : MainAPI() {
             )
         }.toMutableList()
 
-        // Add test category
         homePageLists.add(
             HomePageList(
                 name = "Test Category",
                 list = listOf(
                     LiveSearchResponse(
                         name = "Test Event",
-                        url = "test123", // Dummy ID for testing
+                        url = "test123",
                         apiName = this.name,
                         posterUrl = posterUrl
                     )
@@ -140,11 +139,15 @@ class PPVLandProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        // URL is the stream ID
         val apiUrl = "$mainUrl/api/streams/$url"
         val headers = mapOf(
             "User-Agent" to userAgent,
+            "Accept" to "*/*",
+            "Accept-Encoding" to "gzip, deflate, br, zstd",
+            "Connection" to "keep-alive",
+            "Accept-Language" to "en-US,en;q=0.5",
             "X-FS-Client" to "FS WebClient 1.0"
+            // Add "Cookie" header if needed, e.g., "cf_clearance=..." from Python script
         )
         val response = app.get(apiUrl, headers = headers)
         println("Stream API Status Code: ${response.code}")
@@ -155,6 +158,10 @@ class PPVLandProvider : MainAPI() {
         }
 
         val json = JSONObject(response.text)
+        if (!json.getBoolean("success")) {
+            throw Exception("API Error: ${json.getString("error")}")
+        }
+
         val data = json.getJSONObject("data")
         val m3u8Url = data.getString("m3u8")
         val streamName = data.optString("name", "Stream")
@@ -174,14 +181,13 @@ class PPVLandProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // Directly return the m3u8 URL as a link
         callback(
             ExtractorLink(
                 source = this.name,
                 name = "PPVLand",
-                url = data, // The m3u8 URL from load()
+                url = data,
                 referer = mainUrl,
-                quality = -1, // Quality unknown
+                quality = -1,
                 isM3u8 = true
             )
         )
