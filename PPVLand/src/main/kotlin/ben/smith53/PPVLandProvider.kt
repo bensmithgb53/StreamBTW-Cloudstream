@@ -38,7 +38,8 @@ class PPVLandProvider : MainAPI() {
         val headers = mapOf(
             "User-Agent" to userAgent,
             "Content-Type" to "application/json",
-            "X-FS-Client" to "FS WebClient 1.0"
+            "X-FS-Client" to "FS WebClient 1.0",
+            "Cookie" to "cf_clearance=Spt9tCB2G5.prpsED77vIRRv_7DXvw__Jw_Esqm53yw-1742505249-1.2.1.1-VXaRZXapXOenQsbIVYelJXCR2YFju.WlikuWSiXF2DNtDyxt5gjuRRhQq6hznJ"
         )
 
         val response = app.get(apiUrl, headers = headers)
@@ -88,7 +89,7 @@ class PPVLandProvider : MainAPI() {
                 if (!poster.contains("data:image")) {
                     val event = LiveSearchResponse(
                         name = eventName,
-                        url = streamId,
+                        url = streamId, // Use numeric ID as the URL
                         apiName = this.name,
                         posterUrl = poster
                     )
@@ -146,8 +147,8 @@ class PPVLandProvider : MainAPI() {
             "Accept-Encoding" to "gzip, deflate, br, zstd",
             "Connection" to "keep-alive",
             "Accept-Language" to "en-US,en;q=0.5",
-            "X-FS-Client" to "FS WebClient 1.0"
-            // Add "Cookie" header if needed, e.g., "cf_clearance=..." from Python script
+            "X-FS-Client" to "FS WebClient 1.0",
+            "Cookie" to "cf_clearance=Spt9tCB2G5.prpsED77vIRRv_7DXvw__Jw_Esqm53yw-1742505249-1.2.1.1-VXaRZXapXOenQsbIVYelJXCR2YFju.WlikuWSiXF2DNtDyxt5gjuRRhQq6hznJ"
         )
         val response = app.get(apiUrl, headers = headers)
         println("Stream API Status Code: ${response.code}")
@@ -158,13 +159,16 @@ class PPVLandProvider : MainAPI() {
         }
 
         val json = JSONObject(response.text)
-        if (!json.getBoolean("success")) {
-            throw Exception("API Error: ${json.getString("error")}")
+        if (!json.optBoolean("success", true)) { // Default to true if "success" is absent
+            throw Exception("API Error: ${json.optString("error", "Unknown error")}")
         }
 
-        val data = json.getJSONObject("data")
-        val m3u8Url = data.getString("m3u8")
-        val streamName = data.optString("name", "Stream")
+        // Flexible parsing: try "data" object first, fall back to root-level "m3u8"
+        val m3u8Url = json.optJSONObject("data")?.optString("m3u8")
+            ?: json.optString("m3u8")
+            ?: throw Exception("No m3u8 URL found in response")
+        val streamName = json.optJSONObject("data")?.optString("name")
+            ?: json.optString("name", "Stream $url")
 
         return LiveStreamLoadResponse(
             name = streamName,
