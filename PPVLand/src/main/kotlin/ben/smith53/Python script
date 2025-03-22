@@ -1,0 +1,235 @@
+  GNU nano 8.3                                                      ppvland_all_streams.py
+import requests
+import json
+import logging
+
+# Set up logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# Constants from PPVLandProvider.kt and PPVLandExtractor.kt
+MAIN_URL = "https://ppv.land"
+API_URL = f"{MAIN_URL}/api/streams"  # From PPVLandProvider.kt to fetch all streams                                                                       USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0"
+TIMEOUT = 15
+
+BASE_HEADERS = {
+    "User-Agent": USER_AGENT,
+    "Accept": "*/*",
+    "Accept-Encoding": "gzip, deflate, br, zstd",
+    "Connection": "keep-alive",
+    "Accept-Language": "en-US,en;q=0.5",
+    "X-FS-Client": "FS WebClient 1.0",
+    "Cookie": "cf_clearance=Spt9tCB2G5.prpsED77vIRRv_7DXvw__Jw_Esqm53yw-1742505249-1.2.1.1-VXaRZXapXOenQsbIVYelJXCR2YFju.WlikuWSiXF2DNtDyxt5gjuRRhQq6hznJ>
+}
+
+def fetch_events():
+    """Fetch all streams from the API (like PPVLandProvider.kt's fetchEvents)."""
+    try:
+        logging.info(f"Fetching all streams from: {API_URL}")
+        response = requests.get(API_URL, headers=BASE_HEADERS, timeout=TIMEOUT)
+        response.raise_for_status()
+        logging.info(f"API fetched, status: {response.status_code}, raw length: {len(response.content)} bytes")
+
+        json_data = response.json()
+        streams_array = json_data.get("streams", [])
+        logging.info(f"Found {len(streams_array)} categories")
+
+        events = []
+        for category_data in streams_array:
+            category_name = category_data.get("category", "Unknown")
+            streams = category_data.get("streams", [])
+            logging.info(f"Processing category: {category_name} with {len(streams)} streams")
+
+            for stream in streams:
+                event = {
+                    "id": stream.get("id"),
+                    "name": stream.get("name"),
+                    "uri_name": stream.get("uri_name"),
+                    "poster": stream.get("poster"),
+                    "starts_at": stream.get("starts_at"),
+                    "iframe": stream.get("iframe", None)
+                }
+                if "data:image" not in event["poster"]:  # Filter like provider
+                    events.append(event)
+                    logging.info(f"Added stream: {event['name']}, ID: {event['id']}, URI: {event['uri_name']}")
+
+        return events
+    except requests.RequestException as e:
+        logging.error(f"Failed to fetch events - {e}")
+        return []
+
+def fetch_m3u8_url(stream_id):
+    """Fetch the m3u8 URL for a specific stream (like PPVLandExtractor.kt's getUrl)."""
+    api_url = f"{MAIN_URL}/api/streams/{stream_id}"
+    try:
+        logging.info(f"Fetching m3u8 for stream ID {stream_id}: {api_url}")
+        response = requests.get(api_url, headers=BASE_HEADERS, timeout=TIMEOUT)
+        response.raise_for_status()
+        logging.info(f"API fetched, status: {response.status_code}")
+
+        json_data = response.json()
+        data = json_data.get("data", {})
+        m3u8_url = data.get("m3u8")
+        if not m3u8_url:
+            logging.error(f"No m3u8 URL found in JSON for stream ID {stream_id}")
+            return None
+
+        logging.info(f"Found m3u8 URL: {m3u8_url}")
+        return m3u8_url
+    except requests.RequestException as e:
+        logging.error(f"Failed to fetch m3u8 for stream ID {stream_id} - {e}")
+        return None
+
+def get_all_streams():
+    """Combine provider and extractor logic to get all m3u8 URLs."""
+    events = fetch_events()
+    if not events:
+        logging.error("No events found")
+        return []
+
+    stream_urls = []
+    for event in events:
+        stream_id = event.get("id")
+        if stream_id:
+            m3u8_url = fetch_m3u8_url(stream_id)
+            if m3u8_url:
+                stream_urls.append({
+                    "name": event["name"],
+                    "id": stream_id,
+                    "m3u8_url": m3u8_url,
+                    "poster": event["poster"]
+                })
+        else:
+            logging.warning(f"No stream ID found for event: {event['name']}")
+
+    return stream_urls
+
+if __name__ == "__main__":
+    print(f"\nTesting all streams from: {API_URL}")
+    all_streams = get_all_streams()
+    if all_streams:
+        print("\nSuccess! Found the following streams:")
+        for stream in all_streams:
+            print(f"Name: {stream['name']}")
+            print(f"ID: {stream['id']}")
+            print(f"M3U8 URL: {stream['m3u8_url']}")
+            print(f"Poster: {stream['poster']}")
+            print("-" * 50)
+    else:
+        print("Failed to extract any stream URLs")  GNU nano 8.3                                                      ppvland_all_streams.py
+import requests
+import json
+import logging
+
+# Set up logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# Constants from PPVLandProvider.kt and PPVLandExtractor.kt
+MAIN_URL = "https://ppv.land"
+API_URL = f"{MAIN_URL}/api/streams"  # From PPVLandProvider.kt to fetch all streams                                                                       USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0"
+TIMEOUT = 15
+
+BASE_HEADERS = {
+    "User-Agent": USER_AGENT,
+    "Accept": "*/*",
+    "Accept-Encoding": "gzip, deflate, br, zstd",
+    "Connection": "keep-alive",
+    "Accept-Language": "en-US,en;q=0.5",
+    "X-FS-Client": "FS WebClient 1.0",
+    "Cookie": "cf_clearance=Spt9tCB2G5.prpsED77vIRRv_7DXvw__Jw_Esqm53yw-1742505249-1.2.1.1-VXaRZXapXOenQsbIVYelJXCR2YFju.WlikuWSiXF2DNtDyxt5gjuRRhQq6hznJ>
+}
+
+def fetch_events():
+    """Fetch all streams from the API (like PPVLandProvider.kt's fetchEvents)."""
+    try:
+        logging.info(f"Fetching all streams from: {API_URL}")
+        response = requests.get(API_URL, headers=BASE_HEADERS, timeout=TIMEOUT)
+        response.raise_for_status()
+        logging.info(f"API fetched, status: {response.status_code}, raw length: {len(response.content)} bytes")
+
+        json_data = response.json()
+        streams_array = json_data.get("streams", [])
+        logging.info(f"Found {len(streams_array)} categories")
+
+        events = []
+        for category_data in streams_array:
+            category_name = category_data.get("category", "Unknown")
+            streams = category_data.get("streams", [])
+            logging.info(f"Processing category: {category_name} with {len(streams)} streams")
+
+            for stream in streams:
+                event = {
+                    "id": stream.get("id"),
+                    "name": stream.get("name"),
+                    "uri_name": stream.get("uri_name"),
+                    "poster": stream.get("poster"),
+                    "starts_at": stream.get("starts_at"),
+                    "iframe": stream.get("iframe", None)
+                }
+                if "data:image" not in event["poster"]:  # Filter like provider
+                    events.append(event)
+                    logging.info(f"Added stream: {event['name']}, ID: {event['id']}, URI: {event['uri_name']}")
+
+        return events
+    except requests.RequestException as e:
+        logging.error(f"Failed to fetch events - {e}")
+        return []
+
+def fetch_m3u8_url(stream_id):
+    """Fetch the m3u8 URL for a specific stream (like PPVLandExtractor.kt's getUrl)."""
+    api_url = f"{MAIN_URL}/api/streams/{stream_id}"
+    try:
+        logging.info(f"Fetching m3u8 for stream ID {stream_id}: {api_url}")
+        response = requests.get(api_url, headers=BASE_HEADERS, timeout=TIMEOUT)
+        response.raise_for_status()
+        logging.info(f"API fetched, status: {response.status_code}")
+
+        json_data = response.json()
+        data = json_data.get("data", {})
+        m3u8_url = data.get("m3u8")
+        if not m3u8_url:
+            logging.error(f"No m3u8 URL found in JSON for stream ID {stream_id}")
+            return None
+
+        logging.info(f"Found m3u8 URL: {m3u8_url}")
+        return m3u8_url
+    except requests.RequestException as e:
+        logging.error(f"Failed to fetch m3u8 for stream ID {stream_id} - {e}")
+        return None
+
+def get_all_streams():
+    """Combine provider and extractor logic to get all m3u8 URLs."""
+    events = fetch_events()
+    if not events:
+        logging.error("No events found")
+        return []
+
+    stream_urls = []
+    for event in events:
+        stream_id = event.get("id")
+        if stream_id:
+            m3u8_url = fetch_m3u8_url(stream_id)
+            if m3u8_url:
+                stream_urls.append({
+                    "name": event["name"],
+                    "id": stream_id,
+                    "m3u8_url": m3u8_url,
+                    "poster": event["poster"]
+                })
+        else:
+            logging.warning(f"No stream ID found for event: {event['name']}")
+
+    return stream_urls
+
+if __name__ == "__main__":
+    print(f"\nTesting all streams from: {API_URL}")
+    all_streams = get_all_streams()
+    if all_streams:
+        print("\nSuccess! Found the following streams:")
+        for stream in all_streams:
+            print(f"Name: {stream['name']}")
+            print(f"ID: {stream['id']}")
+            print(f"M3U8 URL: {stream['m3u8_url']}")
+            print(f"Poster: {stream['poster']}")
+            print("-" * 50)
+    else:
+        print("Failed to extract any stream URLs")
