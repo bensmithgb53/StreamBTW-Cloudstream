@@ -19,7 +19,7 @@ class StreamedProvider : MainAPI() {
     private val headers = mapOf(
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
         "Referer" to "https://streamed.su/",
-        "Accept-Encoding" to "gzip, deflate" // Removed "br" to avoid Brotli
+        "Accept-Encoding" to "gzip, deflate"
     )
 
     companion object {
@@ -78,11 +78,10 @@ class StreamedProvider : MainAPI() {
             val matches: List<APIMatch> = mapper.readValue(text)
             println("Parsed ${matches.size} matches")
 
-            // Filter for live matches (within 3 hours of current time or upcoming)
             val currentTime = System.currentTimeMillis() / 1000
             val liveMatches = matches.filter { 
                 val matchTime = it.date / 1000
-                matchTime >= (currentTime - 3 * 60 * 60) // Include past 3 hours and future
+                matchTime >= (currentTime - 3 * 60 * 60)
             }
             if (liveMatches.isEmpty()) {
                 println("No live matches found in API response")
@@ -99,7 +98,6 @@ class StreamedProvider : MainAPI() {
                 )
             }
 
-            // Group matches by category
             val groupedMatches = liveMatches.groupBy { it.category.capitalize() }
             val homePageLists = groupedMatches.map { (category, categoryMatches) ->
                 val eventList = categoryMatches.mapNotNull { match ->
@@ -176,6 +174,8 @@ class StreamedProvider : MainAPI() {
         }
         val streams: List<Stream> = mapper.readValue(text)
         val stream = streams.firstOrNull() ?: throw ErrorLoadingException("No streams available for URL: $streamUrl")
+        
+        // Fetch embed HTML
         val embedResponse = app.get(stream.embedUrl, headers = headers, timeout = 15)
         val embedHtml = if (embedResponse.headers["Content-Encoding"] == "gzip") {
             GZIPInputStream(embedResponse.body.byteStream()).bufferedReader().use { it.readText() }
@@ -184,18 +184,21 @@ class StreamedProvider : MainAPI() {
         }
         println("Embed HTML: $embedHtml")
 
-        // Generic M3U8 regex (to be refined after PowerShell confirmation)
-        val m3u8Match = Regex("https?://[^\\s'\"]+\\.m3u8[^\\s'\"]*").find(embedHtml)
-            ?: throw ErrorLoadingException("No M3U8 URL found in embed: ${stream.embedUrl}")
-        val m3u8Url = m3u8Match.value
+        // Extract variables from script tag
+        val scriptRegex = Regex("""var k = "([^"]+)", i = "([^"]+)", s = "([^"]+)"""")
+        val match = scriptRegex.find(embedHtml) ?: throw ErrorLoadingException("Could not extract stream variables from embed HTML")
+        val (k, i, s) = match.destructured
 
+        // Attempt to construct and fetch M3U8 URL
+        val m3u8Url = "https://embedme.top/hls/$k/$i/$s.m3u8"
+        println("Attempting M3U8 URL: $m3u8Url")
         val m3u8Response = app.get(m3u8Url, headers = headers, timeout = 10)
         val contentEncoding = m3u8Response.headers["Content-Encoding"]?.lowercase()
         val rawContent = m3u8Response.body.bytes()
         val m3u8Content = when {
             rawContent.startsWith("#EXTM3U".toByteArray()) -> String(rawContent)
             contentEncoding == "gzip" -> GZIPInputStream(rawContent.inputStream()).bufferedReader().use { it.readText() }
-            else -> String(rawContent) // Fallback for uncompressed or unsupported encoding
+            else -> String(rawContent)
         }
 
         return newLiveStreamLoadResponse(
@@ -233,4 +236,4 @@ class StreamedProvider : MainAPI() {
     private fun String.capitalize(): String {
         return replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
     }
-}
+                                }
