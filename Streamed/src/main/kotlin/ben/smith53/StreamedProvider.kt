@@ -125,11 +125,27 @@ class StreamedProvider : MainAPI() {
         } else {
             response.text
         }
+
         if (!response.isSuccessful || text.contains("Not Found")) {
-            throw ErrorLoadingException("Stream not found for URL: $streamUrl")
+            return newLiveStreamLoadResponse(
+                "Stream Unavailable",
+                url,
+                "https://example.com/placeholder.m3u8" // Placeholder URL
+            ) {
+                this.apiName = this@StreamedProvider.name
+                this.plot = "The requested stream could not be found. It may have ended or the source ID is invalid."
+            }
         }
+
         val streams: List<Stream> = mapper.readValue(text)
-        val stream = streams.firstOrNull() ?: throw ErrorLoadingException("No streams available")
+        val stream = streams.firstOrNull() ?: return newLiveStreamLoadResponse(
+            "No Streams Available",
+            url,
+            "https://example.com/placeholder.m3u8"
+        ) {
+            this.apiName = this@StreamedProvider.name
+            this.plot = "No streams were returned for this match."
+        }
 
         val embedUrl = "https://embedme.top/embed/$sourceType/$matchId/${stream.streamNo}"
         val fetchHeaders = mapOf(
@@ -158,6 +174,10 @@ class StreamedProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        if (data.contains("placeholder.m3u8")) {
+            return true // Skip link extraction for placeholder
+        }
+
         val streamHeaders = mapOf(
             "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
             "Referer" to "https://embedme.top/",
