@@ -85,9 +85,9 @@ class StreamedProvider : MainAPI() {
                     url = match.sources.firstOrNull()?.let { source ->
                         "${match.id}|${source.source}|${source.id}"
                     } ?: match.id,
-                    apiName = this.name
+                    type = TvType.Live // Correct parameter instead of apiName
                 ) {
-                    this.posterUrl = posterUrl ?: homeBadge // Fallback to home badge if no poster
+                    this.posterUrl = posterUrl ?: homeBadge // Fallback to home badge
                 }
             }
             return listOf(HomePageList("Live Sports", eventList, isHorizontalImages = false))
@@ -95,7 +95,11 @@ class StreamedProvider : MainAPI() {
             return listOf(
                 HomePageList(
                     "Error",
-                    listOf(newLiveSearchResponse("Failed to load: ${e.message}", mainUrl, this.name)),
+                    listOf(newLiveSearchResponse(
+                        name = "Failed to load: ${e.message}",
+                        url = mainUrl,
+                        type = TvType.Live
+                    )),
                     isHorizontalImages = false
                 )
             )
@@ -145,7 +149,6 @@ class StreamedProvider : MainAPI() {
             rawContent.startsWith("#EXTM3U".toByteArray()) -> String(rawContent)
             contentEncoding == "gzip" -> GZIPInputStream(rawContent.inputStream()).bufferedReader().use { it.readText() }
             contentEncoding == "br" -> {
-                // NiceHttp might handle Brotli internally; fallback to plaintext if it fails
                 if (rawContent.startsWith("#EXTM3U".toByteArray())) String(rawContent)
                 else throw Exception("Brotli decoding not supported without explicit library")
             }
@@ -155,7 +158,7 @@ class StreamedProvider : MainAPI() {
         return newLiveStreamLoadResponse(
             name = "${stream.source} - ${if (stream.hd) "HD" else "SD"}",
             url = m3u8Url,
-            data = m3u8Content
+            dataUrl = m3u8Content // Correct parameter name
         ) {
             this.apiName = this@StreamedProvider.name
         }
