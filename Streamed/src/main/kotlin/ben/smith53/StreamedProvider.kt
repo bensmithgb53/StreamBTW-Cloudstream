@@ -6,12 +6,11 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.HttpSession
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
-import org.jsoup.Jsoup
 import java.util.zip.GZIPInputStream
 
-class EmbedMeProvider : MainAPI() {
-    override var mainUrl = "https://embedme.top" // Base API URL
-    override var name = "EmbedMe Sports"
+class StreamedProvider : MainAPI() {
+    override var mainUrl = "https://embedme.top" // Switch to "https://streamed.su" if targeting that site
+    override var name = "Streamed Sports" // Matches your plugin theme
     override val supportedTypes = setOf(TvType.Live)
     override var lang = "en"
     override val hasMainPage = true
@@ -21,7 +20,7 @@ class EmbedMeProvider : MainAPI() {
 
     private val headers = mapOf(
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
-        "Referer" to "$mainUrl/",
+        "Referer" to "https://embedme.top/", // Keep this for rr.vipstreams.in compatibility
         "Accept-Encoding" to "gzip, deflate, br"
     )
 
@@ -73,6 +72,7 @@ class EmbedMeProvider : MainAPI() {
 
     private suspend fun fetchLiveMatches(): List<HomePageList> {
         try {
+            // Use embedme.top API for now; adjust if streamed.su has a different endpoint
             val response = app.get("$mainUrl/api/matches/live", headers = headers, timeout = 15)
             val text = if (response.headers["Content-Encoding"] == "gzip") {
                 GZIPInputStream(response.body.byteStream()).bufferedReader().use { it.readText() }
@@ -91,8 +91,7 @@ class EmbedMeProvider : MainAPI() {
                     url = match.sources.firstOrNull()?.let { "${match.id}|${it.source}|${it.id}" } ?: match.id,
                     apiName = this.name,
                     posterUrl = posterUrl,
-                    bannerUrl = homeBadge, // Using bannerUrl for home badge (Cloudstream3 UI quirk)
-                    // Store away badge in data if needed via custom parsing later
+                    bannerUrl = homeBadge // Home badge as banner; away badge could be stored elsewhere
                 )
             }
             return listOf(HomePageList("Live Sports", eventList, isHorizontalImages = false))
@@ -120,7 +119,7 @@ class EmbedMeProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse {
         val (matchId, sourceType, sourceId) = url.split("|").let {
             when (it.size) {
-                1 -> listOf(it[0], "alpha", it[0]) // Default to alpha if no source specified
+                1 -> listOf(it[0], "alpha", it[0]) // Default to alpha
                 else -> it
             }
         }
@@ -139,12 +138,10 @@ class EmbedMeProvider : MainAPI() {
             embedResponse.text
         }
 
-        // Extract M3U8 from embed page (e.g., rr.vipstreams.in)
         val m3u8Match = Regex("https?://rr\\.vipstreams\\.in[^\\s'\"]+\\.m3u8[^\\s'\"]*").find(embedHtml)
-            ?: throw Exception("No M3U8 URL found in embed page")
+            ?: throw Exception("No M3U8 URL found")
         val m3u8Url = m3u8Match.value
 
-        // Fetch M3U8 content with Brotli/plaintext handling
         val m3u8Response = HttpSession().get(m3u8Url, headers = headers, timeout = 10)
         val contentEncoding = m3u8Response.headers["Content-Encoding"]?.lowercase()
         val rawContent = m3u8Response.body.bytes()
@@ -166,7 +163,7 @@ class EmbedMeProvider : MainAPI() {
             url = m3u8Url,
             apiName = this.name,
             dataUrl = m3u8Content,
-            posterUrl = null // Poster already set in search response
+            posterUrl = null
         )
     }
 
@@ -179,7 +176,7 @@ class EmbedMeProvider : MainAPI() {
         callback(
             ExtractorLink(
                 source = this.name,
-                name = "EmbedMe Stream",
+                name = "Streamed Sports",
                 url = data,
                 referer = "https://embedme.top/",
                 quality = -1,
