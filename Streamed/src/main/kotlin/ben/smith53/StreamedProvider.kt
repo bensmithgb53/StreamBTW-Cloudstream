@@ -1,11 +1,9 @@
 package ben.smith53
 
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.network.CloudflareHttpClient
-import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import com.fasterxml.jackson.module.kotlin.readValue
 import java.util.zip.GZIPInputStream
 
 class StreamedProvider : MainAPI() {
@@ -27,10 +25,9 @@ class StreamedProvider : MainAPI() {
     companion object {
         private const val posterBase = "https://embedme.top/api/images/poster"
         private const val badgeBase = "https://embedme.top/api/images/badge"
-        private val json = Json { ignoreUnknownKeys = true }
+        private val mapper = jacksonObjectMapper()
     }
 
-    @Serializable
     data class APIMatch(
         val id: String,
         val title: String,
@@ -41,26 +38,22 @@ class StreamedProvider : MainAPI() {
         val teams: Teams? = null,
         val sources: List<Source>
     ) {
-        @Serializable
         data class Teams(
             val home: Team? = null,
             val away: Team? = null
         )
 
-        @Serializable
         data class Team(
             val name: String,
             val badge: String
         )
 
-        @Serializable
         data class Source(
             val source: String,
             val id: String
         )
     }
 
-    @Serializable
     data class Stream(
         val id: String,
         val streamNo: Int,
@@ -78,26 +71,31 @@ class StreamedProvider : MainAPI() {
             } else {
                 response.text
             }
-            val matches = json.decodeFromString<List<APIMatch>>(text)
+            val matches: List<APIMatch> = mapper.readValue(text)
 
             val eventList = matches.map { match ->
-                val posterUrl = match.poster?.let { "$mainUrl/api/images/proxy/$it.webp" }
-                    ?: match.teams?.let { teams -> "${posterBase}/${teams.home?.badge}/${teams.away?.badge}.webp" }
+                val posterUrl = match.poster?.let { poster ->
+                    "$mainUrl/api/images/proxy/$poster.webp"
+                } ?: match.teams?.let { teams ->
+                    "${posterBase}/${teams.home?.badge}/${teams.away?.badge}.webp"
+                }
                 val homeBadge = match.teams?.home?.badge?.let { "$badgeBase/$it.webp" }
-                LiveSearchResponse(
+                newLiveSearchResponse(
                     name = match.title,
-                    url = match.sources.firstOrNull()?.let { source -> "${match.id}|${source.source}|${source.id}" } ?: match.id,
-                    apiName = this.name,
-                    posterUrl = posterUrl,
-                    bannerUrl = homeBadge // Home badge as banner
-                )
+                    url = match.sources.firstOrNull()?.let { source ->
+                        "${match.id}|${source.source}|${source.id}"
+                    } ?: match.id,
+                    apiName = this.name
+                ) {
+                    this.posterUrl = posterUrl ?: homeBadge // Fallback to home badge if no poster
+                }
             }
             return listOf(HomePageList("Live Sports", eventList, isHorizontalImages = false))
         } catch (e: Exception) {
             return listOf(
                 HomePageList(
                     "Error",
-                    listOf(LiveSearchResponse("Failed to load: ${e.message}", mainUrl, this.name, null)),
+                    listOf(newLiveSearchResponse("Failed to load: ${e.message}", mainUrl, this.name)),
                     isHorizontalImages = false
                 )
             )
@@ -128,7 +126,7 @@ class StreamedProvider : MainAPI() {
         } else {
             response.text
         }
-        val stream = json.decodeFromString<Stream>(text)
+        val stream: Stream = mapper.readValue(text)
         val embedResponse = app.get(stream.embedUrl, headers = headers, timeout = 15)
         val embedHtml = if (embedResponse.headers["Content-Encoding"] == "gzip") {
             GZIPInputStream(embedResponse.body.byteStream()).bufferedReader().use { it.readText() }
@@ -140,30 +138,27 @@ class StreamedProvider : MainAPI() {
             ?: throw Exception("No M3U8 URL found")
         val m3u8Url = m3u8Match.value
 
-        val client = CloudflareHttpClient()
-        val m3u8Response = client.get(m3u8Url, headers = headers)
+        val m3u8Response = app.get(m3u8Url, headers = headers, timeout = 10)
         val contentEncoding = m3u8Response.headers["Content-Encoding"]?.lowercase()
         val rawContent = m3u8Response.body.bytes()
         val m3u8Content = when {
             rawContent.startsWith("#EXTM3U".toByteArray()) -> String(rawContent)
             contentEncoding == "gzip" -> GZIPInputStream(rawContent.inputStream()).bufferedReader().use { it.readText() }
             contentEncoding == "br" -> {
-                try {
-                    String(org.brotli.dec.BrotliInputStream(rawContent.inputStream()).readBytes())
-                } catch (e: Exception) {
-                    if (rawContent.startsWith("#EXTM3U".toByteArray())) String(rawContent) else throw e
-                }
+                // NiceHttp might handle Brotli internally; fallback to plaintext if it fails
+                if (rawContent.startsWith("#EXTM3U".toByteArray())) String(rawContent)
+                else throw Exception("Brotli decoding not supported without explicit library")
             }
             else -> String(rawContent)
         }
 
-        return LiveStreamLoadResponse(
-            name = stream.source + " - " + (if (stream.hd) "HD" else "SD"),
+        return newLiveStreamLoadResponse(
+            name = "${stream.source} - ${if (stream.hd) "HD" else "SD"}",
             url = m3u8Url,
-            apiName = this.name,
-            dataUrl = m3u8Content,
-            posterUrl = null
-        )
+            data = m3u8Content
+        ) {
+            this.apiName = this@StreamedProvider.name
+        }
     }
 
     override suspend fun loadLinks(
