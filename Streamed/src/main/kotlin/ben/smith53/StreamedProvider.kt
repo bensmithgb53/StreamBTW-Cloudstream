@@ -5,6 +5,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
 import java.util.zip.GZIPInputStream
+import okhttp3.RequestBody.Companion.toRequestBody
 
 class StreamedProvider : MainAPI() {
     override var mainUrl = "https://streamed.su"
@@ -174,24 +175,23 @@ class StreamedProvider : MainAPI() {
         }
         val streams: List<Stream> = mapper.readValue(text)
         val stream = streams.firstOrNull() ?: throw ErrorLoadingException("No streams available for URL: $streamUrl")
-        
-        // Fetch embed HTML
-        val embedResponse = app.get(stream.embedUrl, headers = headers, timeout = 15)
-        val embedHtml = if (embedResponse.headers["Content-Encoding"] == "gzip") {
-            GZIPInputStream(embedResponse.body.byteStream()).bufferedReader().use { it.readText() }
+
+        // Fetch the encrypted M3U8 path
+        val fetchHeaders = headers + mapOf("Content-Type" to "application/json")
+        val fetchBody = """{"source":"$sourceType","id":"$matchId","streamNo":"${stream.streamNo}"}""".toRequestBody()
+        val fetchResponse = app.post("https://embedme.top/fetch", headers = fetchHeaders, requestBody = fetchBody, timeout = 15)
+        val encPath = if (fetchResponse.headers["Content-Encoding"] == "gzip") {
+            GZIPInputStream(fetchResponse.body.byteStream()).bufferedReader().use { it.readText() }
         } else {
-            embedResponse.text
+            fetchResponse.text
         }
-        println("Embed HTML: $embedHtml")
+        println("Encrypted M3U8 path: $encPath")
 
-        // Extract variables from script tag
-        val scriptRegex = Regex("""var k = "([^"]+)", i = "([^"]+)", s = "([^"]+)"""")
-        val match = scriptRegex.find(embedHtml) ?: throw ErrorLoadingException("Could not extract stream variables from embed HTML")
-        val (k, i, s) = match.destructured
-
-        // Attempt to construct and fetch M3U8 URL
-        val m3u8Url = "https://embedme.top/hls/$k/$i/$s.m3u8"
+        // Construct M3U8 URL (we can't decrypt, so assume it's a path)
+        val m3u8Url = "https://rr.vipstreams.in$encPath"
         println("Attempting M3U8 URL: $m3u8Url")
+
+        // Fetch M3U8 content
         val m3u8Response = app.get(m3u8Url, headers = headers, timeout = 10)
         val contentEncoding = m3u8Response.headers["Content-Encoding"]?.lowercase()
         val rawContent = m3u8Response.body.bytes()
@@ -200,6 +200,7 @@ class StreamedProvider : MainAPI() {
             contentEncoding == "gzip" -> GZIPInputStream(rawContent.inputStream()).bufferedReader().use { it.readText() }
             else -> String(rawContent)
         }
+        println("M3U8 Content: $m3u8Content")
 
         return newLiveStreamLoadResponse(
             name = "${stream.source} - ${if (stream.hd) "HD" else "SD"}",
@@ -236,4 +237,4 @@ class StreamedProvider : MainAPI() {
     private fun String.capitalize(): String {
         return replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
     }
-                                }
+}
