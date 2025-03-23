@@ -72,8 +72,22 @@ class StreamedProvider : MainAPI() {
                 response.text
             }
             val matches: List<APIMatch> = mapper.readValue(text)
+            if (matches.isEmpty()) {
+                return listOf(
+                    HomePageList(
+                        "No Live Matches",
+                        listOf(newLiveSearchResponse(
+                            name = "No live matches available",
+                            url = "$mainUrl|alpha|default", // Fallback URL
+                            type = TvType.Live
+                        )),
+                        isHorizontalImages = false
+                    )
+                )
+            }
 
-            val eventList = matches.map { match ->
+            val eventList = matches.mapNotNull { match ->
+                val source = match.sources.firstOrNull() ?: return@mapNotNull null // Skip if no sources
                 val posterUrl = match.poster?.let { poster ->
                     "$mainUrl/api/images/proxy/$poster.webp"
                 } ?: match.teams?.let { teams ->
@@ -82,9 +96,7 @@ class StreamedProvider : MainAPI() {
                 val homeBadge = match.teams?.home?.badge?.let { "$badgeBase/$it.webp" }
                 newLiveSearchResponse(
                     name = match.title,
-                    url = match.sources.firstOrNull()?.let { source ->
-                        "${match.id}|${source.source}|${source.id}"
-                    } ?: match.id,
+                    url = "${match.id}|${source.source}|${source.id}",
                     type = TvType.Live
                 ) {
                     this.posterUrl = posterUrl ?: homeBadge
@@ -97,7 +109,7 @@ class StreamedProvider : MainAPI() {
                     "Error",
                     listOf(newLiveSearchResponse(
                         name = "Failed to load matches: ${e.message}",
-                        url = mainUrl,
+                        url = "$mainUrl|alpha|error",
                         type = TvType.Live
                     )),
                     isHorizontalImages = false
