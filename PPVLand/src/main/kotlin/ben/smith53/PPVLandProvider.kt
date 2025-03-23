@@ -70,6 +70,7 @@ class StreamedProvider : MainAPI() {
         } else {
             response.text
         }
+        println("Matches API Response: $text")
         val matches: List<APIMatch> = mapper.readValue(text)
         val currentTime = System.currentTimeMillis() / 1000
         val liveMatches = matches.filter { it.date / 1000 >= (currentTime - 3 * 60 * 60) }
@@ -119,19 +120,15 @@ class StreamedProvider : MainAPI() {
         val (matchId, sourceType, sourceId) = url.split("|").let { 
             if (it.size == 1) listOf(it[0], "alpha", it[0]) else it 
         }
+        println("Loading stream for: matchId=$matchId, sourceType=$sourceType, sourceId=$sourceId")
 
-        // Construct embed URL as seen in the HTML
         val embedUrl = "https://embedme.top/embed/$sourceType/$matchId/1"
-        
-        // Headers for fetching the encrypted path
         val fetchHeaders = mapOf(
             "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
             "Referer" to embedUrl,
             "Accept" to "*/*",
             "Origin" to "https://embedme.top"
         )
-
-        // Mimic the fetch request from the HTML
         val fetchBody = """{"source":"$sourceType","id":"$matchId","streamNo":"1"}""".toRequestBody()
         val fetchResponse = app.post(
             "https://embedme.top/fetch",
@@ -139,6 +136,8 @@ class StreamedProvider : MainAPI() {
             requestBody = fetchBody,
             timeout = 15
         )
+        println("Fetch Response Code: ${fetchResponse.code}")
+        println("Fetch Response Body: ${fetchResponse.text}")
 
         if (!fetchResponse.isSuccessful) {
             println("Fetch failed with status: ${fetchResponse.code}")
@@ -148,7 +147,7 @@ class StreamedProvider : MainAPI() {
                 "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
             ) {
                 this.apiName = this@StreamedProvider.name
-                this.plot = "Failed to fetch stream path (HTTP ${fetchResponse.code}). Using test stream."
+                this.plot = "Failed to fetch stream path (HTTP ${fetchResponse.code})."
             }
         }
 
@@ -156,7 +155,6 @@ class StreamedProvider : MainAPI() {
         val m3u8Url = "https://rr.vipstreams.in/$encPath"
         println("Fetched M3U8 URL: $m3u8Url")
 
-        // Fetch stream metadata for title and quality
         val streamApiUrl = "$mainUrl/api/stream/$sourceType/$sourceId"
         val streamResponse = app.get(streamApiUrl, headers = headers, timeout = 15)
         val streamText = if (streamResponse.headers["Content-Encoding"] == "gzip") {
@@ -164,6 +162,7 @@ class StreamedProvider : MainAPI() {
         } else {
             streamResponse.text
         }
+        println("Stream API Response: $streamText")
         val streams: List<Stream> = try {
             mapper.readValue(streamText)
         } catch (e: Exception) {
@@ -172,9 +171,9 @@ class StreamedProvider : MainAPI() {
         }
 
         val stream = streams.firstOrNull() ?: return newLiveStreamLoadResponse(
-            "No Streams Available",
+            "Stream Available",
             url,
-            m3u8Url // Still use the fetched M3U8 even if metadata fails
+            m3u8Url
         ) {
             this.apiName = this@StreamedProvider.name
             this.plot = "Stream metadata unavailable, but M3U8 was fetched."
@@ -201,23 +200,28 @@ class StreamedProvider : MainAPI() {
             "Origin" to "https://embedme.top",
             "Accept" to "*/*"
         )
-
         callback(
             ExtractorLink(
                 source = this.name,
                 name = "Streamed Sports",
                 url = data,
                 referer = "https://embedme.top/",
-                quality = -1, // HLS.js handles quality switching client-side
+                quality = -1,
                 isM3u8 = true,
                 headers = streamHeaders
             )
         )
-        println("Provided M3U8 link: $data")
         return true
     }
 
     private fun String.capitalize(): String {
         return replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
+    }
+
+    // Test function
+    suspend fun testLoad(matchId: String) {
+        val testUrl = "$matchId|alpha|$matchId"
+        val response = load(testUrl)
+        println("Test Load Result: ${response.name}, URL: ${(response as? LiveStreamLoadResponse)?.dataUrl}")
     }
 }
