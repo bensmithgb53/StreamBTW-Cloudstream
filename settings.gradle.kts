@@ -6,5 +6,6 @@ rootProject.name = "CloudstreamPlugins"
 // Plugins are included like this
 include(
     "StreamBTW",
-    "PPVLand"
+    "PPVLand",
+    "Streamed"
 )
