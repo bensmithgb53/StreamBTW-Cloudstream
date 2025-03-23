@@ -176,26 +176,30 @@ class StreamedProvider : MainAPI() {
         val streams: List<Stream> = mapper.readValue(text)
         val stream = streams.firstOrNull() ?: throw ErrorLoadingException("No streams available for URL: $streamUrl")
 
-        // Scrape the embed page for the M3U8 URL
+        // Fetch encrypted M3U8 path
         val embedUrl = "https://embedme.top/embed/$sourceType/$matchId/${stream.streamNo}"
-        println("Scraping embed page: $embedUrl")
-        val embedHeaders = mapOf(
+        val fetchHeaders = mapOf(
             "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
-            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            "Referer" to embedUrl,
+            "Accept" to "*/*",
             "Accept-Encoding" to "gzip, deflate, br, zstd",
-            "Referer" to "https://streamed.su/"
+            "Content-Type" to "application/json",
+            "Origin" to "https://embedme.top"
         )
-        val embedResponse = app.get(embedUrl, headers = embedHeaders, timeout = 15)
-        val embedHtml = if (embedResponse.headers["Content-Encoding"] == "gzip") {
-            GZIPInputStream(embedResponse.body.byteStream()).bufferedReader().use { it.readText() }
+        val fetchBody = """{"source":"$sourceType","id":"$matchId","streamNo":"${stream.streamNo}"}""".toRequestBody()
+        val fetchResponse = app.post("https://embedme.top/fetch", headers = fetchHeaders, requestBody = fetchBody, timeout = 15)
+        val encPath = if (fetchResponse.headers["Content-Encoding"] == "gzip") {
+            GZIPInputStream(fetchResponse.body.byteStream()).bufferedReader().use { it.readText() }
         } else {
-            embedResponse.text
+            fetchResponse.text
         }
-        val m3u8Regex = Regex("https://rr\\.vipstreams\\.in/[^\"']+strm\\.m3u8\\?md5=[^&]+&expiry=\\d+")
-        val m3u8Url = m3u8Regex.find(embedHtml)?.value ?: throw ErrorLoadingException("M3U8 URL not found in embed page")
-        println("Extracted M3U8 URL: $m3u8Url")
+        println("Encrypted M3U8 path: $encPath")
 
-        // Fetch M3U8 content
+        // Construct M3U8 URL
+        val m3u8Url = "https://rr.vipstreams.in/$encPath"
+        println("Attempting M3U8 URL: $m3u8Url")
+
+        // Fetch M3U8 with precise headers
         val m3u8Headers = mapOf(
             "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
             "Referer" to "https://embedme.top/",
@@ -209,7 +213,7 @@ class StreamedProvider : MainAPI() {
         val m3u8Content = when {
             rawContent.startsWith("#EXTM3U".toByteArray()) -> String(rawContent)
             contentEncoding == "gzip" -> GZIPInputStream(rawContent.inputStream()).bufferedReader().use { it.readText() }
-            contentEncoding == "zstd" -> String(rawContent) // Fallback; adjust if zstd decoding needed
+            contentEncoding == "zstd" -> String(rawContent) // Fallback
             else -> String(rawContent)
         }
         println("M3U8 Content: $m3u8Content")
