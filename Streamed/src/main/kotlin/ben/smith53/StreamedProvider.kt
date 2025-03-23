@@ -69,6 +69,7 @@ class StreamedProvider : MainAPI() {
         } else {
             response.text
         }
+        println("Matches API response: $text")
         val matches: List<APIMatch> = mapper.readValue(text)
         val currentTime = System.currentTimeMillis() / 1000
         val liveMatches = matches.filter { it.date / 1000 >= (currentTime - 3 * 60 * 60) }
@@ -87,6 +88,7 @@ class StreamedProvider : MainAPI() {
         return groupedMatches.map { (category, categoryMatches) ->
             val eventList = categoryMatches.mapNotNull { match ->
                 val source = match.sources.firstOrNull() ?: return@mapNotNull null
+                println("Match: ${match.title}, Source: ${source.source}, ID: ${source.id}")
                 val posterUrl = match.poster?.let { "$mainUrl/api/images/proxy/$it.webp" }
                     ?: match.teams?.let { teams ->
                         teams.home?.badge?.let { homeBadge ->
@@ -125,15 +127,17 @@ class StreamedProvider : MainAPI() {
         } else {
             response.text
         }
+        println("Stream API response for $streamUrl: $text")
 
         if (!response.isSuccessful || text.contains("Not Found")) {
+            println("Stream not found for $streamUrl")
             return newLiveStreamLoadResponse(
                 "Stream Unavailable",
                 url,
-                "https://example.com/placeholder.m3u8" // Placeholder URL
+                "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8" // Public test stream as fallback
             ) {
                 this.apiName = this@StreamedProvider.name
-                this.plot = "The requested stream could not be found. It may have ended or the source ID is invalid."
+                this.plot = "The requested stream could not be found. Using a test stream instead."
             }
         }
 
@@ -141,10 +145,10 @@ class StreamedProvider : MainAPI() {
         val stream = streams.firstOrNull() ?: return newLiveStreamLoadResponse(
             "No Streams Available",
             url,
-            "https://example.com/placeholder.m3u8"
+            "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
         ) {
             this.apiName = this@StreamedProvider.name
-            this.plot = "No streams were returned for this match."
+            this.plot = "No streams were returned for this match. Using a test stream instead."
         }
 
         val embedUrl = "https://embedme.top/embed/$sourceType/$matchId/${stream.streamNo}"
@@ -157,6 +161,7 @@ class StreamedProvider : MainAPI() {
         val fetchBody = """{"source":"$sourceType","id":"$matchId","streamNo":"${stream.streamNo}"}""".toRequestBody()
         val fetchResponse = app.post("https://embedme.top/fetch", headers = fetchHeaders, requestBody = fetchBody, timeout = 15)
         val encPath = fetchResponse.text
+        println("Encrypted path from embedme: $encPath")
         val m3u8Url = "https://rr.vipstreams.in/$encPath"
 
         return newLiveStreamLoadResponse(
@@ -174,10 +179,6 @@ class StreamedProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        if (data.contains("placeholder.m3u8")) {
-            return true // Skip link extraction for placeholder
-        }
-
         val streamHeaders = mapOf(
             "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
             "Referer" to "https://embedme.top/",
