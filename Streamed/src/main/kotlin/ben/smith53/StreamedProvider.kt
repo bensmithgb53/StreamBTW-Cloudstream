@@ -85,9 +85,9 @@ class StreamedProvider : MainAPI() {
                     url = match.sources.firstOrNull()?.let { source ->
                         "${match.id}|${source.source}|${source.id}"
                     } ?: match.id,
-                    type = TvType.Live // Correct parameter instead of apiName
+                    type = TvType.Live
                 ) {
-                    this.posterUrl = posterUrl ?: homeBadge // Fallback to home badge
+                    this.posterUrl = posterUrl ?: homeBadge
                 }
             }
             return listOf(HomePageList("Live Sports", eventList, isHorizontalImages = false))
@@ -96,7 +96,7 @@ class StreamedProvider : MainAPI() {
                 HomePageList(
                     "Error",
                     listOf(newLiveSearchResponse(
-                        name = "Failed to load: ${e.message}",
+                        name = "Failed to load matches: ${e.message}",
                         url = mainUrl,
                         type = TvType.Live
                     )),
@@ -117,6 +117,7 @@ class StreamedProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
+        println("Loading URL: $url") // Debug log
         val (matchId, sourceType, sourceId) = url.split("|").let {
             when (it.size) {
                 1 -> listOf(it[0], "alpha", it[0])
@@ -130,6 +131,9 @@ class StreamedProvider : MainAPI() {
         } else {
             response.text
         }
+        if (!response.isSuccessful || text.contains("Not Found")) {
+            throw ErrorLoadingException("Stream not found for URL: $streamUrl")
+        }
         val stream: Stream = mapper.readValue(text)
         val embedResponse = app.get(stream.embedUrl, headers = headers, timeout = 15)
         val embedHtml = if (embedResponse.headers["Content-Encoding"] == "gzip") {
@@ -139,7 +143,7 @@ class StreamedProvider : MainAPI() {
         }
 
         val m3u8Match = Regex("https?://rr\\.vipstreams\\.in[^\\s'\"]+\\.m3u8[^\\s'\"]*").find(embedHtml)
-            ?: throw Exception("No M3U8 URL found")
+            ?: throw ErrorLoadingException("No M3U8 URL found in embed: ${stream.embedUrl}")
         val m3u8Url = m3u8Match.value
 
         val m3u8Response = app.get(m3u8Url, headers = headers, timeout = 10)
@@ -150,7 +154,7 @@ class StreamedProvider : MainAPI() {
             contentEncoding == "gzip" -> GZIPInputStream(rawContent.inputStream()).bufferedReader().use { it.readText() }
             contentEncoding == "br" -> {
                 if (rawContent.startsWith("#EXTM3U".toByteArray())) String(rawContent)
-                else throw Exception("Brotli decoding not supported without explicit library")
+                else throw ErrorLoadingException("Brotli decoding not supported without explicit library")
             }
             else -> String(rawContent)
         }
@@ -158,7 +162,7 @@ class StreamedProvider : MainAPI() {
         return newLiveStreamLoadResponse(
             name = "${stream.source} - ${if (stream.hd) "HD" else "SD"}",
             url = m3u8Url,
-            dataUrl = m3u8Content // Correct parameter name
+            dataUrl = m3u8Content
         ) {
             this.apiName = this@StreamedProvider.name
         }
