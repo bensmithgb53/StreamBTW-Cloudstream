@@ -1,4 +1,4 @@
-package ben.smith53
+package com.lagradost.cloudstream3.providers
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
@@ -43,12 +43,10 @@ class StreamedProvider : MainAPI() {
             val home: Team? = null,
             val away: Team? = null
         )
-
         data class Team(
             val name: String,
             val badge: String? = null
         )
-
         data class Source(
             val source: String,
             val id: String
@@ -72,22 +70,14 @@ class StreamedProvider : MainAPI() {
             response.text
         }
         val matches: List<APIMatch> = mapper.readValue(text)
-
         val currentTime = System.currentTimeMillis() / 1000
-        val liveMatches = matches.filter { 
-            val matchTime = it.date / 1000
-            matchTime >= (currentTime - 3 * 60 * 60) // Matches within last 3 hours
-        }
-        
+        val liveMatches = matches.filter { it.date / 1000 >= (currentTime - 3 * 60 * 60) }
+
         if (liveMatches.isEmpty()) {
             return listOf(
                 HomePageList(
                     "No Live Matches",
-                    listOf(newLiveSearchResponse(
-                        name = "No live matches available",
-                        url = "$mainUrl|alpha|default",
-                        type = TvType.Live
-                    )),
+                    listOf(newLiveSearchResponse("No live matches available", "$mainUrl|alpha|default", TvType.Live)),
                     isHorizontalImages = false
                 )
             )
@@ -106,11 +96,7 @@ class StreamedProvider : MainAPI() {
                         }
                     }
                 val homeBadge = match.teams?.home?.badge?.let { "$badgeBase/$it.webp" }
-                newLiveSearchResponse(
-                    name = match.title,
-                    url = "${match.id}|${source.source}|${source.id}",
-                    type = TvType.Live
-                ) {
+                newLiveSearchResponse(match.title, "${match.id}|${source.source}|${source.id}", TvType.Live) {
                     this.posterUrl = posterUrl ?: homeBadge
                 }
             }
@@ -158,9 +144,9 @@ class StreamedProvider : MainAPI() {
         val m3u8Url = "https://rr.vipstreams.in/$encPath"
 
         return newLiveStreamLoadResponse(
-            name = "${stream.source} - ${if (stream.hd) "HD" else "SD"}",
-            url = m3u8Url,
-            dataUrl = m3u8Url
+            "${stream.source} - ${if (stream.hd) "HD" else "SD"}",
+            m3u8Url,
+            m3u8Url
         ) {
             this.apiName = this@StreamedProvider.name
         }
@@ -172,6 +158,14 @@ class StreamedProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        val streamHeaders = mapOf(
+            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+            "Referer" to "https://embedme.top/",
+            "Origin" to "https://embedme.top",
+            "Accept" to "*/*"
+        )
+        
+        // Primary attempt: Direct M3U8 link for ExoPlayer
         callback(
             ExtractorLink(
                 source = this.name,
@@ -180,13 +174,53 @@ class StreamedProvider : MainAPI() {
                 referer = "https://embedme.top/",
                 quality = -1,
                 isM3u8 = true,
-                headers = mapOf(
-                    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
-                    "Origin" to "https://embedme.top",
-                    "Accept" to "*/*"
-                )
+                headers = streamHeaders
             )
         )
+
+        // Fallback: WebView with HLS.js if ExoPlayer fails
+        val html = """
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+            </head>
+            <body>
+                <video id="player" controls autoplay style="width:100%;height:100%;"></video>
+                <script>
+                    var video = document.getElementById('player');
+                    if (Hls.isSupported()) {
+                        var hls = new Hls({
+                            xhrSetup: function(xhr) {
+                                xhr.setRequestHeader('Referer', 'https://embedme.top/');
+                                xhr.setRequestHeader('Origin', 'https://embedme.top');
+                                xhr.setRequestHeader('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36');
+                            }
+                        });
+                        hls.loadSource('$data');
+                        hls.attachMedia(video);
+                        hls.on(Hls.Events.MANIFEST_PARSED, function() {
+                            video.play();
+                        });
+                    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                        video.src = '$data';
+                        video.play();
+                    }
+                </script>
+            </body>
+            </html>
+        """.trimIndent()
+        callback(
+            ExtractorLink(
+                source = this.name,
+                name = "Streamed Sports (HLS.js Fallback)",
+                url = "data:text/html;base64,${android.util.Base64.encodeToString(html.toByteArray(), android.util.Base64.DEFAULT)}",
+                referer = "https://embedme.top/",
+                quality = -1,
+                isM3u8 = false
+            )
+        )
+
         return true
     }
 
