@@ -7,7 +7,7 @@ import com.fasterxml.jackson.module.kotlin.readValue
 import java.util.zip.GZIPInputStream
 
 class StreamedProvider : MainAPI() {
-    override var mainUrl = "https://streamed.su" // Changed to streamed.su
+    override var mainUrl = "https://streamed.su"
     override var name = "Streamed Sports"
     override val supportedTypes = setOf(TvType.Live)
     override var lang = "en"
@@ -23,8 +23,8 @@ class StreamedProvider : MainAPI() {
     )
 
     companion object {
-        private const val posterBase = "https://streamed.su/api/images/poster" // Adjust if different
-        private const val badgeBase = "https://streamed.su/api/images/badge"  // Adjust if different
+        private const val posterBase = "https://streamed.su/api/images/poster"
+        private const val badgeBase = "https://streamed.su/api/images/badge"
         private val mapper = jacksonObjectMapper()
     }
 
@@ -45,7 +45,7 @@ class StreamedProvider : MainAPI() {
 
         data class Team(
             val name: String,
-            val badge: String
+            val badge: String? = null // Made nullable
         )
 
         data class Source(
@@ -77,8 +77,12 @@ class StreamedProvider : MainAPI() {
             println("API response body: $text")
             val matches: List<APIMatch> = mapper.readValue(text)
             println("Parsed ${matches.size} matches")
-            // Filter for live matches (assuming no 'live' status field; adjust if present)
-            val liveMatches = matches.filter { it.date <= System.currentTimeMillis() / 1000 } // Example filter
+            // Filter for live matches (within 3 hours of current time)
+            val currentTime = System.currentTimeMillis() / 1000
+            val liveMatches = matches.filter { 
+                val matchTime = it.date / 1000 // Convert milliseconds to seconds
+                matchTime <= currentTime && matchTime > (currentTime - 3 * 60 * 60) // Within last 3 hours
+            }
             if (liveMatches.isEmpty()) {
                 println("No live matches found in API response")
                 return listOf(
@@ -100,7 +104,11 @@ class StreamedProvider : MainAPI() {
                 val posterUrl = match.poster?.let { poster ->
                     "$mainUrl/api/images/proxy/$poster.webp"
                 } ?: match.teams?.let { teams ->
-                    "${posterBase}/${teams.home?.badge}/${teams.away?.badge}.webp"
+                    teams.home?.badge?.let { homeBadge ->
+                        teams.away?.badge?.let { awayBadge ->
+                            "${posterBase}/$homeBadge/$awayBadge.webp"
+                        }
+                    }
                 }
                 val homeBadge = match.teams?.home?.badge?.let { "$badgeBase/$it.webp" }
                 newLiveSearchResponse(
@@ -149,16 +157,19 @@ class StreamedProvider : MainAPI() {
             }
         }
         val streamUrl = "$mainUrl/api/stream/$sourceType/$sourceId"
+        println("Fetching stream from: $streamUrl")
         val response = app.get(streamUrl, headers = headers, timeout = 15)
         val text = if (response.headers["Content-Encoding"] == "gzip") {
             GZIPInputStream(response.body.byteStream()).bufferedReader().use { it.readText() }
         } else {
             response.text
         }
+        println("Stream API response: $text")
         if (!response.isSuccessful || text.contains("Not Found")) {
             throw ErrorLoadingException("Stream not found for URL: $streamUrl")
         }
-        val stream: Stream = mapper.readValue(text)
+        val streams: List<Stream> = mapper.readValue(text)
+        val stream = streams.firstOrNull() ?: throw ErrorLoadingException("No streams available for URL: $streamUrl")
         val embedResponse = app.get(stream.embedUrl, headers = headers, timeout = 15)
         val embedHtml = if (embedResponse.headers["Content-Encoding"] == "gzip") {
             GZIPInputStream(embedResponse.body.byteStream()).bufferedReader().use { it.readText() }
