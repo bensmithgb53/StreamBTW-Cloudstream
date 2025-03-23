@@ -1,16 +1,16 @@
 package ben.smith53
 
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.AppUtils.parseJson
+import com.lagradost.cloudstream3.network.CloudflareHttpClient
+import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.HttpSession
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.util.zip.GZIPInputStream
 
 class StreamedProvider : MainAPI() {
-    override var mainUrl = "https://embedme.top" // Switch to "https://streamed.su" if targeting that site
-    override var name = "Streamed Sports" // Matches your plugin theme
+    override var mainUrl = "https://embedme.top"
+    override var name = "Streamed Sports"
     override val supportedTypes = setOf(TvType.Live)
     override var lang = "en"
     override val hasMainPage = true
@@ -20,7 +20,7 @@ class StreamedProvider : MainAPI() {
 
     private val headers = mapOf(
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
-        "Referer" to "https://embedme.top/", // Keep this for rr.vipstreams.in compatibility
+        "Referer" to "https://embedme.top/",
         "Accept-Encoding" to "gzip, deflate, br"
     )
 
@@ -72,7 +72,6 @@ class StreamedProvider : MainAPI() {
 
     private suspend fun fetchLiveMatches(): List<HomePageList> {
         try {
-            // Use embedme.top API for now; adjust if streamed.su has a different endpoint
             val response = app.get("$mainUrl/api/matches/live", headers = headers, timeout = 15)
             val text = if (response.headers["Content-Encoding"] == "gzip") {
                 GZIPInputStream(response.body.byteStream()).bufferedReader().use { it.readText() }
@@ -83,15 +82,14 @@ class StreamedProvider : MainAPI() {
 
             val eventList = matches.map { match ->
                 val posterUrl = match.poster?.let { "$mainUrl/api/images/proxy/$it.webp" }
-                    ?: match.teams?.let { "${posterBase}/${it.home?.badge}/${it.away?.badge}.webp" }
+                    ?: match.teams?.let { teams -> "${posterBase}/${teams.home?.badge}/${teams.away?.badge}.webp" }
                 val homeBadge = match.teams?.home?.badge?.let { "$badgeBase/$it.webp" }
-                val awayBadge = match.teams?.away?.badge?.let { "$badgeBase/$it.webp" }
                 LiveSearchResponse(
                     name = match.title,
-                    url = match.sources.firstOrNull()?.let { "${match.id}|${it.source}|${it.id}" } ?: match.id,
+                    url = match.sources.firstOrNull()?.let { source -> "${match.id}|${source.source}|${source.id}" } ?: match.id,
                     apiName = this.name,
                     posterUrl = posterUrl,
-                    bannerUrl = homeBadge // Home badge as banner; away badge could be stored elsewhere
+                    bannerUrl = homeBadge // Home badge as banner
                 )
             }
             return listOf(HomePageList("Live Sports", eventList, isHorizontalImages = false))
@@ -119,7 +117,7 @@ class StreamedProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse {
         val (matchId, sourceType, sourceId) = url.split("|").let {
             when (it.size) {
-                1 -> listOf(it[0], "alpha", it[0]) // Default to alpha
+                1 -> listOf(it[0], "alpha", it[0])
                 else -> it
             }
         }
@@ -142,7 +140,8 @@ class StreamedProvider : MainAPI() {
             ?: throw Exception("No M3U8 URL found")
         val m3u8Url = m3u8Match.value
 
-        val m3u8Response = HttpSession().get(m3u8Url, headers = headers, timeout = 10)
+        val client = CloudflareHttpClient()
+        val m3u8Response = client.get(m3u8Url, headers = headers)
         val contentEncoding = m3u8Response.headers["Content-Encoding"]?.lowercase()
         val rawContent = m3u8Response.body.bytes()
         val m3u8Content = when {
