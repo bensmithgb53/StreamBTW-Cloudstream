@@ -187,8 +187,8 @@ class StreamedProvider : MainAPI() {
         }
         println("Encrypted M3U8 path: $encPath")
 
-        // Construct M3U8 URL (we can't decrypt, so assume it's a path)
-        val m3u8Url = "https://rr.vipstreams.in$encPath"
+        // Construct M3U8 URL with a forward slash
+        val m3u8Url = "https://rr.vipstreams.in/$encPath"
         println("Attempting M3U8 URL: $m3u8Url")
 
         // Fetch M3U8 content
