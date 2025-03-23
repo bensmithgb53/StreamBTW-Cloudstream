@@ -19,7 +19,7 @@ class StreamedProvider : MainAPI() {
     private val headers = mapOf(
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
         "Referer" to "https://streamed.su/",
-        "Accept-Encoding" to "gzip, deflate, br"
+        "Accept-Encoding" to "gzip, deflate" // Removed "br" to avoid Brotli
     )
 
     companion object {
@@ -45,7 +45,7 @@ class StreamedProvider : MainAPI() {
 
         data class Team(
             val name: String,
-            val badge: String? = null // Made nullable
+            val badge: String? = null
         )
 
         data class Source(
@@ -77,11 +77,12 @@ class StreamedProvider : MainAPI() {
             println("API response body: $text")
             val matches: List<APIMatch> = mapper.readValue(text)
             println("Parsed ${matches.size} matches")
-            // Filter for live matches (within 3 hours of current time)
+
+            // Filter for live matches (within 3 hours of current time or upcoming)
             val currentTime = System.currentTimeMillis() / 1000
             val liveMatches = matches.filter { 
-                val matchTime = it.date / 1000 // Convert milliseconds to seconds
-                matchTime <= currentTime && matchTime > (currentTime - 3 * 60 * 60) // Within last 3 hours
+                val matchTime = it.date / 1000
+                matchTime >= (currentTime - 3 * 60 * 60) // Include past 3 hours and future
             }
             if (liveMatches.isEmpty()) {
                 println("No live matches found in API response")
@@ -98,29 +99,34 @@ class StreamedProvider : MainAPI() {
                 )
             }
 
-            val eventList = liveMatches.mapNotNull { match ->
-                val source = match.sources.firstOrNull() ?: return@mapNotNull null
-                println("Processing match: ${match.title} (ID: ${match.id}, Source: ${source.source}, Source ID: ${source.id})")
-                val posterUrl = match.poster?.let { poster ->
-                    "$mainUrl/api/images/proxy/$poster.webp"
-                } ?: match.teams?.let { teams ->
-                    teams.home?.badge?.let { homeBadge ->
-                        teams.away?.badge?.let { awayBadge ->
-                            "${posterBase}/$homeBadge/$awayBadge.webp"
+            // Group matches by category
+            val groupedMatches = liveMatches.groupBy { it.category.capitalize() }
+            val homePageLists = groupedMatches.map { (category, categoryMatches) ->
+                val eventList = categoryMatches.mapNotNull { match ->
+                    val source = match.sources.firstOrNull() ?: return@mapNotNull null
+                    println("Processing match: ${match.title} (ID: ${match.id}, Source: ${source.source}, Source ID: ${source.id})")
+                    val posterUrl = match.poster?.let { poster ->
+                        "$mainUrl/api/images/proxy/$poster.webp"
+                    } ?: match.teams?.let { teams ->
+                        teams.home?.badge?.let { homeBadge ->
+                            teams.away?.badge?.let { awayBadge ->
+                                "${posterBase}/$homeBadge/$awayBadge.webp"
+                            }
                         }
                     }
+                    val homeBadge = match.teams?.home?.badge?.let { "$badgeBase/$it.webp" }
+                    newLiveSearchResponse(
+                        name = match.title,
+                        url = "${match.id}|${source.source}|${source.id}",
+                        type = TvType.Live
+                    ) {
+                        this.posterUrl = posterUrl ?: homeBadge
+                    }
                 }
-                val homeBadge = match.teams?.home?.badge?.let { "$badgeBase/$it.webp" }
-                newLiveSearchResponse(
-                    name = match.title,
-                    url = "${match.id}|${source.source}|${source.id}",
-                    type = TvType.Live
-                ) {
-                    this.posterUrl = posterUrl ?: homeBadge
-                }
+                println("Category $category: Returning ${eventList.size} events")
+                HomePageList(category, eventList, isHorizontalImages = false)
             }
-            println("Returning ${eventList.size} events")
-            return listOf(HomePageList("Live Sports", eventList, isHorizontalImages = false))
+            return homePageLists
         } catch (e: Exception) {
             println("Failed to fetch matches: ${e.message}")
             e.printStackTrace()
@@ -176,8 +182,10 @@ class StreamedProvider : MainAPI() {
         } else {
             embedResponse.text
         }
+        println("Embed HTML: $embedHtml")
 
-        val m3u8Match = Regex("https?://rr\\.vipstreams\\.in[^\\s'\"]+\\.m3u8[^\\s'\"]*").find(embedHtml)
+        // Generic M3U8 regex (to be refined after PowerShell confirmation)
+        val m3u8Match = Regex("https?://[^\\s'\"]+\\.m3u8[^\\s'\"]*").find(embedHtml)
             ?: throw ErrorLoadingException("No M3U8 URL found in embed: ${stream.embedUrl}")
         val m3u8Url = m3u8Match.value
 
@@ -187,11 +195,7 @@ class StreamedProvider : MainAPI() {
         val m3u8Content = when {
             rawContent.startsWith("#EXTM3U".toByteArray()) -> String(rawContent)
             contentEncoding == "gzip" -> GZIPInputStream(rawContent.inputStream()).bufferedReader().use { it.readText() }
-            contentEncoding == "br" -> {
-                if (rawContent.startsWith("#EXTM3U".toByteArray())) String(rawContent)
-                else throw ErrorLoadingException("Brotli decoding not supported without explicit library")
-            }
-            else -> String(rawContent)
+            else -> String(rawContent) // Fallback for uncompressed or unsupported encoding
         }
 
         return newLiveStreamLoadResponse(
@@ -224,5 +228,9 @@ class StreamedProvider : MainAPI() {
 
     private fun ByteArray.startsWith(prefix: ByteArray): Boolean {
         return this.take(prefix.size).toByteArray().contentEquals(prefix)
+    }
+
+    private fun String.capitalize(): String {
+        return replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
     }
 }
