@@ -1,4 +1,4 @@
-package com.lagradost.cloudstream3.providers
+package ben.smith53
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
@@ -164,8 +164,7 @@ class StreamedProvider : MainAPI() {
             "Origin" to "https://embedme.top",
             "Accept" to "*/*"
         )
-        
-        // Primary attempt: Direct M3U8 link for ExoPlayer
+
         callback(
             ExtractorLink(
                 source = this.name,
@@ -175,49 +174,6 @@ class StreamedProvider : MainAPI() {
                 quality = -1,
                 isM3u8 = true,
                 headers = streamHeaders
-            )
-        )
-
-        // Fallback: WebView with HLS.js if ExoPlayer fails
-        val html = """
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
-            </head>
-            <body>
-                <video id="player" controls autoplay style="width:100%;height:100%;"></video>
-                <script>
-                    var video = document.getElementById('player');
-                    if (Hls.isSupported()) {
-                        var hls = new Hls({
-                            xhrSetup: function(xhr) {
-                                xhr.setRequestHeader('Referer', 'https://embedme.top/');
-                                xhr.setRequestHeader('Origin', 'https://embedme.top');
-                                xhr.setRequestHeader('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36');
-                            }
-                        });
-                        hls.loadSource('$data');
-                        hls.attachMedia(video);
-                        hls.on(Hls.Events.MANIFEST_PARSED, function() {
-                            video.play();
-                        });
-                    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-                        video.src = '$data';
-                        video.play();
-                    }
-                </script>
-            </body>
-            </html>
-        """.trimIndent()
-        callback(
-            ExtractorLink(
-                source = this.name,
-                name = "Streamed Sports (HLS.js Fallback)",
-                url = "data:text/html;base64,${android.util.Base64.encodeToString(html.toByteArray(), android.util.Base64.DEFAULT)}",
-                referer = "https://embedme.top/",
-                quality = -1,
-                isM3u8 = false
             )
         )
 
