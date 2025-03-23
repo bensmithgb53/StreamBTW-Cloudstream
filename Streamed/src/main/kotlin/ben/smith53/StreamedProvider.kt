@@ -20,7 +20,7 @@ class StreamedProvider : MainAPI() {
     private val headers = mapOf(
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
         "Referer" to "https://streamed.su/",
-        "Accept-Encoding" to "gzip, deflate"
+        "Accept-Encoding" to "gzip, deflate, br, zstd"
     )
 
     companion object {
@@ -176,28 +176,21 @@ class StreamedProvider : MainAPI() {
         val streams: List<Stream> = mapper.readValue(text)
         val stream = streams.firstOrNull() ?: throw ErrorLoadingException("No streams available for URL: $streamUrl")
 
-        // Fetch the encrypted M3U8 path
-        val fetchHeaders = headers + mapOf("Content-Type" to "application/json")
-        val fetchBody = """{"source":"$sourceType","id":"$matchId","streamNo":"${stream.streamNo}"}""".toRequestBody()
-        val fetchResponse = app.post("https://embedme.top/fetch", headers = fetchHeaders, requestBody = fetchBody, timeout = 15)
-        val encPath = if (fetchResponse.headers["Content-Encoding"] == "gzip") {
-            GZIPInputStream(fetchResponse.body.byteStream()).bufferedReader().use { it.readText() }
-        } else {
-            fetchResponse.text
-        }
-        println("Encrypted M3U8 path: $encPath")
-
-        // Construct M3U8 URL with a forward slash
-        val m3u8Url = "https://rr.vipstreams.in/$encPath"
+        // Temporary hardcoded M3U8 URL from browser (European Darts Trophy)
+        val m3u8Url = "https://rr.vipstreams.in/s/PDA4EPL3VZuJiSLTrZ0rqf8FpQ7308nundF37s8HIzBfPwn4ldL-MOsSouaTLR-G/Lfgk8lYIxnDsWVtwaL_Ubt8ppAzEpvELK01jzUFitynNOqlNFQ6_Wy6UpOmNCyHDP2rAurC-YrmuRy2954ws1chNB-pCtEJPuOV7zGc8qwY/7ei4E4pBQlMkHi6Y4KISurIkuthzIpGzLAIvZlOGwp_Q5efqEEoSPXykU2ABs32d/strm.m3u8?md5=l-MIWRNW3Igy1MZ4vzEfzg&expiry=1742769899"
         println("Attempting M3U8 URL: $m3u8Url")
 
-        // Fetch M3U8 content
-        val m3u8Response = app.get(m3u8Url, headers = headers, timeout = 10)
+        // Fetch M3U8 content with proper headers
+        val m3u8Headers = headers + mapOf(
+            "Referer" to "https://embedme.top/embed/$sourceType/$matchId/${stream.streamNo}"
+        )
+        val m3u8Response = app.get(m3u8Url, headers = m3u8Headers, timeout = 10)
         val contentEncoding = m3u8Response.headers["Content-Encoding"]?.lowercase()
         val rawContent = m3u8Response.body.bytes()
         val m3u8Content = when {
             rawContent.startsWith("#EXTM3U".toByteArray()) -> String(rawContent)
             contentEncoding == "gzip" -> GZIPInputStream(rawContent.inputStream()).bufferedReader().use { it.readText() }
+            contentEncoding == "zstd" -> String(rawContent) // Fallback; zstd not natively supported
             else -> String(rawContent)
         }
         println("M3U8 Content: $m3u8Content")
@@ -222,7 +215,7 @@ class StreamedProvider : MainAPI() {
                 source = this.name,
                 name = "Streamed Sports",
                 url = data,
-                referer = "https://streamed.su/",
+                referer = "https://embedme.top/",
                 quality = -1,
                 isM3u8 = true
             )
