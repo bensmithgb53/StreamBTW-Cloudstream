@@ -121,11 +121,13 @@ class StreamedProvider : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse {
         val parts = url.split("|")
-        val matchId = parts[0].split("/").last()  // Extract just "wwe-network"
+        val matchId = parts[0].split("/").last()
         val sourceType = if (parts.size > 1) parts[1] else "alpha"
         val sourceId = if (parts.size > 2) parts[2] else matchId
         
-        // Fetch stream data
+        println("Loading stream with URL: $url")
+        println("Parsed: matchId=$matchId, sourceType=$sourceType, sourceId=$sourceId")
+
         val streamUrl = "$mainUrl/api/stream/$sourceType/$sourceId"
         val response = app.get(streamUrl, headers = headers, timeout = 15)
         val text = if (response.headers["Content-Encoding"] == "gzip") {
@@ -156,8 +158,8 @@ class StreamedProvider : MainAPI() {
             this.apiName = this@StreamedProvider.name
             this.plot = "No streams were returned for this match. Using a test stream instead."
         }
+        println("Selected stream: id=${stream.id}, streamNo=${stream.streamNo}, hd=${stream.hd}, source=${stream.source}")
 
-        // Fetch embed page to extract M3U8 URL
         val embedUrl = "https://embedme.top/embed/$sourceType/$matchId/${stream.streamNo}"
         val embedResponse = app.get(embedUrl, headers = headers, timeout = 15)
         val embedText = if (embedResponse.headers["Content-Encoding"] == "gzip") {
@@ -165,12 +167,10 @@ class StreamedProvider : MainAPI() {
         } else {
             embedResponse.text
         }
-        println("Embed page response: $embedText")
+        println("Embed page response for $embedUrl: $embedText")
 
-        // Extract M3U8 URL with regex
         val m3u8Regex = Regex("https://rr\\.vipstreams\\.in/[\\w/-]+/strm\\.m3u8\\?md5=[\\w-]+&expiry=\\d+")
         val m3u8Url = m3u8Regex.find(embedText)?.value ?: run {
-            // Fallback to /fetch if regex fails
             val fetchHeaders = mapOf(
                 "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
                 "Referer" to embedUrl,
@@ -181,18 +181,18 @@ class StreamedProvider : MainAPI() {
             val fetchBody = """{"source":"$sourceType","id":"$matchId","streamNo":"${stream.streamNo}"}""".toRequestBody()
             val fetchResponse = app.post("https://embedme.top/fetch", headers = fetchHeaders, requestBody = fetchBody, timeout = 15)
             val encPath = fetchResponse.text
-            println("Encrypted path from embedme: $encPath")
+            println("Fetch response from https://embedme.top/fetch: $encPath")
 
             if (fetchResponse.isSuccessful && !encPath.contains("Not Found") && encPath.isNotBlank()) {
-                // Note: This is encrypted and needs decryption; using test stream for now
-                println("Encrypted path detected, decryption not implemented, falling back to test stream")
+                println("Encrypted path detected: $encPath. Decryption not implemented, falling back to test stream")
                 "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
             } else {
-                println("No M3U8 URL found, falling back to test stream")
+                println("Fetch failed or returned invalid data, falling back to test stream")
                 "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
             }
         }
 
+        println("Final M3U8 URL: $m3u8Url")
         return newLiveStreamLoadResponse(
             "${stream.source} - ${if (stream.hd) "HD" else "SD"}",
             m3u8Url,
