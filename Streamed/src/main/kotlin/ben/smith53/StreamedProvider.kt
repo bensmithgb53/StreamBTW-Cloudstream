@@ -20,7 +20,8 @@ class StreamedProvider : MainAPI() {
     private val headers = mapOf(
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
         "Referer" to "https://streamed.su/",
-        "Accept-Encoding" to "gzip, deflate, br, zstd"
+        "Accept-Encoding" to "gzip, deflate, br, zstd",
+        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
     )
 
     companion object {
@@ -119,11 +120,12 @@ class StreamedProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val (matchId, sourceType, sourceId) = url.split("|").let { 
-            if (it.size == 1) listOf(it[0], "alpha", it[0]) else it 
-        }
+        val parts = url.split("|")
+        val matchId = parts[0].split("/").last()  // Extract just "wwe-network"
+        val sourceType = if (parts.size > 1) parts[1] else "alpha"
+        val sourceId = if (parts.size > 2) parts[2] else matchId
         
-        // Fetch stream data from the original API
+        // Fetch stream data
         val streamUrl = "$mainUrl/api/stream/$sourceType/$sourceId"
         val response = app.get(streamUrl, headers = headers, timeout = 15)
         val text = if (response.headers["Content-Encoding"] == "gzip") {
@@ -155,21 +157,20 @@ class StreamedProvider : MainAPI() {
             this.plot = "No streams were returned for this match. Using a test stream instead."
         }
 
-        // Fetch the embed page to extract the M3U8 URL
+        // Fetch embed page to extract M3U8 URL
         val embedUrl = "https://embedme.top/embed/$sourceType/$matchId/${stream.streamNo}"
-        val embedHeaders = mapOf(
-            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
-            "Referer" to "https://streamed.su/",
-            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
-        )
-        val embedResponse = app.get(embedUrl, headers = embedHeaders, timeout = 15)
-        val embedText = embedResponse.text
+        val embedResponse = app.get(embedUrl, headers = headers, timeout = 15)
+        val embedText = if (embedResponse.headers["Content-Encoding"] == "gzip") {
+            GZIPInputStream(embedResponse.body.byteStream()).bufferedReader().use { it.readText() }
+        } else {
+            embedResponse.text
+        }
         println("Embed page response: $embedText")
 
-        // Extract M3U8 URL using regex
+        // Extract M3U8 URL with regex
         val m3u8Regex = Regex("https://rr\\.vipstreams\\.in/[\\w/-]+/strm\\.m3u8\\?md5=[\\w-]+&expiry=\\d+")
         val m3u8Url = m3u8Regex.find(embedText)?.value ?: run {
-            // If not found in HTML, try fetching from /fetch as a fallback
+            // Fallback to /fetch if regex fails
             val fetchHeaders = mapOf(
                 "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
                 "Referer" to embedUrl,
@@ -183,17 +184,12 @@ class StreamedProvider : MainAPI() {
             println("Encrypted path from embedme: $encPath")
 
             if (fetchResponse.isSuccessful && !encPath.contains("Not Found") && encPath.isNotBlank()) {
-                "https://rr.vipstreams.in$encPath"
+                // Note: This is encrypted and needs decryption; using test stream for now
+                println("Encrypted path detected, decryption not implemented, falling back to test stream")
+                "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
             } else {
                 println("No M3U8 URL found, falling back to test stream")
-                return newLiveStreamLoadResponse(
-                    "Stream Unavailable",
-                    url,
-                    "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
-                ) {
-                    this.apiName = this@StreamedProvider.name
-                    this.plot = "Could not extract stream URL. Using a test stream instead."
-                }
+                "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
             }
         }
 
