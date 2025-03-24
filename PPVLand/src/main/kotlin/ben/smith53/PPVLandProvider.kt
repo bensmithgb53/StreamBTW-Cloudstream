@@ -40,8 +40,7 @@ class PPVLandProvider : MainAPI() {
             val streamItems = streams.map { event ->
                 newLiveSearchResponse(
                     name = event.name,
-                    url = "$mainUrl/api/streams/${event.id}",
-                    apiName = this.name
+                    url = "$mainUrl/api/streams/${event.id}"
                 ) {
                     this.posterUrl = event.poster
                     this.type = TvType.Live
@@ -102,8 +101,7 @@ class PPVLandProvider : MainAPI() {
         return newLiveStreamLoadResponse(
             name = event.name,
             url = url,
-            apiName = this.name,
-            dataUrl = url
+            data = url
         ) {
             this.posterUrl = event.poster
         }
@@ -124,7 +122,7 @@ class PPVLandProvider : MainAPI() {
                 name = "PPVLand Stream",
                 url = m3u8Url,
                 referer = mainUrl,
-                quality = -1, // Use -1 for unknown quality if Qualities enum is unavailable
+                quality = -1, // Use -1 if Qualities enum is unavailable
                 isM3u8 = true
             )
         )
