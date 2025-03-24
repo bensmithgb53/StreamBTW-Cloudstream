@@ -1,191 +1,113 @@
 package ben.smith53
 
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
-import com.fasterxml.jackson.module.kotlin.readValue
-import java.util.zip.GZIPInputStream
-import okhttp3.RequestBody.Companion.toRequestBody
+import com.lagradost.cloudstream3.utils.loadExtractor
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
+import java.util.logging.Logger
 
-class StreamedProvider : MainAPI() {
-    override var mainUrl = "https://streamed.su"
-    override var name = "Streamed Sports"
-    override val supportedTypes = setOf(TvType.Live)
-    override var lang = "en"
+class PPVLandProvider : MainAPI() {
+    override var mainUrl = "https://ppv.land"
+    override var name = "PPVLand"
     override val hasMainPage = true
-    override val vpnStatus = VPNStatus.MightBeNeeded
-    override val hasDownloadSupport = false
-    override val instantLinkLoading = true
+    override val hasSearch = false
+    override val supportedTypes = setOf(TvType.Live)
 
-    private val headers = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
-        "Referer" to "https://streamed.su/",
+    private val apiUrl = "$mainUrl/api/streams"
+    private val userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0"
+    private val timeout = 15_000L // 15 seconds in milliseconds
+    private val logger = Logger.getLogger(PPVLandProvider::class.java.name)
+
+    private val baseHeaders = mapOf(
+        "User-Agent" to userAgent,
+        "Accept" to "*/*",
         "Accept-Encoding" to "gzip, deflate, br, zstd",
-        "Accept" to "*/*"
+        "Connection" to "keep-alive",
+        "Accept-Language" to "en-US,en;q=0.5",
+        "X-FS-Client" to "FS WebClient 1.0",
+        "Cookie" to "cf_clearance=Spt9tCB2G5.prpsED77vIRRv_7DXvw__Jw_Esqm53yw-1742505249-1.2.1.1-VXaRZXapXOenQsbIVYelJXCR2YFju.WlikuWSiXF2DNtDyxt5gjuRRhQq6hznJ"
     )
-
-    companion object {
-        private const val posterBase = "https://streamed.su/api/images/poster"
-        private const val badgeBase = "https://streamed.su/api/images/badge"
-        private val mapper = jacksonObjectMapper()
-    }
-
-    data class APIMatch(
-        val id: String,
-        val title: String,
-        val category: String,
-        val date: Long,
-        val poster: String? = null,
-        val popular: Boolean,
-        val teams: Teams? = null,
-        val sources: List<Source>
-    ) {
-        data class Teams(
-            val home: Team? = null,
-            val away: Team? = null
-        )
-        data class Team(
-            val name: String,
-            val badge: String? = null
-        )
-        data class Source(
-            val source: String,
-            val id: String
-        )
-    }
-
-    data class Stream(
-        val id: String,
-        val streamNo: Int,
-        val language: String,
-        val hd: Boolean,
-        val embedUrl: String,
-        val source: String
-    )
-
-    private suspend fun fetchLiveMatches(): List<HomePageList> {
-        val response = app.get("$mainUrl/api/matches/all", headers = headers, timeout = 15)
-        val text = if (response.headers["Content-Encoding"] == "gzip") {
-            GZIPInputStream(response.body.byteStream()).bufferedReader().use { it.readText() }
-        } else {
-            response.text
-        }
-        println("Matches API Response: $text")
-        val matches: List<APIMatch> = mapper.readValue(text)
-        val currentTime = System.currentTimeMillis() / 1000
-        val liveMatches = matches.filter { it.date / 1000 >= (currentTime - 3 * 60 * 60) }
-
-        if (liveMatches.isEmpty()) {
-            return listOf(
-                HomePageList(
-                    "No Live Matches",
-                    listOf(newLiveSearchResponse("No live matches available", "$mainUrl|alpha|default", TvType.Live)),
-                    isHorizontalImages = false
-                )
-            )
-        }
-
-        val groupedMatches = liveMatches.groupBy { it.category.capitalize() }
-        return groupedMatches.map { (category, categoryMatches) ->
-            val eventList = categoryMatches.mapNotNull { match ->
-                val source = match.sources.firstOrNull() ?: return@mapNotNull null
-                val posterUrl = match.poster?.let { "$mainUrl/api/images/proxy/$it.webp" }
-                    ?: match.teams?.let { teams ->
-                        teams.home?.badge?.let { homeBadge ->
-                            teams.away?.badge?.let { awayBadge ->
-                                "$posterBase/$homeBadge/$awayBadge.webp"
-                            }
-                        }
-                    }
-                val homeBadge = match.teams?.home?.badge?.let { "$badgeBase/$it.webp" }
-                newLiveSearchResponse(match.title, "${match.id}|${source.source}|${source.id}", TvType.Live) {
-                    this.posterUrl = posterUrl ?: homeBadge
-                }
-            }
-            HomePageList(category, eventList, isHorizontalImages = false)
-        }
-    }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        return newHomePageResponse(fetchLiveMatches())
-    }
-
-    override suspend fun search(query: String): List<SearchResponse> {
-        return fetchLiveMatches().flatMap { it.list }.filter {
-            query.lowercase().replace(" ", "") in it.name.lowercase().replace(" ", "")
+        logger.info("Fetching all streams from: $apiUrl")
+        val events = fetchEvents()
+        if (events.isEmpty()) {
+            logger.severe("No events found")
+            return HomePageResponse(emptyList())
         }
-    }
 
-    override suspend fun load(url: String): LoadResponse {
-        val (matchId, sourceType, sourceId) = url.split("|").let { 
-            if (it.size == 1) listOf(it[0], "alpha", it[0]) else it 
-        }
-        println("Loading stream for: matchId=$matchId, sourceType=$sourceType, sourceId=$sourceId")
-
-        val embedUrl = "https://embedme.top/embed/$sourceType/$matchId/1"
-        val fetchHeaders = mapOf(
-            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
-            "Referer" to embedUrl,
-            "Accept" to "*/*",
-            "Origin" to "https://embedme.top"
-        )
-        val fetchBody = """{"source":"$sourceType","id":"$matchId","streamNo":"1"}""".toRequestBody()
-        val fetchResponse = app.post(
-            "https://embedme.top/fetch",
-            headers = fetchHeaders,
-            requestBody = fetchBody,
-            timeout = 15
-        )
-        println("Fetch Response Code: ${fetchResponse.code}")
-        println("Fetch Response Body: ${fetchResponse.text}")
-
-        if (!fetchResponse.isSuccessful) {
-            println("Fetch failed with status: ${fetchResponse.code}")
-            return newLiveStreamLoadResponse(
-                "Stream Unavailable",
-                url,
-                "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
-            ) {
-                this.apiName = this@StreamedProvider.name
-                this.plot = "Failed to fetch stream path (HTTP ${fetchResponse.code})."
+        val homePageList = events.groupBy { it.category }.map { (category, streams) ->
+            val streamItems = streams.map { event ->
+                LiveSearchResponse(
+                    name = event.name,
+                    url = "$mainUrl/api/streams/${event.id}",
+                    apiName = this.name,
+                    posterUrl = event.poster,
+                    type = TvType.Live
+                )
             }
+            HomePageList(category, streamItems)
         }
 
-        val encPath = fetchResponse.text.trim()
-        val m3u8Url = "https://rr.vipstreams.in/$encPath"
-        println("Fetched M3U8 URL: $m3u8Url")
+        return HomePageResponse(homePageList)
+    }
 
-        val streamApiUrl = "$mainUrl/api/stream/$sourceType/$sourceId"
-        val streamResponse = app.get(streamApiUrl, headers = headers, timeout = 15)
-        val streamText = if (streamResponse.headers["Content-Encoding"] == "gzip") {
-            GZIPInputStream(streamResponse.body.byteStream()).bufferedReader().use { it.readText() }
-        } else {
-            streamResponse.text
-        }
-        println("Stream API Response: $streamText")
-        val streams: List<Stream> = try {
-            mapper.readValue(streamText)
+    private suspend fun fetchEvents(): List<Event> = withContext(Dispatchers.IO) {
+        try {
+            val response = app.get(apiUrl, headers = baseHeaders, timeout = timeout).text
+            logger.info("API fetched, raw length: ${response.length} bytes")
+            val jsonData = JSONObject(response)
+            val streamsArray = jsonData.getJSONArray("streams")
+            logger.info("Found ${streamsArray.length()} categories")
+
+            val events = mutableListOf<Event>()
+            for (i in 0 until streamsArray.length()) {
+                val categoryData = streamsArray.getJSONObject(i)
+                val categoryName = categoryData.optString("category", "Unknown")
+                val streams = categoryData.getJSONArray("streams")
+                logger.info("Processing category: $categoryName with ${streams.length()} streams")
+
+                for (j in 0 until streams.length()) {
+                    val stream = streams.getJSONObject(j)
+                    val poster = stream.optString("poster")
+                    if ("data:image" !in poster) {
+                        val event = Event(
+                            id = stream.optString("id"),
+                            name = stream.optString("name"),
+                            uriName = stream.optString("uri_name"),
+                            poster = poster,
+                            startsAt = stream.optString("starts_at"),
+                            iframe = stream.optString("iframe", null),
+                            category = categoryName
+                        )
+                        events.add(event)
+                        logger.info("Added stream: ${event.name}, ID: ${event.id}, URI: ${event.uriName}")
+                    }
+                }
+            }
+            events
         } catch (e: Exception) {
-            println("Failed to parse stream metadata: ${e.message}")
+            logger.severe("Failed to fetch events - ${e.message}")
             emptyList()
         }
+    }
 
-        val stream = streams.firstOrNull() ?: return newLiveStreamLoadResponse(
-            "Stream Available",
-            url,
-            m3u8Url
-        ) {
-            this.apiName = this@StreamedProvider.name
-            this.plot = "Stream metadata unavailable, but M3U8 was fetched."
-        }
+    override suspend fun load(url: String): LoadResponse = withContext(Dispatchers.IO) {
+        val streamId = url.split("/").last()
+        logger.info("Loading stream ID: $streamId from $url")
+        val event = fetchEvents().find { it.id == streamId }
+            ?: throw ErrorLoadingException("Stream not found")
 
-        return newLiveStreamLoadResponse(
-            "${stream.source} - ${if (stream.hd) "HD" else "SD"}",
-            m3u8Url,
-            m3u8Url
-        ) {
-            this.apiName = this@StreamedProvider.name
-        }
+        return@withContext LiveStreamLoadResponse(
+            name = event.name,
+            url = url,
+            apiName = this@PPVLandProvider.name,
+            dataUrl = url,
+            posterUrl = event.poster
+        )
     }
 
     override suspend fun loadLinks(
@@ -193,35 +115,51 @@ class StreamedProvider : MainAPI() {
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
-    ): Boolean {
-        val streamHeaders = mapOf(
-            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
-            "Referer" to "https://embedme.top/",
-            "Origin" to "https://embedme.top",
-            "Accept" to "*/*"
-        )
-        callback(
+    ): Boolean = withContext(Dispatchers.IO) {
+        val streamId = data.split("/").last()
+        val m3u8Url = fetchM3u8Url(streamId) ?: return@withContext false
+
+        callback.invoke(
             ExtractorLink(
-                source = this.name,
-                name = "Streamed Sports",
-                url = data,
-                referer = "https://embedme.top/",
-                quality = -1,
-                isM3u8 = true,
-                headers = streamHeaders
+                source = this@PPVLandProvider.name,
+                name = "PPVLand Stream",
+                url = m3u8Url,
+                referer = mainUrl,
+                quality = Qualities.Unknown.value,
+                isM3u8 = true
             )
         )
-        return true
+        true
     }
 
-    private fun String.capitalize(): String {
-        return replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
+    private suspend fun fetchM3u8Url(streamId: String): String? = withContext(Dispatchers.IO) {
+        val apiUrl = "$mainUrl/api/streams/$streamId"
+        try {
+            logger.info("Fetching m3u8 for stream ID $streamId: $apiUrl")
+            val response = app.get(apiUrl, headers = baseHeaders, timeout = timeout).text
+            logger.info("API fetched, raw length: ${response.length} bytes")
+            val jsonData = JSONObject(response)
+            val data = jsonData.getJSONObject("data")
+            val m3u8Url = data.optString("m3u8")
+            if (m3u8Url.isEmpty()) {
+                logger.severe("No m3u8 URL found in JSON for stream ID $streamId")
+                return@withContext null
+            }
+            logger.info("Found m3u8 URL: $m3u8Url")
+            m3u8Url
+        } catch (e: Exception) {
+            logger.severe("Failed to fetch m3u8 for stream ID $streamId - ${e.message}")
+            null
+        }
     }
 
-    // Test function
-    suspend fun testLoad(matchId: String) {
-        val testUrl = "$matchId|alpha|$matchId"
-        val response = load(testUrl)
-        println("Test Load Result: ${response.name}, URL: ${(response as? LiveStreamLoadResponse)?.dataUrl}")
-    }
+    data class Event(
+        val id: String,
+        val name: String,
+        val uriName: String,
+        val poster: String,
+        val startsAt: String,
+        val iframe: String?,
+        val category: String
+    )
 }
