@@ -140,7 +140,6 @@ class StreamedProvider : MainAPI() {
         println("Parsed: matchId=$matchId, sourceType=$sourceType, sourceId=$sourceId")
 
         val streamUrl = "$mainUrl/api/stream/$sourceType/$sourceId"
-        // Use exact headers from curl for this request
         val streamHeaders = mapOf(
             "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
             "Referer" to "https://streamed.su/"
@@ -304,4 +303,4 @@ class StreamedProvider : MainAPI() {
     private fun String.capitalize(): String {
         return replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
     }
-}.
+}
