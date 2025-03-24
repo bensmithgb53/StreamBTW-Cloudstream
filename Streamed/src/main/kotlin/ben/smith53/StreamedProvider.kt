@@ -73,7 +73,8 @@ class StreamedProvider : MainAPI() {
         println("Matches API response: $text")
         val matches: List<APIMatch> = mapper.readValue(text)
         val currentTime = System.currentTimeMillis() / 1000
-        val liveMatches = matches.filter { it.date / 1000 >= (currentTime - 3 * 60 * 60) }
+        println("Current time: $currentTime, Filter threshold: ${currentTime - 24 * 60 * 60}")
+        val liveMatches = matches.filter { it.date / 1000 >= (currentTime - 24 * 60 * 60) } // Extended to 24 hours
 
         if (liveMatches.isEmpty()) {
             return listOf(
@@ -120,12 +121,22 @@ class StreamedProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val parts = url.split("|")
+        // Parse full URL if provided, e.g., https://streamed.su/watch/delhi-capitals-vs-lucknow-super-giants-2221929/alpha/1
+        val correctedUrl = if (url.startsWith("$mainUrl/watch/")) {
+            val parts = url.split("/")
+            val matchId = parts[parts.indexOf("watch") + 1].split("-").last()
+            val sourceType = parts[parts.size - 2]
+            val sourceId = parts.last()
+            "$matchId|$sourceType|$sourceId"
+        } else {
+            url
+        }
+        val parts = correctedUrl.split("|")
         val matchId = parts[0].split("/").last()
         val sourceType = if (parts.size > 1) parts[1] else "alpha"
         val sourceId = if (parts.size > 2) parts[2] else matchId
-        
-        println("Loading stream with URL: $url")
+
+        println("Loading stream with corrected URL: $correctedUrl")
         println("Parsed: matchId=$matchId, sourceType=$sourceType, sourceId=$sourceId")
 
         val streamUrl = "$mainUrl/api/stream/$sourceType/$sourceId"
@@ -138,10 +149,10 @@ class StreamedProvider : MainAPI() {
         println("Stream API response for $streamUrl: $text")
 
         if (!response.isSuccessful || text.contains("Not Found")) {
-            println("Stream not found for $streamUrl")
+            println("Stream not found for $streamUrl, attempting fallback with matchId")
             return newLiveStreamLoadResponse(
-                "Stream Unavailable",
-                url,
+                "Stream Unavailable - $matchId",
+                correctedUrl,
                 "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
             ) {
                 this.apiName = this@StreamedProvider.name
@@ -149,14 +160,23 @@ class StreamedProvider : MainAPI() {
             }
         }
 
-        val streams: List<Stream> = mapper.readValue(text)
-        val stream = streams.firstOrNull() ?: return newLiveStreamLoadResponse(
-            "No Streams Available",
-            url,
-            "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
-        ) {
-            this.apiName = this@StreamedProvider.name
-            this.plot = "No streams were returned for this match. Using a test stream instead."
+        val streams: List<Stream> = try {
+            mapper.readValue(text)
+        } catch (e: Exception) {
+            println("Failed to parse streams: ${e.message}")
+            emptyList()
+        }
+        val stream = streams.firstOrNull()
+        if (stream == null) {
+            println("No streams available for $streamUrl")
+            return newLiveStreamLoadResponse(
+                "No Streams Available - $matchId",
+                correctedUrl,
+                "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
+            ) {
+                this.apiName = this@StreamedProvider.name
+                this.plot = "No streams were returned for this match. Using a test stream instead."
+            }
         }
         println("Selected stream: id=${stream.id}, streamNo=${stream.streamNo}, hd=${stream.hd}, source=${stream.source}")
 
@@ -180,12 +200,15 @@ class StreamedProvider : MainAPI() {
             )
             val fetchBody = """{"source":"$sourceType","id":"$matchId","streamNo":"${stream.streamNo}"}""".toRequestBody()
             val fetchResponse = app.post("https://embedme.top/fetch", headers = fetchHeaders, requestBody = fetchBody, timeout = 15)
-            val encPath = fetchResponse.text
-            println("Fetch response from https://embedme.top/fetch: $encPath")
+            val fetchText = fetchResponse.text
+            println("Fetch response from https://embedme.top/fetch: $fetchText")
 
-            if (fetchResponse.isSuccessful && !encPath.contains("Not Found") && encPath.isNotBlank()) {
-                println("Encrypted path detected: $encPath. Decryption not implemented, falling back to test stream")
-                "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
+            if (fetchResponse.isSuccessful && fetchText.isNotBlank() && !fetchText.contains("Not Found")) {
+                // Attempt to use fetch response if it looks like an M3U8 URL
+                if (fetchText.contains(".m3u8")) fetchText else {
+                    println("Fetch returned non-M3U8 data, falling back to test stream")
+                    "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
+                }
             } else {
                 println("Fetch failed or returned invalid data, falling back to test stream")
                 "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
