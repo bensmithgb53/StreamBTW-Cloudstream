@@ -92,8 +92,9 @@ class StreamedProvider : MainAPI() {
                 val source = match.sources.firstOrNull() ?: return@mapNotNull null
                 println("Match: ${match.title}, Source: ${source.source}, ID: ${source.id}")
                 val posterUrl = match.poster?.let { 
-                    if (it.startsWith("/")) "$mainUrl/api/images/proxy$it.webp" 
-                    else "$mainUrl/api/images/proxy/$it.webp" 
+                    val cleanPoster = it.removeSuffix(".webp")
+                    if (cleanPoster.startsWith("/")) "$mainUrl/api/images/proxy$cleanPoster.webp" 
+                    else "$mainUrl/api/images/proxy/$cleanPoster.webp" 
                 } ?: match.teams?.let { teams ->
                     teams.home?.badge?.let { homeBadge ->
                         teams.away?.badge?.let { awayBadge ->
@@ -227,7 +228,7 @@ class StreamedProvider : MainAPI() {
                 }
             }
         } else {
-            println("Fetch failed or returned invalid data, scraping embed page")
+            println("Fetch failed or returned invalid data: status=${fetchResponse.code}, scraping embed page")
             val embedUrl = "https://embedme.top/embed/$sourceType/$matchId/${stream.streamNo}"
             val embedHeaders = mapOf(
                 "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
