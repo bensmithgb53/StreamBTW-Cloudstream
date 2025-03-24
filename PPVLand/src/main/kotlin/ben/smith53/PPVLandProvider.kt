@@ -1,9 +1,7 @@
 package ben.smith53
 
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.loadExtractor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -13,7 +11,6 @@ class PPVLandProvider : MainAPI() {
     override var mainUrl = "https://ppv.land"
     override var name = "PPVLand"
     override val hasMainPage = true
-    override val hasSearch = false
     override val supportedTypes = setOf(TvType.Live)
 
     private val apiUrl = "$mainUrl/api/streams"
@@ -36,23 +33,24 @@ class PPVLandProvider : MainAPI() {
         val events = fetchEvents()
         if (events.isEmpty()) {
             logger.severe("No events found")
-            return HomePageResponse(emptyList())
+            return newHomePageResponse(emptyList())
         }
 
         val homePageList = events.groupBy { it.category }.map { (category, streams) ->
             val streamItems = streams.map { event ->
-                LiveSearchResponse(
+                newLiveSearchResponse(
                     name = event.name,
                     url = "$mainUrl/api/streams/${event.id}",
-                    apiName = this.name,
-                    posterUrl = event.poster,
-                    type = TvType.Live
-                )
+                    apiName = this.name
+                ) {
+                    this.posterUrl = event.poster
+                    this.type = TvType.Live
+                }
             }
             HomePageList(category, streamItems)
         }
 
-        return HomePageResponse(homePageList)
+        return newHomePageResponse(homePageList)
     }
 
     private suspend fun fetchEvents(): List<Event> = withContext(Dispatchers.IO) {
@@ -95,19 +93,20 @@ class PPVLandProvider : MainAPI() {
         }
     }
 
-    override suspend fun load(url: String): LoadResponse = withContext(Dispatchers.IO) {
+    override suspend fun load(url: String): LoadResponse {
         val streamId = url.split("/").last()
         logger.info("Loading stream ID: $streamId from $url")
         val event = fetchEvents().find { it.id == streamId }
             ?: throw ErrorLoadingException("Stream not found")
 
-        return@withContext LiveStreamLoadResponse(
+        return newLiveStreamLoadResponse(
             name = event.name,
             url = url,
-            apiName = this@PPVLandProvider.name,
-            dataUrl = url,
-            posterUrl = event.poster
-        )
+            apiName = this.name,
+            dataUrl = url
+        ) {
+            this.posterUrl = event.poster
+        }
     }
 
     override suspend fun loadLinks(
@@ -115,21 +114,21 @@ class PPVLandProvider : MainAPI() {
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
-    ): Boolean = withContext(Dispatchers.IO) {
+    ): Boolean {
         val streamId = data.split("/").last()
-        val m3u8Url = fetchM3u8Url(streamId) ?: return@withContext false
+        val m3u8Url = fetchM3u8Url(streamId) ?: return false
 
         callback.invoke(
             ExtractorLink(
-                source = this@PPVLandProvider.name,
+                source = this.name,
                 name = "PPVLand Stream",
                 url = m3u8Url,
                 referer = mainUrl,
-                quality = Qualities.Unknown.value,
+                quality = -1, // Use -1 for unknown quality if Qualities enum is unavailable
                 isM3u8 = true
             )
         )
-        true
+        return true
     }
 
     private suspend fun fetchM3u8Url(streamId: String): String? = withContext(Dispatchers.IO) {
