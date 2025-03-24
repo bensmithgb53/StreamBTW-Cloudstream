@@ -215,7 +215,7 @@ class StreamedProvider : MainAPI() {
                 val foundUrl = m3u8Regex.find(embedText)?.value ?: run {
                     val relativeM3u8Regex = Regex("/s/[\\w/-]+\\.m3u8\\?md5=[\\w-]+&expiry=\\d+")
                     relativeM3u8Regex.find(embedText)?.value?.let { relativeUrl ->
-                        "https://rr.vipstreams.in$relativeUrl" // Add domain based on your example
+                        "https://rr.vipstreams.in$relativeUrl"
                     }
                 }
                 foundUrl?.let { url ->
@@ -229,12 +229,17 @@ class StreamedProvider : MainAPI() {
         } else {
             println("Fetch failed or returned invalid data, scraping embed page")
             val embedUrl = "https://embedme.top/embed/$sourceType/$matchId/${stream.streamNo}"
-            val embedResponse = app.get(embedUrl, headers = headers, timeout = 15)
+            val embedHeaders = mapOf(
+                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+                "Referer" to "https://embedme.top/",
+                "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
+            )
+            val embedResponse = app.get(embedUrl, headers = embedHeaders, timeout = 15)
             val embedText = if (embedResponse.headers["Content-Encoding"] == "gzip") {
                 GZIPInputStream(embedResponse.body.byteStream()).bufferedReader().use { it.readText() }
-                } else {
-                    embedResponse.text
-                }
+            } else {
+                embedResponse.text
+            }
             println("Embed page response for $embedUrl: $embedText")
             val m3u8Regex = Regex("https://[\\w.-]+/[\\w/-]+\\.m3u8\\?md5=[\\w-]+&expiry=\\d+")
             val foundUrl = m3u8Regex.find(embedText)?.value ?: run {
@@ -286,87 +291,6 @@ class StreamedProvider : MainAPI() {
                 headers = streamHeaders
             )
         )
-        return true
-    }
-
-    private fun String.capitalize(): String {
-        return replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
-    }
-}                this.plot = "No streams were returned for this match. Using a test stream instead."
-            }
-        }
-        println("Selected stream: id=${stream.id}, streamNo=${stream.streamNo}, hd=${stream.hd}, source=${stream.source}")
-
-        val embedUrl = "https://embedme.top/embed/$sourceType/$matchId/${stream.streamNo}"
-        val embedResponse = app.get(embedUrl, headers = headers, timeout = 15)
-        val embedText = if (embedResponse.headers["Content-Encoding"] == "gzip") {
-            GZIPInputStream(embedResponse.body.byteStream()).bufferedReader().use { it.readText() }
-        } else {
-            embedResponse.text
-        }
-        println("Embed page response for $embedUrl: $embedText")
-
-        val m3u8Regex = Regex("https://rr\\.vipstreams\\.in/[\\w/-]+/strm\\.m3u8\\?md5=[\\w-]+&expiry=\\d+")
-        val m3u8Url = m3u8Regex.find(embedText)?.value ?: run {
-            val fetchHeaders = mapOf(
-                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
-                "Referer" to embedUrl,
-                "Content-Type" to "application/json",
-                "Origin" to "https://embedme.top",
-                "Accept" to "*/*"
-            )
-            val fetchBody = """{"source":"$sourceType","id":"$matchId","streamNo":"${stream.streamNo}"}""".toRequestBody()
-            val fetchResponse = app.post("https://embedme.top/fetch", headers = fetchHeaders, requestBody = fetchBody, timeout = 15)
-            val fetchText = fetchResponse.text
-            println("Fetch response from https://embedme.top/fetch: $fetchText")
-
-            if (fetchResponse.isSuccessful && fetchText.isNotBlank() && !fetchText.contains("Not Found")) {
-                // Attempt to use fetch response if it looks like an M3U8 URL
-                if (fetchText.contains(".m3u8")) fetchText else {
-                    println("Fetch returned non-M3U8 data, falling back to test stream")
-                    "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
-                }
-            } else {
-                println("Fetch failed or returned invalid data, falling back to test stream")
-                "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
-            }
-        }
-
-        println("Final M3U8 URL: $m3u8Url")
-        return newLiveStreamLoadResponse(
-            "${stream.source} - ${if (stream.hd) "HD" else "SD"}",
-            m3u8Url,
-            m3u8Url
-        ) {
-            this.apiName = this@StreamedProvider.name
-        }
-    }
-
-    override suspend fun loadLinks(
-        data: String,
-        isCasting: Boolean,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ): Boolean {
-        val streamHeaders = mapOf(
-            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
-            "Referer" to "https://embedme.top/",
-            "Origin" to "https://embedme.top",
-            "Accept" to "*/*"
-        )
-
-        callback(
-            ExtractorLink(
-                source = this.name,
-                name = "Streamed Sports",
-                url = data,
-                referer = "https://embedme.top/",
-                quality = -1,
-                isM3u8 = true,
-                headers = streamHeaders
-            )
-        )
-
         return true
     }
 
