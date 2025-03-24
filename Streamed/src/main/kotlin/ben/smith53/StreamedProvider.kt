@@ -64,7 +64,7 @@ class StreamedProvider : MainAPI() {
     )
 
     private suspend fun fetchLiveMatches(): List<HomePageList> {
-        val response = app.get("$mainUrl/api/matches/all", headers = headers, timeout = 15)
+        val response = app.get("$mainUrl/api/matches/all", headers = headers, timeout = 30)
         val text = if (response.headers["Content-Encoding"] == "gzip") {
             GZIPInputStream(response.body.byteStream()).bufferedReader().use { it.readText() }
         } else {
@@ -140,7 +140,13 @@ class StreamedProvider : MainAPI() {
         println("Parsed: matchId=$matchId, sourceType=$sourceType, sourceId=$sourceId")
 
         val streamUrl = "$mainUrl/api/stream/$sourceType/$sourceId"
-        val response = app.get(streamUrl, headers = headers, timeout = 15)
+        // Use exact headers from curl for this request
+        val streamHeaders = mapOf(
+            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+            "Referer" to "https://streamed.su/"
+        )
+        val response = app.get(streamUrl, headers = streamHeaders, timeout = 30)
+        println("Stream API request: URL=$streamUrl, Headers=$streamHeaders, Status=${response.code}")
         val text = if (response.headers["Content-Encoding"] == "gzip") {
             GZIPInputStream(response.body.byteStream()).bufferedReader().use { it.readText() }
         } else {
@@ -149,7 +155,7 @@ class StreamedProvider : MainAPI() {
         println("Stream API response for $streamUrl: $text")
 
         if (!response.isSuccessful || text.contains("Not Found")) {
-            println("Stream not found for $streamUrl, attempting fallback with matchId")
+            println("Stream not found for $streamUrl, status=${response.code}, attempting fallback with matchId")
             return newLiveStreamLoadResponse(
                 "Stream Unavailable - $matchId",
                 correctedUrl,
@@ -188,7 +194,7 @@ class StreamedProvider : MainAPI() {
             "Accept" to "*/*"
         )
         val fetchBody = """{"source":"$sourceType","id":"$matchId","streamNo":"${stream.streamNo}"}""".toRequestBody()
-        val fetchResponse = app.post("https://embedme.top/fetch", headers = fetchHeaders, requestBody = fetchBody, timeout = 15)
+        val fetchResponse = app.post("https://embedme.top/fetch", headers = fetchHeaders, requestBody = fetchBody, timeout = 30)
         val fetchText = fetchResponse.text
         println("Fetch response from https://embedme.top/fetch: $fetchText")
 
@@ -204,7 +210,7 @@ class StreamedProvider : MainAPI() {
                     "Referer" to "https://embedme.top/",
                     "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
                 )
-                val embedResponse = app.get(embedUrl, headers = embedHeaders, timeout = 15)
+                val embedResponse = app.get(embedUrl, headers = embedHeaders, timeout = 30)
                 val embedText = if (embedResponse.headers["Content-Encoding"] == "gzip") {
                     GZIPInputStream(embedResponse.body.byteStream()).bufferedReader().use { it.readText() }
                 } else {
@@ -235,7 +241,7 @@ class StreamedProvider : MainAPI() {
                 "Referer" to "https://embedme.top/",
                 "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
             )
-            val embedResponse = app.get(embedUrl, headers = embedHeaders, timeout = 15)
+            val embedResponse = app.get(embedUrl, headers = embedHeaders, timeout = 30)
             val embedText = if (embedResponse.headers["Content-Encoding"] == "gzip") {
                 GZIPInputStream(embedResponse.body.byteStream()).bufferedReader().use { it.readText() }
             } else {
@@ -298,4 +304,4 @@ class StreamedProvider : MainAPI() {
     private fun String.capitalize(): String {
         return replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
     }
-}
+}.
