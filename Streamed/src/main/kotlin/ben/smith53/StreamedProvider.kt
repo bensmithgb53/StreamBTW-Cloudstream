@@ -1,8 +1,7 @@
-package com.example.providers
+package ben.smith53
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.loadExtractor
 import com.fasterxml.jackson.databind.ObjectMapper
 import java.util.zip.GZIPInputStream
 
@@ -27,9 +26,9 @@ class StreamedProvider : MainAPI() {
         val items = doc.select("div.grid-item").mapNotNull { element ->
             val title = element.selectFirst("h3")?.text() ?: return@mapNotNull null
             val url = element.selectFirst("a")?.attr("href") ?: return@mapNotNull null
-            LiveSearchResponse(title, url, this.name)
+            newLiveSearchResponse(title, url, this.name)
         }
-        return HomePageResponse(listOf(HomePageList("Live Streams", items, isHorizontalImages = true)))
+        return newHomePageResponse(listOf(HomePageList("Live Streams", items, isHorizontalImages = true)))
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
@@ -37,7 +36,7 @@ class StreamedProvider : MainAPI() {
         return doc.select("div.grid-item").mapNotNull { element ->
             val title = element.selectFirst("h3")?.text() ?: return@mapNotNull null
             val url = element.selectFirst("a")?.attr("href") ?: return@mapNotNull null
-            LiveSearchResponse(title, url, this.name)
+            newLiveSearchResponse(title, url, this.name)
         }
     }
 
@@ -85,11 +84,11 @@ class StreamedProvider : MainAPI() {
             }
         }
 
-        val streams: List<Stream> = try {
-            mapper.readValue(text)
+        val streams = try {
+            mapper.readValue(text, mapper.typeFactory.constructCollectionType(List::class.java, Stream::class.java))
         } catch (e: Exception) {
             println("Failed to parse streams: ${e.message}")
-            emptyList()
+            emptyList<Stream>()
         }
         val stream = streams.firstOrNull()
         if (stream == null) {
@@ -105,15 +104,14 @@ class StreamedProvider : MainAPI() {
         }
         println("Selected stream: id=${stream.id}, streamNo=${stream.streamNo}, hd=${stream.hd}, source=${stream.source}")
 
-        // Call the Render proxy server
         val proxyUrl = "https://streamed-proxy.onrender.com/get_m3u8?source=$sourceType&id=$matchId&streamNo=${stream.streamNo}"
-        val proxyResponse = app.get(proxyUrl, timeout = 60) // Increased timeout for wake-up delay
+        val proxyResponse = app.get(proxyUrl, timeout = 60)
         val proxyText = proxyResponse.text
         println("Proxy response from $proxyUrl: $proxyText")
 
         val m3u8Url = if (proxyResponse.isSuccessful) {
             try {
-                val json = mapper.readValue<Map<String, Any>>(proxyText)
+                val json = mapper.readValue(proxyText, Map::class.java)
                 json["m3u8_url"]?.toString() ?: run {
                     println("No m3u8_url in proxy response, using test stream")
                     "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
@@ -150,7 +148,7 @@ class StreamedProvider : MainAPI() {
                 this.name,
                 data,
                 "",
-                Qualities.Unknown.value,
+                getQualityFromName("Unknown"), // Use a fallback quality
                 isM3u8 = true
             )
         )
