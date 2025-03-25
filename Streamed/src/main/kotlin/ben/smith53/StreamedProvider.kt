@@ -27,6 +27,7 @@ class StreamedProvider : MainAPI() {
         private const val posterBase = "https://streamed.su/api/images/poster"
         private const val badgeBase = "https://streamed.su/api/images/badge"
         private val mapper = jacksonObjectMapper()
+        private const val TEST_BUNNY_URL = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
     }
 
     data class APIMatch(
@@ -154,11 +155,11 @@ class StreamedProvider : MainAPI() {
             println("Stream not found for $streamUrl, status=${response.code}")
             return newLiveStreamLoadResponse(
                 "Stream Unavailable - $matchId",
-                correctedUrl,
-                ""
+                TEST_BUNNY_URL,
+                TEST_BUNNY_URL
             ) {
                 this.apiName = this@StreamedProvider.name
-                this.plot = "The requested stream could not be found."
+                this.plot = "The requested stream could not be found. Using test stream."
             }
         }
 
@@ -173,17 +174,17 @@ class StreamedProvider : MainAPI() {
             println("No streams available for $streamUrl")
             return newLiveStreamLoadResponse(
                 "No Streams Available - $matchId",
-                correctedUrl,
-                ""
+                TEST_BUNNY_URL,
+                TEST_BUNNY_URL
             ) {
                 this.apiName = this@StreamedProvider.name
-                this.plot = "No streams were returned for this match."
+                this.plot = "No streams were returned for this match. Using test stream."
             }
         }
         println("Selected stream: id=${stream.id}, streamNo=${stream.streamNo}, hd=${stream.hd}, source=${stream.source}")
 
         // Try proxy with retry
-        var m3u8Url = ""
+        var m3u8Urls: List<String> = emptyList()
         val proxyUrl = "https://streamed-proxy.onrender.com/get_m3u8?source=$sourceType&id=$matchId&streamNo=${stream.streamNo}"
         val proxyHeaders = mapOf(
             "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
@@ -197,13 +198,17 @@ class StreamedProvider : MainAPI() {
 
             if (proxyResponse.isSuccessful && proxyText.isNotBlank()) {
                 try {
-                    val json = mapper.readValue<Map<String, String>>(proxyText)
-                    m3u8Url = json["m3u8_url"] ?: ""
-                    if (m3u8Url.isNotBlank()) {
-                        println("Proxy returned valid M3U8 URL: $m3u8Url")
+                    val json = mapper.readValue<Map<String, Any>>(proxyText)
+                    m3u8Urls = when (val urlData = json["m3u8_url"]) {
+                        is String -> listOf(urlData)
+                        is List<*> -> urlData.filterIsInstance<String>()
+                        else -> emptyList()
+                    }
+                    if (m3u8Urls.isNotEmpty()) {
+                        println("Proxy returned valid M3U8 URLs: $m3u8Urls")
                         break
                     } else {
-                        println("No m3u8_url in proxy response")
+                        println("No valid m3u8_url in proxy response")
                     }
                 } catch (e: Exception) {
                     println("Failed to parse proxy response: ${e.message}")
@@ -215,7 +220,7 @@ class StreamedProvider : MainAPI() {
         }
 
         // Fallback to embed page if proxy fails
-        if (m3u8Url.isBlank()) {
+        if (m3u8Urls.isEmpty()) {
             println("Proxy failed after retries, scraping embed page")
             val embedUrl = "https://embedme.top/embed/$sourceType/$matchId/${stream.streamNo}"
             val embedHeaders = mapOf(
@@ -232,33 +237,35 @@ class StreamedProvider : MainAPI() {
             println("Embed page response for $embedUrl: $embedText")
 
             val m3u8Regex = Regex("https://[\\w.-]+/[\\w/-]+\\.m3u8\\?md5=[\\w-]+&expiry=\\d+")
-            m3u8Url = m3u8Regex.find(embedText)?.value ?: run {
+            val foundUrls = m3u8Regex.findAll(embedText).map { it.value }.toList()
+            m3u8Urls = if (foundUrls.isNotEmpty()) {
+                foundUrls
+            } else {
                 val relativeM3u8Regex = Regex("/s/[\\w/-]+\\.m3u8\\?md5=[\\w-]+&expiry=\\d+")
                 relativeM3u8Regex.find(embedText)?.value?.let { relativeUrl ->
-                    "https://rr.vipstreams.in$relativeUrl"
-                } ?: ""
+                    listOf("https://rr.vipstreams.in$relativeUrl")
+                } ?: emptyList()
             }
-            println("Scraped M3U8 URL from embed page: $m3u8Url")
+            println("Scraped M3U8 URLs from embed page: $m3u8Urls")
         }
 
-        println("Final M3U8 URL: $m3u8Url")
-        return if (m3u8Url.isNotBlank()) {
-            newLiveStreamLoadResponse(
-                "${stream.source} - ${if (stream.hd) "HD" else "SD"}",
-                m3u8Url,
-                m3u8Url
-            ) {
-                this.apiName = this@StreamedProvider.name
-            }
+        // Use test bunny if no URLs found
+        val finalUrls = if (m3u8Urls.isEmpty()) {
+            println("No valid URLs found, using test bunny video")
+            listOf(TEST_BUNNY_URL)
         } else {
-            newLiveStreamLoadResponse(
-                "Stream Error - $matchId",
-                correctedUrl,
-                ""
-            ) {
-                this.apiName = this@StreamedProvider.name
-                this.plot = "Failed to retrieve stream URL from proxy or embed page."
-            }
+            m3u8Urls
+        }
+        println("Final M3U8 URLs: $finalUrls")
+
+        return newLiveStreamLoadResponse(
+            "${stream.source} - ${if (stream.hd) "HD" else "SD"}",
+            correctedUrl, // Pass original URL as dataUrl, we'll handle multiple links in loadLinks
+            finalUrls.first() // Use first URL as primary dataUrl for display
+        ) {
+            this.apiName = this@StreamedProvider.name
+            this.plot = if (finalUrls.contains(TEST_BUNNY_URL)) "Failed to retrieve stream URLs. Using test stream." else null
+            this.data = finalUrls.joinToString("|") // Store all URLs in data field
         }
     }
 
@@ -272,19 +279,26 @@ class StreamedProvider : MainAPI() {
             println("loadLinks: No URL provided, skipping callback")
             return false
         }
-        println("loadLinks: Loading URL: $data")
-        callback(
-            ExtractorLink(
-                source = this.name,
-                name = "Streamed Sports",
-                url = data,
-                referer = "https://streamed.su/",
-                quality = -1,
-                isM3u8 = true,
-                headers = headers
-            )
-        )
-        return true
+        println("loadLinks: Processing data: $data")
+        val urls = data.split("|")
+        urls.forEachIndexed { index, url ->
+            if (url.isNotBlank()) {
+                val linkName = if (urls.size > 1) "Stream ${index + 1}" else "Streamed Sports"
+                println("loadLinks: Loading URL $index: $url")
+                callback.invoke(
+                    ExtractorLink(
+                        source = this.name,
+                        name = linkName,
+                        url = url,
+                        referer = "https://streamed.su/",
+                        quality = -1,
+                        isM3u8 = true,
+                        headers = headers
+                    )
+                )
+            }
+        }
+        return urls.any { it.isNotBlank() }
     }
 
     private fun String.capitalize(): String {
