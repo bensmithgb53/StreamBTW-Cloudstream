@@ -199,42 +199,17 @@ class StreamedProvider : MainAPI() {
         val encryptedData = fetchResponse.text
         println("Encrypted data from https://embedme.top/fetch: $encryptedData")
 
-        // Scrape embed page for decrypted m3u8 URL
+        // Since scraping doesn't work without JS execution, use manual decryption instructions
         val m3u8Url = if (fetchResponse.isSuccessful && encryptedData.isNotBlank() && !encryptedData.contains("Not Found")) {
-            println("Fetch successful, attempting to scrape embed page for decrypted URL")
             val embedUrl = "https://embedme.top/embed/$sourceType/$matchId/${stream.streamNo}"
-            val embedHeaders = mapOf(
-                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
-                "Referer" to "https://embedme.top/",
-                "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
-            )
-            val embedResponse = app.get(embedUrl, headers = embedHeaders, timeout = 30)
-            val embedText = if (embedResponse.headers["Content-Encoding"] == "gzip") {
-                GZIPInputStream(embedResponse.body.byteStream()).bufferedReader().use { it.readText() }
-            } else {
-                embedResponse.text
-            }
-            println("Embed page response for $embedUrl: $embedText")
-
-            // Regex to find full or relative m3u8 URLs
-            val m3u8Regex = Regex("https://[\\w.-]+/[\\w/-]+\\.m3u8\\?md5=[\\w-]+&expiry=\\d+")
-            val foundUrl = m3u8Regex.find(embedText)?.value ?: run {
-                val relativeM3u8Regex = Regex("/s/[\\w/-]+\\.m3u8\\?md5=[\\w-]+&expiry=\\d+")
-                relativeM3u8Regex.find(embedText)?.value?.let { relativeUrl ->
-                    "https://rr.vipstreams.in$relativeUrl"
-                }
-            }
-            foundUrl?.let { url ->
-                println("Found M3U8 URL in embed page: $url")
-                url
-            } ?: run {
-                println("No M3U8 URL found in embed page, falling back to test stream")
-                println("Encrypted data for manual decryption: $encryptedData")
-                println("Decrypt in browser at $embedUrl with: const enc = \"$encryptedData\"; console.log(window.decrypt(enc));")
-                "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
-            }
+            println("Fetch successful, but decryption requires browser execution.")
+            println("To get the M3U8 URL, open this in Chrome: $embedUrl")
+            println("Then in DevTools (F12) > Console, run:")
+            println("""const enc = "$encryptedData"; console.log("https://rr.vipstreams.in" + window.decrypt(enc));""")
+            // Fallback to test stream
+            "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
         } else {
-            println("Fetch failed: status=${fetchResponse.code}, falling back to test stream")
+            println("Fetch failed: status=${fetchResponse.code}, using test stream")
             "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
         }
 
@@ -245,6 +220,7 @@ class StreamedProvider : MainAPI() {
             m3u8Url
         ) {
             this.apiName = this@StreamedProvider.name
+            this.plot = if (m3u8Url.contains("test-streams")) "Manual decryption required; see logs for instructions." else null
         }
     }
 
