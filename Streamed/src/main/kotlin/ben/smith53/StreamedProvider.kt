@@ -258,14 +258,14 @@ class StreamedProvider : MainAPI() {
         }
         println("Final M3U8 URLs: $finalUrls")
 
+        val dataUrl = finalUrls.joinToString("|")
         return newLiveStreamLoadResponse(
             "${stream.source} - ${if (stream.hd) "HD" else "SD"}",
-            correctedUrl, // Pass original URL as dataUrl, we'll handle multiple links in loadLinks
-            finalUrls.first() // Use first URL as primary dataUrl for display
+            dataUrl,
+            finalUrls.first()
         ) {
             this.apiName = this@StreamedProvider.name
             this.plot = if (finalUrls.contains(TEST_BUNNY_URL)) "Failed to retrieve stream URLs. Using test stream." else null
-            this.data = finalUrls.joinToString("|") // Store all URLs in data field
         }
     }
 
