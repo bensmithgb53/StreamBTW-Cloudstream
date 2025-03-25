@@ -183,44 +183,55 @@ class StreamedProvider : MainAPI() {
         }
         println("Selected stream: id=${stream.id}, streamNo=${stream.streamNo}, hd=${stream.hd}, source=${stream.source}")
 
-        // Preemptive proxy wake-up request
-        val proxyUrl = "https://streamed-proxy.onrender.com/get_m3u8?source=$sourceType&id=$matchId&streamNo=${stream.streamNo}"
+        // Test proxy connectivity
+        val proxyBaseUrl = "https://streamed-proxy.onrender.com"
+        val proxyUrl = "$proxyBaseUrl/get_m3u8?source=$sourceType&id=$matchId&streamNo=${stream.streamNo}"
         val proxyHeaders = mapOf(
             "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
             "Referer" to "https://streamed.su/"
         )
-        println("Sending wake-up request to proxy: $proxyUrl")
-        app.get(proxyUrl, headers = proxyHeaders, timeout = 10) // Short timeout to wake it up
+        println("Testing proxy connectivity with HEAD request to: $proxyBaseUrl")
+        try {
+            val headResponse = app.head(proxyBaseUrl, headers = proxyHeaders, timeout = 10)
+            println("HEAD request to proxy base: Status=${headResponse.code}")
+        } catch (e: Exception) {
+            println("HEAD request to proxy failed: ${e.message}")
+        }
 
         // Try proxy with retry
         var m3u8Urls: List<String> = emptyList()
         for (attempt in 1..2) {
             val startTime = System.currentTimeMillis()
-            val proxyResponse = app.get(proxyUrl, headers = proxyHeaders, timeout = 120)
-            val elapsedTime = System.currentTimeMillis() - startTime
-            println("Proxy request (attempt $attempt): URL=$proxyUrl, Headers=$proxyHeaders, Status=${proxyResponse.code}, Time=${elapsedTime}ms")
-            val proxyText = proxyResponse.text
-            println("Proxy response from $proxyUrl: $proxyText")
+            try {
+                val proxyResponse = app.get(proxyUrl, headers = proxyHeaders, timeout = 120)
+                val elapsedTime = System.currentTimeMillis() - startTime
+                println("Proxy request (attempt $attempt): URL=$proxyUrl, Headers=$proxyHeaders, Status=${proxyResponse.code}, Time=${elapsedTime}ms")
+                val proxyText = proxyResponse.text
+                println("Proxy response from $proxyUrl: $proxyText")
 
-            if (proxyResponse.isSuccessful && proxyText.isNotBlank()) {
-                try {
-                    val json = mapper.readValue<Map<String, Any>>(proxyText)
-                    m3u8Urls = when (val urlData = json["m3u8_url"]) {
-                        is String -> listOf(urlData)
-                        is List<*> -> urlData.filterIsInstance<String>()
-                        else -> emptyList()
+                if (proxyResponse.isSuccessful && proxyText.isNotBlank()) {
+                    try {
+                        val json = mapper.readValue<Map<String, Any>>(proxyText)
+                        m3u8Urls = when (val urlData = json["m3u8_url"]) {
+                            is String -> listOf(urlData)
+                            is List<*> -> urlData.filterIsInstance<String>()
+                            else -> emptyList()
+                        }
+                        if (m3u8Urls.isNotEmpty()) {
+                            println("Proxy returned valid M3U8 URLs: $m3u8Urls")
+                            break
+                        } else {
+                            println("No valid m3u8_url in proxy response")
+                        }
+                    } catch (e: Exception) {
+                        println("Failed to parse proxy response: ${e.message}")
                     }
-                    if (m3u8Urls.isNotEmpty()) {
-                        println("Proxy returned valid M3U8 URLs: $m3u8Urls")
-                        break
-                    } else {
-                        println("No valid m3u8_url in proxy response")
-                    }
-                } catch (e: Exception) {
-                    println("Failed to parse proxy response: ${e.message}")
+                } else {
+                    println("Proxy request failed: status=${proxyResponse.code}, response=$proxyText")
                 }
-            } else {
-                println("Proxy request failed: status=${proxyResponse.code}, response=$proxyText")
+            } catch (e: Exception) {
+                val elapsedTime = System.currentTimeMillis() - startTime
+                println("Proxy request (attempt $attempt) failed with exception: ${e.message}, Time=${elapsedTime}ms")
             }
             if (attempt == 1) println("Retrying proxy request...")
         }
