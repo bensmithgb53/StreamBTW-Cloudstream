@@ -183,16 +183,22 @@ class StreamedProvider : MainAPI() {
         }
         println("Selected stream: id=${stream.id}, streamNo=${stream.streamNo}, hd=${stream.hd}, source=${stream.source}")
 
-        // Try proxy with retry
-        var m3u8Urls: List<String> = emptyList()
+        // Preemptive proxy wake-up request
         val proxyUrl = "https://streamed-proxy.onrender.com/get_m3u8?source=$sourceType&id=$matchId&streamNo=${stream.streamNo}"
         val proxyHeaders = mapOf(
             "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
             "Referer" to "https://streamed.su/"
         )
+        println("Sending wake-up request to proxy: $proxyUrl")
+        app.get(proxyUrl, headers = proxyHeaders, timeout = 10) // Short timeout to wake it up
+
+        // Try proxy with retry
+        var m3u8Urls: List<String> = emptyList()
         for (attempt in 1..2) {
-            val proxyResponse = app.get(proxyUrl, headers = proxyHeaders, timeout = 60)
-            println("Proxy request (attempt $attempt): URL=$proxyUrl, Headers=$proxyHeaders, Status=${proxyResponse.code}")
+            val startTime = System.currentTimeMillis()
+            val proxyResponse = app.get(proxyUrl, headers = proxyHeaders, timeout = 120)
+            val elapsedTime = System.currentTimeMillis() - startTime
+            println("Proxy request (attempt $attempt): URL=$proxyUrl, Headers=$proxyHeaders, Status=${proxyResponse.code}, Time=${elapsedTime}ms")
             val proxyText = proxyResponse.text
             println("Proxy response from $proxyUrl: $proxyText")
 
