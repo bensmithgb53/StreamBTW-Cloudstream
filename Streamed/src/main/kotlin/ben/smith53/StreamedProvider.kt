@@ -1,196 +1,173 @@
 package ben.smith53
 
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.fasterxml.jackson.databind.ObjectMapper
+import com.lagradost.cloudstream3.utils.HttpSession
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+import org.jsoup.Jsoup
 import java.util.zip.GZIPInputStream
 
-data class Stream(
-    val id: String,
-    val streamNo: String,
-    val hd: Boolean,
-    val source: String
-)
-
-data class Match(
-    val match_title: String, // e.g., "Clemson vs Stanford"
-    val match_url: String,  // e.g., "/watch/66fcbc8b-efe6-4e74-a04e-07eecfbf698e/alpha/1"
-    val category: String?   // e.g., "Football" (optional, adjust based on actual API response)
-)
-
-class StreamedProvider : MainAPI() {
-    override var mainUrl = "https://streamed.su"
-    override var name = "Streamed"
-    override val hasMainPage = true
-    override val hasDownloadSupport = false
+class EmbedMeProvider : MainAPI() {
+    override var mainUrl = "https://embedme.top" // Base API URL
+    override var name = "EmbedMe Sports"
     override val supportedTypes = setOf(TvType.Live)
+    override var lang = "en"
+    override val hasMainPage = true
+    override val vpnStatus = VPNStatus.MightBeNeeded
+    override val hasDownloadSupport = false
+    override val instantLinkLoading = true
 
-    private val mapper = ObjectMapper()
+    private val headers = mapOf(
+        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+        "Referer" to "$mainUrl/",
+        "Accept-Encoding" to "gzip, deflate, br"
+    )
 
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+    companion object {
+        private const val posterBase = "https://embedme.top/api/images/poster"
+        private const val badgeBase = "https://embedme.top/api/images/badge"
+        private val json = Json { ignoreUnknownKeys = true }
+    }
+
+    @Serializable
+    data class APIMatch(
+        val id: String,
+        val title: String,
+        val category: String,
+        val date: Long,
+        val poster: String? = null,
+        val popular: Boolean,
+        val teams: Teams? = null,
+        val sources: List<Source>
+    ) {
+        @Serializable
+        data class Teams(
+            val home: Team? = null,
+            val away: Team? = null
+        )
+
+        @Serializable
+        data class Team(
+            val name: String,
+            val badge: String
+        )
+
+        @Serializable
+        data class Source(
+            val source: String,
+            val id: String
+        )
+    }
+
+    @Serializable
+    data class Stream(
+        val id: String,
+        val streamNo: Int,
+        val language: String,
+        val hd: Boolean,
+        val embedUrl: String,
+        val source: String
+    )
+
+    private suspend fun fetchLiveMatches(): List<HomePageList> {
         try {
-            val response = app.get("$mainUrl/api/matches/all", headers = mapOf(
-                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
-                "Referer" to "https://streamed.su/"
-            ))
-            println("getMainPage: HTTP Status=${response.code}, URL=$mainUrl/api/matches/all")
-            if (!response.isSuccessful) {
-                println("getMainPage: Failed to fetch matches, status=${response.code}")
-                return newHomePageResponse(emptyList())
-            }
-
-            val jsonText = response.text
-            println("getMainPage: JSON response length=${jsonText.length}")
-            val matches = mapper.readValue(jsonText, mapper.typeFactory.constructCollectionType(List::class.java, Match::class.java))
-            println("getMainPage: Parsed ${matches.size} matches")
-
-            // Group by category if available, otherwise list all matches under "Live Streams"
-            val homePageList = if (matches.any { it.category != null }) {
-                matches.groupBy { it.category ?: "Uncategorized" }.map { (category, matchList) ->
-                    val items = matchList.map { match ->
-                        newLiveSearchResponse(
-                            name = match.match_title,
-                            url = "$mainUrl${match.match_url}",
-                            type = TvType.Live
-                        )
-                    }
-                    HomePageList(category, items, isHorizontalImages = true)
-                }
+            val response = app.get("$mainUrl/api/matches/live", headers = headers, timeout = 15)
+            val text = if (response.headers["Content-Encoding"] == "gzip") {
+                GZIPInputStream(response.body.byteStream()).bufferedReader().use { it.readText() }
             } else {
-                val items = matches.map { match ->
-                    newLiveSearchResponse(
-                        name = match.match_title,
-                        url = "$mainUrl${match.match_url}",
-                        type = TvType.Live
-                    )
-                }
-                listOf(HomePageList("Live Streams", items, isHorizontalImages = true))
+                response.text
             }
+            val matches = json.decodeFromString<List<APIMatch>>(text)
 
-            return newHomePageResponse(homePageList)
+            val eventList = matches.map { match ->
+                val posterUrl = match.poster?.let { "$mainUrl/api/images/proxy/$it.webp" }
+                    ?: match.teams?.let { "${posterBase}/${it.home?.badge}/${it.away?.badge}.webp" }
+                val homeBadge = match.teams?.home?.badge?.let { "$badgeBase/$it.webp" }
+                val awayBadge = match.teams?.away?.badge?.let { "$badgeBase/$it.webp" }
+                LiveSearchResponse(
+                    name = match.title,
+                    url = match.sources.firstOrNull()?.let { "${match.id}|${it.source}|${it.id}" } ?: match.id,
+                    apiName = this.name,
+                    posterUrl = posterUrl,
+                    bannerUrl = homeBadge, // Using bannerUrl for home badge (Cloudstream3 UI quirk)
+                    // Store away badge in data if needed via custom parsing later
+                )
+            }
+            return listOf(HomePageList("Live Sports", eventList, isHorizontalImages = false))
         } catch (e: Exception) {
-            println("getMainPage: Exception occurred: ${e.message}")
-            e.printStackTrace()
-            return newHomePageResponse(listOf(HomePageList("Error", listOf(newLiveSearchResponse("Error Loading Matches", "$mainUrl/error", TvType.Live)))))
+            return listOf(
+                HomePageList(
+                    "Error",
+                    listOf(LiveSearchResponse("Failed to load: ${e.message}", mainUrl, this.name, null)),
+                    isHorizontalImages = false
+                )
+            )
         }
     }
 
-    override suspend fun search(query: String): List<SearchResponse> {
-        try {
-            val response = app.get("$mainUrl/api/matches/all", headers = mapOf(
-                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
-                "Referer" to "https://streamed.su/"
-            ))
-            if (!response.isSuccessful) return emptyList()
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        return newHomePageResponse(fetchLiveMatches())
+    }
 
-            val matches = mapper.readValue(response.text, mapper.typeFactory.constructCollectionType(List::class.java, Match::class.java))
-            return matches.filter { it.match_title.contains(query, ignoreCase = true) }.map { match ->
-                newLiveSearchResponse(
-                    name = match.match_title,
-                    url = "$mainUrl${match.match_url}",
-                    type = TvType.Live
-                )
-            }
-        } catch (e: Exception) {
-            println("search: Exception occurred: ${e.message}")
-            return emptyList()
+    override suspend fun search(query: String): List<SearchResponse> {
+        return fetchLiveMatches().flatMap { it.list }.filter {
+            query.lowercase().replace(" ", "") in it.name.lowercase().replace(" ", "")
         }
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val correctedUrl = if (url.startsWith("$mainUrl/watch/")) {
-            val parts = url.split("/")
-            val matchId = parts[parts.indexOf("watch") + 1].split("-").last()
-            val sourceType = parts[parts.size - 2]
-            val sourceId = parts.last()
-            "$matchId|$sourceType|$sourceId"
-        } else {
-            url
+        val (matchId, sourceType, sourceId) = url.split("|").let {
+            when (it.size) {
+                1 -> listOf(it[0], "alpha", it[0]) // Default to alpha if no source specified
+                else -> it
+            }
         }
-        val parts = correctedUrl.split("|")
-        val matchId = parts[0].split("/").last()
-        val sourceType = if (parts.size > 1) parts[1] else "alpha"
-        val sourceId = if (parts.size > 2) parts[2] else matchId
-
-        println("Loading stream with corrected URL: $correctedUrl")
-        println("Parsed: matchId=$matchId, sourceType=$sourceType, sourceId=$sourceId")
-
         val streamUrl = "$mainUrl/api/stream/$sourceType/$sourceId"
-        val streamHeaders = mapOf(
-            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
-            "Referer" to "https://streamed.su/"
-        )
-        val response = app.get(streamUrl, headers = streamHeaders, timeout = 30)
-        println("Stream API request: URL=$streamUrl, Headers=$streamHeaders, Status=${response.code}")
+        val response = app.get(streamUrl, headers = headers, timeout = 15)
         val text = if (response.headers["Content-Encoding"] == "gzip") {
             GZIPInputStream(response.body.byteStream()).bufferedReader().use { it.readText() }
         } else {
             response.text
         }
-        println("Stream API response for $streamUrl: $text")
-
-        if (!response.isSuccessful || text.contains("Not Found")) {
-            println("Stream not found for $streamUrl, status=${response.code}, using test stream")
-            return newLiveStreamLoadResponse(
-                "Stream Unavailable - $matchId",
-                correctedUrl,
-                "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
-            ) {
-                this.apiName = this@StreamedProvider.name
-                this.plot = "The requested stream could not be found."
-            }
-        }
-
-        val streams = try {
-            mapper.readValue(text, mapper.typeFactory.constructCollectionType(List::class.java, Stream::class.java))
-        } catch (e: Exception) {
-            println("Failed to parse streams: ${e.message}")
-            emptyList<Stream>()
-        }
-        val stream = streams.firstOrNull()
-        if (stream == null) {
-            println("No streams available for $streamUrl")
-            return newLiveStreamLoadResponse(
-                "No Streams Available - $matchId",
-                correctedUrl,
-                "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
-            ) {
-                this.apiName = this@StreamedProvider.name
-                this.plot = "No streams were returned for this match."
-            }
-        }
-        println("Selected stream: id=${stream.id}, streamNo=${stream.streamNo}, hd=${stream.hd}, source=${stream.source}")
-
-        val proxyUrl = "https://streamed-proxy.onrender.com/get_m3u8?source=$sourceType&id=$matchId&streamNo=${stream.streamNo}"
-        val proxyResponse = app.get(proxyUrl, timeout = 60)
-        val proxyText = proxyResponse.text
-        println("Proxy response from $proxyUrl: $proxyText")
-
-        val m3u8Url = if (proxyResponse.isSuccessful) {
-            try {
-                val json = mapper.readValue(proxyText, Map::class.java)
-                json["m3u8_url"]?.toString() ?: run {
-                    println("No m3u8_url in proxy response, using test stream")
-                    "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
-                }
-            } catch (e: Exception) {
-                println("Failed to parse proxy response: ${e.message}, using test stream")
-                "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
-            }
+        val stream = json.decodeFromString<Stream>(text)
+        val embedResponse = app.get(stream.embedUrl, headers = headers, timeout = 15)
+        val embedHtml = if (embedResponse.headers["Content-Encoding"] == "gzip") {
+            GZIPInputStream(embedResponse.body.byteStream()).bufferedReader().use { it.readText() }
         } else {
-            println("Proxy request failed: status=${proxyResponse.code}, using test stream")
-            "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
+            embedResponse.text
         }
 
-        println("Final M3U8 URL: $m3u8Url")
-        return newLiveStreamLoadResponse(
-            "${stream.source} - ${if (stream.hd) "HD" else "SD"}",
-            m3u8Url,
-            m3u8Url
-        ) {
-            this.apiName = this@StreamedProvider.name
-            this.plot = if (m3u8Url.contains("test-streams")) "Proxy server failed; using test stream." else null
+        // Extract M3U8 from embed page (e.g., rr.vipstreams.in)
+        val m3u8Match = Regex("https?://rr\\.vipstreams\\.in[^\\s'\"]+\\.m3u8[^\\s'\"]*").find(embedHtml)
+            ?: throw Exception("No M3U8 URL found in embed page")
+        val m3u8Url = m3u8Match.value
+
+        // Fetch M3U8 content with Brotli/plaintext handling
+        val m3u8Response = HttpSession().get(m3u8Url, headers = headers, timeout = 10)
+        val contentEncoding = m3u8Response.headers["Content-Encoding"]?.lowercase()
+        val rawContent = m3u8Response.body.bytes()
+        val m3u8Content = when {
+            rawContent.startsWith("#EXTM3U".toByteArray()) -> String(rawContent)
+            contentEncoding == "gzip" -> GZIPInputStream(rawContent.inputStream()).bufferedReader().use { it.readText() }
+            contentEncoding == "br" -> {
+                try {
+                    String(org.brotli.dec.BrotliInputStream(rawContent.inputStream()).readBytes())
+                } catch (e: Exception) {
+                    if (rawContent.startsWith("#EXTM3U".toByteArray())) String(rawContent) else throw e
+                }
+            }
+            else -> String(rawContent)
         }
+
+        return LiveStreamLoadResponse(
+            name = stream.source + " - " + (if (stream.hd) "HD" else "SD"),
+            url = m3u8Url,
+            apiName = this.name,
+            dataUrl = m3u8Content,
+            posterUrl = null // Poster already set in search response
+        )
     }
 
     override suspend fun loadLinks(
@@ -202,13 +179,17 @@ class StreamedProvider : MainAPI() {
         callback(
             ExtractorLink(
                 source = this.name,
-                name = this.name,
+                name = "EmbedMe Stream",
                 url = data,
-                referer = "",
-                quality = -1, // Unknown quality
+                referer = "https://embedme.top/",
+                quality = -1,
                 isM3u8 = true
             )
         )
         return true
+    }
+
+    private fun ByteArray.startsWith(prefix: ByteArray): Boolean {
+        return this.take(prefix.size).toByteArray().contentEquals(prefix)
     }
 }
