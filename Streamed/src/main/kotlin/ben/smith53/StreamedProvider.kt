@@ -29,7 +29,6 @@ class StreamedProvider : MainAPI() {
             newLiveSearchResponse(
                 name = title,
                 url = url,
-                apiName = this.name,
                 type = TvType.Live
             )
         }
@@ -44,7 +43,6 @@ class StreamedProvider : MainAPI() {
             newLiveSearchResponse(
                 name = title,
                 url = url,
-                apiName = this.name,
                 type = TvType.Live
             )
         }
