@@ -5,7 +5,6 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
 import java.util.zip.GZIPInputStream
-import okhttp3.RequestBody.Companion.toRequestBody
 
 class StreamedProvider : MainAPI() {
     override var mainUrl = "https://streamed.su"
@@ -56,10 +55,8 @@ class StreamedProvider : MainAPI() {
 
     data class Stream(
         val id: String,
-        val streamNo: Int,
-        val language: String,
+        val streamNo: String,
         val hd: Boolean,
-        val embedUrl: String,
         val source: String
     )
 
@@ -154,19 +151,19 @@ class StreamedProvider : MainAPI() {
         println("Stream API response for $streamUrl: $text")
 
         if (!response.isSuccessful || text.contains("Not Found")) {
-            println("Stream not found for $streamUrl, status=${response.code}, attempting fallback with matchId")
+            println("Stream not found for $streamUrl, status=${response.code}, using test stream")
             return newLiveStreamLoadResponse(
                 "Stream Unavailable - $matchId",
                 correctedUrl,
                 "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
             ) {
                 this.apiName = this@StreamedProvider.name
-                this.plot = "The requested stream could not be found. Using a test stream instead."
+                this.plot = "The requested stream could not be found."
             }
         }
 
         val streams: List<Stream> = try {
-            mapper.readValue(text)
+            mapper.readValue(text, mapper.typeFactory.constructCollectionType(List::class.java, Stream::class.java))
         } catch (e: Exception) {
             println("Failed to parse streams: ${e.message}")
             emptyList()
@@ -180,87 +177,30 @@ class StreamedProvider : MainAPI() {
                 "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
             ) {
                 this.apiName = this@StreamedProvider.name
-                this.plot = "No streams were returned for this match. Using a test stream instead."
+                this.plot = "No streams were returned for this match."
             }
         }
         println("Selected stream: id=${stream.id}, streamNo=${stream.streamNo}, hd=${stream.hd}, source=${stream.source}")
 
-        val fetchHeaders = mapOf(
-            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
-            "Referer" to "https://embedme.top/",
-            "Content-Type" to "application/json",
-            "Origin" to "https://embedme.top",
-            "Accept" to "*/*"
-        )
-        val fetchBody = """{"source":"$sourceType","id":"$matchId","streamNo":"${stream.streamNo}"}""".toRequestBody()
-        val fetchResponse = app.post("https://embedme.top/fetch", headers = fetchHeaders, requestBody = fetchBody, timeout = 30)
-        val fetchText = fetchResponse.text
-        println("Fetch response from https://embedme.top/fetch: $fetchText")
+        val proxyUrl = "https://streamed-proxy.onrender.com/get_m3u8?source=$sourceType&id=$matchId&streamNo=${stream.streamNo}"
+        val proxyResponse = app.get(proxyUrl, timeout = 60)
+        val proxyText = proxyResponse.text
+        println("Proxy response from $proxyUrl: $proxyText")
 
-        val m3u8Url = if (fetchResponse.isSuccessful && fetchText.isNotBlank() && !fetchText.contains("Not Found")) {
-            if (fetchText.contains(".m3u8")) {
-                println("Fetch returned direct M3U8 URL: $fetchText")
-                fetchText
-            } else {
-                println("Fetch returned encrypted data: $fetchText, scraping embed page")
-                val embedUrl = "https://embedme.top/embed/$sourceType/$matchId/${stream.streamNo}"
-                val embedHeaders = mapOf(
-                    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
-                    "Referer" to "https://embedme.top/",
-                    "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
-                )
-                val embedResponse = app.get(embedUrl, headers = embedHeaders, timeout = 30)
-                val embedText = if (embedResponse.headers["Content-Encoding"] == "gzip") {
-                    GZIPInputStream(embedResponse.body.byteStream()).bufferedReader().use { it.readText() }
-                } else {
-                    embedResponse.text
-                }
-                println("Embed page response for $embedUrl: $embedText")
-
-                val m3u8Regex = Regex("https://[\\w.-]+/[\\w/-]+\\.m3u8\\?md5=[\\w-]+&expiry=\\d+")
-                val foundUrl = m3u8Regex.find(embedText)?.value ?: run {
-                    val relativeM3u8Regex = Regex("/s/[\\w/-]+\\.m3u8\\?md5=[\\w-]+&expiry=\\d+")
-                    relativeM3u8Regex.find(embedText)?.value?.let { relativeUrl ->
-                        "https://rr.vipstreams.in$relativeUrl"
-                    }
-                }
-                foundUrl?.let { url ->
-                    println("Found M3U8 URL in embed page: $url")
-                    url
-                } ?: run {
-                    println("No M3U8 URL found in embed page, falling back to test stream")
+        val m3u8Url = if (proxyResponse.isSuccessful) {
+            try {
+                val json = mapper.readValue<Map<String, String>>(proxyText)
+                json["m3u8_url"] ?: run {
+                    println("No m3u8_url in proxy response, using test stream")
                     "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
                 }
-            }
-        } else {
-            println("Fetch failed or returned invalid data: status=${fetchResponse.code}, scraping embed page")
-            val embedUrl = "https://embedme.top/embed/$sourceType/$matchId/${stream.streamNo}"
-            val embedHeaders = mapOf(
-                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
-                "Referer" to "https://embedme.top/",
-                "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
-            )
-            val embedResponse = app.get(embedUrl, headers = embedHeaders, timeout = 30)
-            val embedText = if (embedResponse.headers["Content-Encoding"] == "gzip") {
-                GZIPInputStream(embedResponse.body.byteStream()).bufferedReader().use { it.readText() }
-            } else {
-                embedResponse.text
-            }
-            println("Embed page response for $embedUrl: $embedText")
-            val m3u8Regex = Regex("https://[\\w.-]+/[\\w/-]+\\.m3u8\\?md5=[\\w-]+&expiry=\\d+")
-            val foundUrl = m3u8Regex.find(embedText)?.value ?: run {
-                val relativeM3u8Regex = Regex("/s/[\\w/-]+\\.m3u8\\?md5=[\\w-]+&expiry=\\d+")
-                relativeM3u8Regex.find(embedText)?.value?.let { relativeUrl ->
-                    "https://rr.vipstreams.in$relativeUrl"
-                }
-            }
-            foundUrl?.let { url ->
-                println("Found M3U8 URL in embed page: $url")
-                url
-            } ?: run {
-                println("No M3U8 URL found, using test stream")
+            } catch (e: Exception) {
+                println("Failed to parse proxy response: ${e.message}, using test stream")
                 "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
             }
+        } else {
+            println("Proxy request failed: status=${proxyResponse.code}, using test stream")
+            "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
         }
 
         println("Final M3U8 URL: $m3u8Url")
@@ -270,6 +210,7 @@ class StreamedProvider : MainAPI() {
             m3u8Url
         ) {
             this.apiName = this@StreamedProvider.name
+            this.plot = if (m3u8Url.contains("test-streams")) "Proxy server failed; using test stream." else null
         }
     }
 
@@ -279,22 +220,15 @@ class StreamedProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val streamHeaders = mapOf(
-            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
-            "Referer" to "https://embedme.top/",
-            "Origin" to "https://embedme.top",
-            "Accept" to "*/*"
-        )
-
         callback(
             ExtractorLink(
                 source = this.name,
                 name = "Streamed Sports",
                 url = data,
-                referer = "https://embedme.top/",
+                referer = "https://streamed.su/",
                 quality = -1,
                 isM3u8 = true,
-                headers = streamHeaders
+                headers = headers
             )
         )
         return true
