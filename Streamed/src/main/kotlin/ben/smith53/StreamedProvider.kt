@@ -12,6 +12,12 @@ data class Stream(
     val source: String
 )
 
+data class Match(
+    val match_title: String, // e.g., "Clemson vs Stanford"
+    val match_url: String,  // e.g., "/watch/66fcbc8b-efe6-4e74-a04e-07eecfbf698e/alpha/1"
+    val category: String?   // e.g., "Football" (optional, adjust based on actual API response)
+)
+
 class StreamedProvider : MainAPI() {
     override var mainUrl = "https://streamed.su"
     override var name = "Streamed"
@@ -22,29 +28,72 @@ class StreamedProvider : MainAPI() {
     private val mapper = ObjectMapper()
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val doc = app.get("$mainUrl/category/live").document
-        val items = doc.select("div.grid-item").mapNotNull { element ->
-            val title = element.selectFirst("h3")?.text() ?: return@mapNotNull null
-            val url = element.selectFirst("a")?.attr("href") ?: return@mapNotNull null
-            newLiveSearchResponse(
-                name = title,
-                url = url,
-                type = TvType.Live
-            )
+        try {
+            val response = app.get("$mainUrl/api/matches/all", headers = mapOf(
+                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+                "Referer" to "https://streamed.su/"
+            ))
+            println("getMainPage: HTTP Status=${response.code}, URL=$mainUrl/api/matches/all")
+            if (!response.isSuccessful) {
+                println("getMainPage: Failed to fetch matches, status=${response.code}")
+                return newHomePageResponse(emptyList())
+            }
+
+            val jsonText = response.text
+            println("getMainPage: JSON response length=${jsonText.length}")
+            val matches = mapper.readValue(jsonText, mapper.typeFactory.constructCollectionType(List::class.java, Match::class.java))
+            println("getMainPage: Parsed ${matches.size} matches")
+
+            // Group by category if available, otherwise list all matches under "Live Streams"
+            val homePageList = if (matches.any { it.category != null }) {
+                matches.groupBy { it.category ?: "Uncategorized" }.map { (category, matchList) ->
+                    val items = matchList.map { match ->
+                        newLiveSearchResponse(
+                            name = match.match_title,
+                            url = "$mainUrl${match.match_url}",
+                            type = TvType.Live
+                        )
+                    }
+                    HomePageList(category, items, isHorizontalImages = true)
+                }
+            } else {
+                val items = matches.map { match ->
+                    newLiveSearchResponse(
+                        name = match.match_title,
+                        url = "$mainUrl${match.match_url}",
+                        type = TvType.Live
+                    )
+                }
+                listOf(HomePageList("Live Streams", items, isHorizontalImages = true))
+            }
+
+            return newHomePageResponse(homePageList)
+        } catch (e: Exception) {
+            println("getMainPage: Exception occurred: ${e.message}")
+            e.printStackTrace()
+            return newHomePageResponse(listOf(HomePageList("Error", listOf(newLiveSearchResponse("Error Loading Matches", "$mainUrl/error", TvType.Live)))))
         }
-        return newHomePageResponse(listOf(HomePageList("Live Streams", items, isHorizontalImages = true)))
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val doc = app.get("$mainUrl/search?q=$query").document
-        return doc.select("div.grid-item").mapNotNull { element ->
-            val title = element.selectFirst("h3")?.text() ?: return@mapNotNull null
-            val url = element.selectFirst("a")?.attr("href") ?: return@mapNotNull null
-            newLiveSearchResponse(
-                name = title,
-                url = url,
-                type = TvType.Live
-            )
+        try {
+            val response = app.get("$mainUrl/api/matches/all", headers = mapOf(
+                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+                "Referer" to "https://streamed.su/"
+            ))
+            if (!response.isSuccessful) return emptyList()
+
+            val matches = mapper.readValue(response.text, mapper.typeFactory.constructCollectionType(List::class.java, Match::class.java))
+            return matches.filter { it.match_title.contains(query, ignoreCase = true) }.map { match ->
+                newLiveSearchResponse(
+                    name = match.match_title,
+                    url = "$mainUrl${match.match_url}",
+                    type = TvType.Live
+                )
+            }
+        } catch (e: Exception) {
+            println("search: Exception occurred: ${e.message}")
+            return emptyList()
         }
     }
 
