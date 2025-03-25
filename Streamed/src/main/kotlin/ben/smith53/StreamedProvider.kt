@@ -189,9 +189,9 @@ class StreamedProvider : MainAPI() {
             "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
             "Referer" to "https://streamed.su/"
         )
-        repeat(2) { attempt ->
+        for (attempt in 1..2) {
             val proxyResponse = app.get(proxyUrl, headers = proxyHeaders, timeout = 60)
-            println("Proxy request (attempt ${attempt + 1}): URL=$proxyUrl, Headers=$proxyHeaders, Status=${proxyResponse.code}")
+            println("Proxy request (attempt $attempt): URL=$proxyUrl, Headers=$proxyHeaders, Status=${proxyResponse.code}")
             val proxyText = proxyResponse.text
             println("Proxy response from $proxyUrl: $proxyText")
 
@@ -211,7 +211,7 @@ class StreamedProvider : MainAPI() {
             } else {
                 println("Proxy request failed: status=${proxyResponse.code}, response=$proxyText")
             }
-            if (attempt == 0) println("Retrying proxy request...")
+            if (attempt == 1) println("Retrying proxy request...")
         }
 
         // Fallback to embed page if proxy fails
