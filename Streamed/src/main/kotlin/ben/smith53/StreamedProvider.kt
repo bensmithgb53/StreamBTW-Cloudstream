@@ -26,7 +26,9 @@ class StreamedProvider : MainAPI() {
         val items = doc.select("div.grid-item").mapNotNull { element ->
             val title = element.selectFirst("h3")?.text() ?: return@mapNotNull null
             val url = element.selectFirst("a")?.attr("href") ?: return@mapNotNull null
-            newLiveSearchResponse(title, url, this.name)
+            newLiveSearchResponse(title, url, this.name) {
+                this.type = TvType.Live
+            }
         }
         return newHomePageResponse(listOf(HomePageList("Live Streams", items, isHorizontalImages = true)))
     }
@@ -36,7 +38,9 @@ class StreamedProvider : MainAPI() {
         return doc.select("div.grid-item").mapNotNull { element ->
             val title = element.selectFirst("h3")?.text() ?: return@mapNotNull null
             val url = element.selectFirst("a")?.attr("href") ?: return@mapNotNull null
-            newLiveSearchResponse(title, url, this.name)
+            newLiveSearchResponse(title, url, this.name) {
+                this.type = TvType.Live
+            }
         }
     }
 
@@ -144,11 +148,11 @@ class StreamedProvider : MainAPI() {
     ): Boolean {
         callback(
             ExtractorLink(
-                this.name,
-                this.name,
-                data,
-                "",
-                getQualityFromName("Unknown"), // Use a fallback quality
+                source = this.name,
+                name = this.name,
+                url = data,
+                referer = "",
+                quality = -1, // Use -1 for unknown quality
                 isM3u8 = true
             )
         )
