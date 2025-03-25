@@ -26,9 +26,12 @@ class StreamedProvider : MainAPI() {
         val items = doc.select("div.grid-item").mapNotNull { element ->
             val title = element.selectFirst("h3")?.text() ?: return@mapNotNull null
             val url = element.selectFirst("a")?.attr("href") ?: return@mapNotNull null
-            newLiveSearchResponse(title, url, this.name) {
-                this.type = TvType.Live
-            }
+            newLiveSearchResponse(
+                name = title,
+                url = url,
+                apiName = this.name,
+                type = TvType.Live
+            )
         }
         return newHomePageResponse(listOf(HomePageList("Live Streams", items, isHorizontalImages = true)))
     }
@@ -38,9 +41,12 @@ class StreamedProvider : MainAPI() {
         return doc.select("div.grid-item").mapNotNull { element ->
             val title = element.selectFirst("h3")?.text() ?: return@mapNotNull null
             val url = element.selectFirst("a")?.attr("href") ?: return@mapNotNull null
-            newLiveSearchResponse(title, url, this.name) {
-                this.type = TvType.Live
-            }
+            newLiveSearchResponse(
+                name = title,
+                url = url,
+                apiName = this.name,
+                type = TvType.Live
+            )
         }
     }
 
@@ -152,7 +158,7 @@ class StreamedProvider : MainAPI() {
                 name = this.name,
                 url = data,
                 referer = "",
-                quality = -1, // Use -1 for unknown quality
+                quality = -1, // Unknown quality
                 isM3u8 = true
             )
         )
