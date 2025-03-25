@@ -182,32 +182,63 @@ class StreamedProvider : MainAPI() {
         }
         println("Selected stream: id=${stream.id}, streamNo=${stream.streamNo}, hd=${stream.hd}, source=${stream.source}")
 
+        // Try proxy with retry
+        var m3u8Url = ""
         val proxyUrl = "https://streamed-proxy.onrender.com/get_m3u8?source=$sourceType&id=$matchId&streamNo=${stream.streamNo}"
         val proxyHeaders = mapOf(
             "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
             "Referer" to "https://streamed.su/"
         )
-        val proxyResponse = app.get(proxyUrl, headers = proxyHeaders, timeout = 60)
-        println("Proxy request: URL=$proxyUrl, Headers=$proxyHeaders, Status=${proxyResponse.code}")
-        val proxyText = proxyResponse.text
-        println("Proxy response from $proxyUrl: $proxyText")
+        repeat(2) { attempt ->
+            val proxyResponse = app.get(proxyUrl, headers = proxyHeaders, timeout = 60)
+            println("Proxy request (attempt ${attempt + 1}): URL=$proxyUrl, Headers=$proxyHeaders, Status=${proxyResponse.code}")
+            val proxyText = proxyResponse.text
+            println("Proxy response from $proxyUrl: $proxyText")
 
-        val m3u8Url = if (proxyResponse.isSuccessful && proxyText.isNotBlank()) {
-            try {
-                val json = mapper.readValue<Map<String, String>>(proxyText)
-                json["m3u8_url"]?.also { url ->
-                    println("Proxy returned valid M3U8 URL: $url")
-                } ?: run {
-                    println("No m3u8_url in proxy response")
-                    ""
+            if (proxyResponse.isSuccessful && proxyText.isNotBlank()) {
+                try {
+                    val json = mapper.readValue<Map<String, String>>(proxyText)
+                    m3u8Url = json["m3u8_url"] ?: ""
+                    if (m3u8Url.isNotBlank()) {
+                        println("Proxy returned valid M3U8 URL: $m3u8Url")
+                        break
+                    } else {
+                        println("No m3u8_url in proxy response")
+                    }
+                } catch (e: Exception) {
+                    println("Failed to parse proxy response: ${e.message}")
                 }
-            } catch (e: Exception) {
-                println("Failed to parse proxy response: ${e.message}")
-                ""
+            } else {
+                println("Proxy request failed: status=${proxyResponse.code}, response=$proxyText")
             }
-        } else {
-            println("Proxy request failed: status=${proxyResponse.code}, response=$proxyText")
-            ""
+            if (attempt == 0) println("Retrying proxy request...")
+        }
+
+        // Fallback to embed page if proxy fails
+        if (m3u8Url.isBlank()) {
+            println("Proxy failed after retries, scraping embed page")
+            val embedUrl = "https://embedme.top/embed/$sourceType/$matchId/${stream.streamNo}"
+            val embedHeaders = mapOf(
+                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+                "Referer" to "https://embedme.top/",
+                "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
+            )
+            val embedResponse = app.get(embedUrl, headers = embedHeaders, timeout = 30)
+            val embedText = if (embedResponse.headers["Content-Encoding"] == "gzip") {
+                GZIPInputStream(embedResponse.body.byteStream()).bufferedReader().use { it.readText() }
+            } else {
+                embedResponse.text
+            }
+            println("Embed page response for $embedUrl: $embedText")
+
+            val m3u8Regex = Regex("https://[\\w.-]+/[\\w/-]+\\.m3u8\\?md5=[\\w-]+&expiry=\\d+")
+            m3u8Url = m3u8Regex.find(embedText)?.value ?: run {
+                val relativeM3u8Regex = Regex("/s/[\\w/-]+\\.m3u8\\?md5=[\\w-]+&expiry=\\d+")
+                relativeM3u8Regex.find(embedText)?.value?.let { relativeUrl ->
+                    "https://rr.vipstreams.in$relativeUrl"
+                } ?: ""
+            }
+            println("Scraped M3U8 URL from embed page: $m3u8Url")
         }
 
         println("Final M3U8 URL: $m3u8Url")
@@ -226,7 +257,7 @@ class StreamedProvider : MainAPI() {
                 ""
             ) {
                 this.apiName = this@StreamedProvider.name
-                this.plot = "Failed to retrieve stream URL from proxy."
+                this.plot = "Failed to retrieve stream URL from proxy or embed page."
             }
         }
     }
