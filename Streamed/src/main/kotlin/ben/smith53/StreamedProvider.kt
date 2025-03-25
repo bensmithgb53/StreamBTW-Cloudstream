@@ -151,11 +151,11 @@ class StreamedProvider : MainAPI() {
         println("Stream API response for $streamUrl: $text")
 
         if (!response.isSuccessful || text.contains("Not Found")) {
-            println("Stream not found for $streamUrl, status=${response.code}, using test stream")
+            println("Stream not found for $streamUrl, status=${response.code}")
             return newLiveStreamLoadResponse(
                 "Stream Unavailable - $matchId",
                 correctedUrl,
-                "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
+                ""
             ) {
                 this.apiName = this@StreamedProvider.name
                 this.plot = "The requested stream could not be found."
@@ -174,7 +174,7 @@ class StreamedProvider : MainAPI() {
             return newLiveStreamLoadResponse(
                 "No Streams Available - $matchId",
                 correctedUrl,
-                "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
+                ""
             ) {
                 this.apiName = this@StreamedProvider.name
                 this.plot = "No streams were returned for this match."
@@ -183,34 +183,51 @@ class StreamedProvider : MainAPI() {
         println("Selected stream: id=${stream.id}, streamNo=${stream.streamNo}, hd=${stream.hd}, source=${stream.source}")
 
         val proxyUrl = "https://streamed-proxy.onrender.com/get_m3u8?source=$sourceType&id=$matchId&streamNo=${stream.streamNo}"
-        val proxyResponse = app.get(proxyUrl, timeout = 60)
+        val proxyHeaders = mapOf(
+            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+            "Referer" to "https://streamed.su/"
+        )
+        val proxyResponse = app.get(proxyUrl, headers = proxyHeaders, timeout = 60)
+        println("Proxy request: URL=$proxyUrl, Headers=$proxyHeaders, Status=${proxyResponse.code}")
         val proxyText = proxyResponse.text
         println("Proxy response from $proxyUrl: $proxyText")
 
-        val m3u8Url = if (proxyResponse.isSuccessful) {
+        val m3u8Url = if (proxyResponse.isSuccessful && proxyText.isNotBlank()) {
             try {
                 val json = mapper.readValue<Map<String, String>>(proxyText)
-                json["m3u8_url"] ?: run {
-                    println("No m3u8_url in proxy response, using test stream")
-                    "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
+                json["m3u8_url"]?.also { url ->
+                    println("Proxy returned valid M3U8 URL: $url")
+                } ?: run {
+                    println("No m3u8_url in proxy response")
+                    ""
                 }
             } catch (e: Exception) {
-                println("Failed to parse proxy response: ${e.message}, using test stream")
-                "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
+                println("Failed to parse proxy response: ${e.message}")
+                ""
             }
         } else {
-            println("Proxy request failed: status=${proxyResponse.code}, using test stream")
-            "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
+            println("Proxy request failed: status=${proxyResponse.code}, response=$proxyText")
+            ""
         }
 
         println("Final M3U8 URL: $m3u8Url")
-        return newLiveStreamLoadResponse(
-            "${stream.source} - ${if (stream.hd) "HD" else "SD"}",
-            m3u8Url,
-            m3u8Url
-        ) {
-            this.apiName = this@StreamedProvider.name
-            this.plot = if (m3u8Url.contains("test-streams")) "Proxy server failed; using test stream." else null
+        return if (m3u8Url.isNotBlank()) {
+            newLiveStreamLoadResponse(
+                "${stream.source} - ${if (stream.hd) "HD" else "SD"}",
+                m3u8Url,
+                m3u8Url
+            ) {
+                this.apiName = this@StreamedProvider.name
+            }
+        } else {
+            newLiveStreamLoadResponse(
+                "Stream Error - $matchId",
+                correctedUrl,
+                ""
+            ) {
+                this.apiName = this@StreamedProvider.name
+                this.plot = "Failed to retrieve stream URL from proxy."
+            }
         }
     }
 
@@ -220,6 +237,11 @@ class StreamedProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        if (data.isBlank()) {
+            println("loadLinks: No URL provided, skipping callback")
+            return false
+        }
+        println("loadLinks: Loading URL: $data")
         callback(
             ExtractorLink(
                 source = this.name,
