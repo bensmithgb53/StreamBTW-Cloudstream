@@ -70,7 +70,7 @@ class StreamedProvider : MainAPI() {
         val matches: List<APIMatch> = mapper.readValue(text)
         val currentTime = System.currentTimeMillis() / 1000
         val liveMatches = matches.filter { it.date / 1000 >= currentTime - 86400 }
-            .distinctBy { it.id } // Ensure unique matches by ID
+            .distinctBy { it.id } // Unique by match ID
 
         if (liveMatches.isEmpty()) {
             return listOf(
@@ -93,8 +93,8 @@ class StreamedProvider : MainAPI() {
                     teams.home?.badge?.let { homeBadge ->
                         teams.away?.badge?.let { awayBadge ->
                             "$posterBase/$homeBadge/$awayBadge.webp"
-                        }
-                    } ?: teams.home?.badge?.let { "$badgeBase/$it.webp" }
+                        } ?: "$badgeBase/$homeBadge.webp"
+                    }
                 }
                 newLiveSearchResponse(match.title, match.id, TvType.Live) {
                     this.posterUrl = posterUrl
@@ -116,10 +116,6 @@ class StreamedProvider : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse {
         val matchId = url.split("|").first().split("/").last()
-        val streamsJson = app.get(streamsUrl, headers = headers, timeout = 30).text
-        val streamLinks: Map<String, StreamLink> = mapper.readValue(streamsJson)
-        val matchStreams = streamLinks.values.filter { it.matchId == matchId }
-
         val response = app.get("$mainUrl/api/matches/all", headers = headers, timeout = 30)
         val text = if (response.headers["Content-Encoding"] == "gzip") {
             GZIPInputStream(response.body.byteStream()).bufferedReader().use { it.readText() }
@@ -129,14 +125,13 @@ class StreamedProvider : MainAPI() {
         val matches: List<APIMatch> = mapper.readValue(text)
         val match = matches.find { it.id == matchId } ?: throw ErrorLoadingException("Match not found")
 
-        val defaultStream = matchStreams.firstOrNull { it.m3u8_url.isNotBlank() }?.m3u8_url ?: ""
-        return newLiveStreamLoadResponse(
-            match.title,
-            url,
-            defaultStream
-        ) {
+        val streamsJson = app.get(streamsUrl, headers = headers, timeout = 30).text
+        val streamLinks: Map<String, StreamLink> = mapper.readValue(streamsJson)
+        val matchStreams = streamLinks.values.filter { it.matchId == matchId && it.m3u8_url.isNotBlank() }
+        val defaultStream = matchStreams.firstOrNull()?.m3u8_url ?: ""
+
+        return newLiveStreamLoadResponse(match.title, url, defaultStream) {
             this.apiName = this@StreamedProvider.name
-            this.data = matchStreams.map { it.m3u8_url }.filter { it.isNotBlank() }
             this.posterUrl = match.poster?.let { 
                 val cleanPoster = it.removeSuffix(".webp")
                 if (cleanPoster.startsWith("/")) "$mainUrl/api/images/proxy$cleanPoster.webp" 
@@ -145,8 +140,8 @@ class StreamedProvider : MainAPI() {
                 teams.home?.badge?.let { homeBadge ->
                     teams.away?.badge?.let { awayBadge ->
                         "$posterBase/$homeBadge/$awayBadge.webp"
-                    }
-                } ?: teams.home?.badge?.let { "$badgeBase/$it.webp" }
+                    } ?: "$badgeBase/$homeBadge.webp"
+                }
             }
         }
     }
