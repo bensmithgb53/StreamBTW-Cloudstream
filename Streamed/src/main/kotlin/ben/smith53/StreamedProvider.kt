@@ -60,7 +60,6 @@ class StreamedProvider : MainAPI() {
         val source: String
     )
 
-    // Made suspend to use app.get() properly
     private suspend fun warmUpProxy() {
         try {
             val warmUpUrl = "https://streamed-proxy-vercel.vercel.app/api/get_m3u8?source=alpha&id=warmup&streamNo=1"
@@ -121,7 +120,7 @@ class StreamedProvider : MainAPI() {
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        warmUpProxy() // Now safe to call as suspend
+        warmUpProxy()
         return newHomePageResponse(fetchLiveMatches())
     }
 
@@ -197,9 +196,9 @@ class StreamedProvider : MainAPI() {
             "Referer" to "https://streamed.su/"
         )
         val proxyResponse = app.get(proxyUrl, headers = proxyHeaders, timeout = 120)
-        println("Proxy request: URL=$proxyUrl, Headers=$proxyHeaders, Status=${proxyResponse.code}")
+        println("Proxy request: URL=$proxyUrl, Headers=$proxyHeaders, Status=${proxyResponse.code}, Content-Length=${proxyResponse.headers["Content-Length"]}")
         val proxyText = proxyResponse.text
-        println("Proxy raw response: $proxyText")
+        println("Proxy raw response: '$proxyText'") // Quoted to show if truly empty
 
         val m3u8Url = if (proxyResponse.isSuccessful && proxyText.isNotBlank()) {
             try {
@@ -207,15 +206,15 @@ class StreamedProvider : MainAPI() {
                 json["m3u8_url"]?.also { url ->
                     println("Proxy returned valid M3U8 URL: $url")
                 } ?: run {
-                    println("No m3u8_url found in proxy response")
+                    println("No m3u8_url found in proxy response: $json")
                     ""
                 }
             } catch (e: Exception) {
-                println("Failed to parse proxy response: ${e.message}, Raw response: $proxyText")
+                println("Failed to parse proxy response: ${e.message}, Raw response: '$proxyText'")
                 ""
             }
         } else {
-            println("Proxy request failed: status=${proxyResponse.code}, response=$proxyText")
+            println("Proxy request failed or empty: status=${proxyResponse.code}, response='$proxyText'")
             ""
         }
 
