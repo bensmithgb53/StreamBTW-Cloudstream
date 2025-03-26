@@ -23,15 +23,10 @@ class StreamedProvider : MainAPI() {
         "Accept" to "application/json, text/plain, */*"
     )
 
-    private val proxyHeaders = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
-        "Referer" to "https://streamed.su/",
-        "Accept" to "*/*" // Match curl exactly
-    )
-
     companion object {
         private const val posterBase = "https://streamed.su/api/images/poster"
         private const val badgeBase = "https://streamed.su/api/images/badge"
+        private const val streamsUrl = "https://bensmithgb53.github.io/streamed-links/streams.json"
         private val mapper = jacksonObjectMapper()
     }
 
@@ -59,23 +54,11 @@ class StreamedProvider : MainAPI() {
         )
     }
 
-    data class Stream(
-        val id: String,
-        val streamNo: String,
-        val hd: Boolean,
-        val source: String
+    data class StreamLink(
+        val matchId: String,
+        val source: String,
+        val m3u8_url: String
     )
-
-    private suspend fun warmUpProxy() {
-        try {
-            val warmUpUrl = "https://streamed-proxy-vercel.vercel.app/api/get_m3u8?source=alpha&id=warmup&streamNo=1"
-            app.get(warmUpUrl, headers = proxyHeaders, timeout = 10).also {
-                println("Proxy warm-up request: Status=${it.code}, Response=${it.text}")
-            }
-        } catch (e: Exception) {
-            println("Proxy warm-up failed: ${e.message}")
-        }
-    }
 
     private suspend fun fetchLiveMatches(): List<HomePageList> {
         val response = app.get("$mainUrl/api/matches/all", headers = headers, timeout = 30)
@@ -84,17 +67,16 @@ class StreamedProvider : MainAPI() {
         } else {
             response.text
         }
-        println("Matches API response: $text")
         val matches: List<APIMatch> = mapper.readValue(text)
         val currentTime = System.currentTimeMillis() / 1000
-        println("Current time: $currentTime, Filter threshold: ${currentTime - 24 * 60 * 60}")
-        val liveMatches = matches.filter { it.date / 1000 >= (currentTime - 24 * 60 * 60) }
+        val liveMatches = matches.filter { it.date / 1000 >= currentTime - 86400 }
+            .distinctBy { it.id } // Ensure unique matches by ID
 
         if (liveMatches.isEmpty()) {
             return listOf(
                 HomePageList(
                     "No Live Matches",
-                    listOf(newLiveSearchResponse("No live matches available", "$mainUrl|alpha|default", TvType.Live)),
+                    listOf(newLiveSearchResponse("No live matches available", "$mainUrl|default", TvType.Live)),
                     isHorizontalImages = false
                 )
             )
@@ -102,9 +84,7 @@ class StreamedProvider : MainAPI() {
 
         val groupedMatches = liveMatches.groupBy { it.category.capitalize() }
         return groupedMatches.map { (category, categoryMatches) ->
-            val eventList = categoryMatches.mapNotNull { match ->
-                val source = match.sources.firstOrNull() ?: return@mapNotNull null
-                println("Match: ${match.title}, Source: ${source.source}, ID: ${source.id}")
+            val eventList = categoryMatches.map { match ->
                 val posterUrl = match.poster?.let { 
                     val cleanPoster = it.removeSuffix(".webp")
                     if (cleanPoster.startsWith("/")) "$mainUrl/api/images/proxy$cleanPoster.webp" 
@@ -114,11 +94,10 @@ class StreamedProvider : MainAPI() {
                         teams.away?.badge?.let { awayBadge ->
                             "$posterBase/$homeBadge/$awayBadge.webp"
                         }
-                    }
+                    } ?: teams.home?.badge?.let { "$badgeBase/$it.webp" }
                 }
-                val homeBadge = match.teams?.home?.badge?.let { "$badgeBase/$it.webp" }
-                newLiveSearchResponse(match.title, "${match.id}|${source.source}|${source.id}", TvType.Live) {
-                    this.posterUrl = posterUrl ?: homeBadge
+                newLiveSearchResponse(match.title, match.id, TvType.Live) {
+                    this.posterUrl = posterUrl
                 }
             }
             HomePageList(category, eventList, isHorizontalImages = false)
@@ -126,7 +105,6 @@ class StreamedProvider : MainAPI() {
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        warmUpProxy()
         return newHomePageResponse(fetchLiveMatches())
     }
 
@@ -137,109 +115,38 @@ class StreamedProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val correctedUrl = if (url.startsWith("$mainUrl/watch/")) {
-            val parts = url.split("/")
-            val matchId = parts[parts.indexOf("watch") + 1].split("-").last()
-            val sourceType = parts[parts.size - 2]
-            val sourceId = parts.last()
-            "$matchId|$sourceType|$sourceId"
+        val matchId = url.split("|").first().split("/").last()
+        val streamsJson = app.get(streamsUrl, headers = headers, timeout = 30).text
+        val streamLinks: Map<String, StreamLink> = mapper.readValue(streamsJson)
+        val matchStreams = streamLinks.values.filter { it.matchId == matchId }
+
+        val response = app.get("$mainUrl/api/matches/all", headers = headers, timeout = 30)
+        val text = if (response.headers["Content-Encoding"] == "gzip") {
+            GZIPInputStream(response.body.byteStream()).bufferedReader().use { it.readText() }
         } else {
-            url
+            response.text
         }
-        val parts = correctedUrl.split("|")
-        val matchId = parts[0].split("/").last()
-        val sourceType = if (parts.size > 1) parts[1] else "alpha"
-        val sourceId = if (parts.size > 2) parts[2] else matchId
+        val matches: List<APIMatch> = mapper.readValue(text)
+        val match = matches.find { it.id == matchId } ?: throw ErrorLoadingException("Match not found")
 
-        println("Loading stream with corrected URL: $correctedUrl")
-        println("Parsed: matchId=$matchId, sourceType=$sourceType, sourceId=$sourceId")
-
-        val streamUrl = "$mainUrl/api/stream/$sourceType/$sourceId"
-        val streamResponse = app.get(streamUrl, headers = headers, timeout = 30)
-        println("Stream API request: URL=$streamUrl, Headers=$headers, Status=${streamResponse.code}")
-        val streamText = if (streamResponse.headers["Content-Encoding"] == "gzip") {
-            GZIPInputStream(streamResponse.body.byteStream()).bufferedReader().use { it.readText() }
-        } else {
-            streamResponse.text
-        }
-        println("Stream API response for $streamUrl: $streamText")
-
-        if (!streamResponse.isSuccessful || streamText.contains("Not Found")) {
-            println("Stream not found for $streamUrl, status=${streamResponse.code}")
-            return newLiveStreamLoadResponse(
-                "Stream Unavailable - $matchId",
-                correctedUrl,
-                ""
-            ) {
-                this.apiName = this@StreamedProvider.name
-                this.plot = "The requested stream could not be found."
-            }
-        }
-
-        val streams: List<Stream> = try {
-            mapper.readValue(streamText, mapper.typeFactory.constructCollectionType(List::class.java, Stream::class.java))
-        } catch (e: Exception) {
-            println("Failed to parse streams: ${e.message}")
-            emptyList()
-        }
-        val stream = streams.firstOrNull()
-        if (stream == null) {
-            println("No streams available for $streamUrl")
-            return newLiveStreamLoadResponse(
-                "No Streams Available - $matchId",
-                correctedUrl,
-                ""
-            ) {
-                this.apiName = this@StreamedProvider.name
-                this.plot = "No streams were returned for this match."
-            }
-        }
-        println("Selected stream: id=${stream.id}, streamNo=${stream.streamNo}, hd=${stream.hd}, source=${stream.source}")
-
-        val proxyUrl = "https://streamed-proxy-vercel.vercel.app/api/get_m3u8?source=$sourceType&id=$matchId&streamNo=${stream.streamNo}"
-        val proxyResponse = app.get(proxyUrl, headers = proxyHeaders, timeout = 120)
-        println("Proxy request: URL=$proxyUrl, Headers=$proxyHeaders, Status=${proxyResponse.code}, Headers=${proxyResponse.headers}")
-        val proxyText = proxyResponse.text
-        println("Proxy raw response: '$proxyText'")
-
-        val m3u8Url = if (proxyResponse.isSuccessful && proxyText.isNotBlank()) {
-            try {
-                val json = mapper.readValue<Map<String, String>>(proxyText)
-                json["m3u8_url"]?.also { url ->
-                    println("Proxy returned valid M3U8 URL: $url")
-                } ?: run {
-                    println("No m3u8_url found in proxy response: $json")
-                    ""
-                }
-            } catch (e: Exception) {
-                println("Failed to parse proxy response: ${e.message}, Raw response: '$proxyText'")
-                ""
-            }
-        } else {
-            println("Proxy request failed or empty: status=${proxyResponse.code}, response='$proxyText'")
-            ""
-        }
-
-        println("Final M3U8 URL: $m3u8Url")
-        return if (m3u8Url.isNotBlank()) {
-            newLiveStreamLoadResponse(
-                "${stream.source} - ${if (stream.hd) "HD" else "SD"}",
-                m3u8Url,
-                m3u8Url
-            ) {
-                this.apiName = this@StreamedProvider.name
-            }
-        } else {
-            // Fallback for testing
-            val fallbackUrl = "https://rr.vipstreams.in/playlist.m3u8" // Simplified test URL
-            println("Using fallback URL: $fallbackUrl")
-            newLiveStreamLoadResponse(
-                "Fallback Stream - $matchId",
-                fallbackUrl,
-                fallbackUrl
-            ) {
-                this.apiName = this@StreamedProvider.name
-                this.plot = "Proxy failed, using fallback."
+        val defaultStream = matchStreams.firstOrNull { it.m3u8_url.isNotBlank() }?.m3u8_url ?: ""
+        return newLiveStreamLoadResponse(
+            match.title,
+            url,
+            defaultStream
+        ) {
+            this.apiName = this@StreamedProvider.name
+            this.data = matchStreams.map { it.m3u8_url }.filter { it.isNotBlank() }
+            this.posterUrl = match.poster?.let { 
+                val cleanPoster = it.removeSuffix(".webp")
+                if (cleanPoster.startsWith("/")) "$mainUrl/api/images/proxy$cleanPoster.webp" 
+                else "$mainUrl/api/images/proxy/$cleanPoster.webp" 
+            } ?: match.teams?.let { teams ->
+                teams.home?.badge?.let { homeBadge ->
+                    teams.away?.badge?.let { awayBadge ->
+                        "$posterBase/$homeBadge/$awayBadge.webp"
+                    }
+                } ?: teams.home?.badge?.let { "$badgeBase/$it.webp" }
             }
         }
     }
@@ -250,22 +157,26 @@ class StreamedProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        if (data.isBlank()) {
-            println("loadLinks: No URL provided, skipping callback")
-            return false
-        }
-        println("loadLinks: Loading URL: $data")
-        callback(
-            ExtractorLink(
-                source = this.name,
-                name = "Streamed Sports",
-                url = data,
-                referer = "https://streamed.su/",
-                quality = -1,
-                isM3u8 = true,
-                headers = headers
+        val matchId = data.split("|").first().split("/").last()
+        val streamsJson = app.get(streamsUrl, headers = headers, timeout = 30).text
+        val streamLinks: Map<String, StreamLink> = mapper.readValue(streamsJson)
+        val matchStreams = streamLinks.values.filter { it.matchId == matchId && it.m3u8_url.isNotBlank() }
+
+        if (matchStreams.isEmpty()) return false
+
+        matchStreams.forEachIndexed { index, streamLink ->
+            callback(
+                ExtractorLink(
+                    source = this.name,
+                    name = "Source ${index + 1} (${streamLink.source})",
+                    url = streamLink.m3u8_url,
+                    referer = "https://streamed.su/",
+                    quality = if (streamLink.m3u8_url.contains("hd", true)) 720 else -1,
+                    isM3u8 = true,
+                    headers = headers
+                )
             )
-        )
+        }
         return true
     }
 
