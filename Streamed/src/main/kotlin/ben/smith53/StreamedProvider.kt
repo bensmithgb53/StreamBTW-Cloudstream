@@ -23,6 +23,12 @@ class StreamedProvider : MainAPI() {
         "Accept" to "application/json, text/plain, */*"
     )
 
+    private val proxyHeaders = mapOf(
+        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+        "Referer" to "https://streamed.su/",
+        "Accept" to "*/*" // Match curl exactly
+    )
+
     companion object {
         private const val posterBase = "https://streamed.su/api/images/poster"
         private const val badgeBase = "https://streamed.su/api/images/badge"
@@ -63,7 +69,7 @@ class StreamedProvider : MainAPI() {
     private suspend fun warmUpProxy() {
         try {
             val warmUpUrl = "https://streamed-proxy-vercel.vercel.app/api/get_m3u8?source=alpha&id=warmup&streamNo=1"
-            app.get(warmUpUrl, headers = headers, timeout = 10).also {
+            app.get(warmUpUrl, headers = proxyHeaders, timeout = 10).also {
                 println("Proxy warm-up request: Status=${it.code}, Response=${it.text}")
             }
         } catch (e: Exception) {
@@ -191,14 +197,10 @@ class StreamedProvider : MainAPI() {
         println("Selected stream: id=${stream.id}, streamNo=${stream.streamNo}, hd=${stream.hd}, source=${stream.source}")
 
         val proxyUrl = "https://streamed-proxy-vercel.vercel.app/api/get_m3u8?source=$sourceType&id=$matchId&streamNo=${stream.streamNo}"
-        val proxyHeaders = mapOf(
-            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
-            "Referer" to "https://streamed.su/"
-        )
         val proxyResponse = app.get(proxyUrl, headers = proxyHeaders, timeout = 120)
-        println("Proxy request: URL=$proxyUrl, Headers=$proxyHeaders, Status=${proxyResponse.code}, Content-Length=${proxyResponse.headers["Content-Length"]}")
+        println("Proxy request: URL=$proxyUrl, Headers=$proxyHeaders, Status=${proxyResponse.code}, Headers=${proxyResponse.headers}")
         val proxyText = proxyResponse.text
-        println("Proxy raw response: '$proxyText'") // Quoted to show if truly empty
+        println("Proxy raw response: '$proxyText'")
 
         val m3u8Url = if (proxyResponse.isSuccessful && proxyText.isNotBlank()) {
             try {
@@ -228,13 +230,16 @@ class StreamedProvider : MainAPI() {
                 this.apiName = this@StreamedProvider.name
             }
         } else {
+            // Fallback for testing
+            val fallbackUrl = "https://rr.vipstreams.in/playlist.m3u8" // Simplified test URL
+            println("Using fallback URL: $fallbackUrl")
             newLiveStreamLoadResponse(
-                "Stream Error - $matchId",
-                correctedUrl,
-                ""
+                "Fallback Stream - $matchId",
+                fallbackUrl,
+                fallbackUrl
             ) {
                 this.apiName = this@StreamedProvider.name
-                this.plot = "Failed to retrieve stream URL from proxy."
+                this.plot = "Proxy failed, using fallback."
             }
         }
     }
