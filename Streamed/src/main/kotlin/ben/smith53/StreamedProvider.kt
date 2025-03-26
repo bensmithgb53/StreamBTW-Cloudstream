@@ -158,7 +158,7 @@ class StreamedProvider : MainAPI() {
         val streamText = if (streamResponse.headers["Content-Encoding"] == "gzip") {
             GZIPInputStream(streamResponse.body.byteStream()).bufferedReader().use { it.readText() }
         } else {
-            response.text
+            streamResponse.text // Fixed: Use streamResponse, not response
         }
         println("Stream API response for $streamUrl: $streamText")
 
