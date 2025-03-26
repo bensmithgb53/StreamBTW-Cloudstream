@@ -5,8 +5,6 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
 import java.util.zip.GZIPInputStream
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 
 class StreamedProvider : MainAPI() {
     override var mainUrl = "https://streamed.su"
@@ -62,16 +60,15 @@ class StreamedProvider : MainAPI() {
         val source: String
     )
 
-    private suspend fun warmUpProxy() {
-        withContext(Dispatchers.IO) {
-            try {
-                val warmUpUrl = "https://streamed-proxy-vercel.vercel.app/api/get_m3u8?source=alpha&id=warmup&streamNo=1"
-                app.get(warmUpUrl, headers = headers, timeout = 10).also {
-                    println("Proxy warm-up request: Status=${it.code}, Response=${it.text}")
-                }
-            } catch (e: Exception) {
-                println("Proxy warm-up failed: ${e.message}")
+    // Removed coroutines; runs synchronously
+    private fun warmUpProxy() {
+        try {
+            val warmUpUrl = "https://streamed-proxy-vercel.vercel.app/api/get_m3u8?source=alpha&id=warmup&streamNo=1"
+            app.get(warmUpUrl, headers = headers, timeout = 10).also {
+                println("Proxy warm-up request: Status=${it.code}, Response=${it.text}")
             }
+        } catch (e: Exception) {
+            println("Proxy warm-up failed: ${e.message}")
         }
     }
 
@@ -124,7 +121,7 @@ class StreamedProvider : MainAPI() {
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        warmUpProxy() // Wake up the proxy when the app loads
+        warmUpProxy() // Call synchronously
         return newHomePageResponse(fetchLiveMatches())
     }
 
@@ -158,7 +155,7 @@ class StreamedProvider : MainAPI() {
         val streamText = if (streamResponse.headers["Content-Encoding"] == "gzip") {
             GZIPInputStream(streamResponse.body.byteStream()).bufferedReader().use { it.readText() }
         } else {
-            streamResponse.text // Fixed: Use streamResponse, not response
+            streamResponse.text
         }
         println("Stream API response for $streamUrl: $streamText")
 
