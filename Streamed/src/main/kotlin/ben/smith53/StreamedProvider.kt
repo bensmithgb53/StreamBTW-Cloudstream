@@ -60,8 +60,8 @@ class StreamedProvider : MainAPI() {
         val source: String
     )
 
-    // Removed coroutines; runs synchronously
-    private fun warmUpProxy() {
+    // Made suspend to use app.get() properly
+    private suspend fun warmUpProxy() {
         try {
             val warmUpUrl = "https://streamed-proxy-vercel.vercel.app/api/get_m3u8?source=alpha&id=warmup&streamNo=1"
             app.get(warmUpUrl, headers = headers, timeout = 10).also {
@@ -121,7 +121,7 @@ class StreamedProvider : MainAPI() {
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        warmUpProxy() // Call synchronously
+        warmUpProxy() // Now safe to call as suspend
         return newHomePageResponse(fetchLiveMatches())
     }
 
