@@ -303,13 +303,14 @@ class StreamedProvider(private val context: Context) : MainAPI() {
         val body = json.toRequestBody("application/json".toMediaType())
         val request = Request.Builder()
             .url("https://embedme.top/fetch")
-            .post(body)
+            .post evaluating(body)
             .headers(okhttp3.Headers.Builder().apply { embedHeaders.forEach { add(it.key, it.value) } }.build())
             .build()
 
         return client.newCall(request).execute().use { response ->
-            println("Fetch response from embedme.top: status=${response.code}, body=${response.body?.string()}")
-            if (response.isSuccessful) response.body?.string() else null
+            val responseBody = if (response.isSuccessful) response.body?.string() else null
+            println("Fetch response from embedme.top: status=${response.code}, body=$responseBody")
+            responseBody
         }
     }
 
