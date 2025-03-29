@@ -6,7 +6,6 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
 import java.util.zip.GZIPInputStream
-import okhttp3.Headers
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -286,9 +285,9 @@ class StreamedProvider(private val context: Context) : MainAPI() {
                     name = "${stream.source} - ${if (stream.hd) "HD" else "SD"} (${stream.language})",
                     url = m3u8Url,
                     referer = "https://embedme.top/",
-                    quality = if (stream.hd) 720 else -1, // Using hardcoded quality since Qualities might not be available
+                    quality = if (stream.hd) 720 else -1,
                     isM3u8 = true,
-                    headers = Headers.Builder().apply { embedHeaders.forEach { add(it.key, it.value) } }.build()
+                    headers = embedHeaders
                 )
             )
         }
@@ -302,7 +301,7 @@ class StreamedProvider(private val context: Context) : MainAPI() {
         val request = Request.Builder()
             .url("https://embedme.top/fetch")
             .post(body)
-            .headers(Headers.Builder().apply { embedHeaders.forEach { add(it.key, it.value) } }.build())
+            .headers(okhttp3.Headers.Builder().apply { embedHeaders.forEach { add(it.key, it.value) } }.build())
             .build()
 
         return client.newCall(request).execute().use { response ->
@@ -311,7 +310,7 @@ class StreamedProvider(private val context: Context) : MainAPI() {
         }
     }
 
-    private suspend fun decryptWithWebView(encrypted: String, sourceType: String, teamSlug: String, streamNo: String): String = suspendCancellableCoroutine { cont ->
+    private suspend fun decryptWithWebView(encrypted: String, sourceType: String, teamSlug: String, streamNo: String): String = suspendCancellableCoroutine<String> { cont ->
         val webView = WebView(context)
         webView.settings.javaScriptEnabled = true
         webView.webViewClient = object : WebViewClient() {
