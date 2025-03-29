@@ -170,7 +170,7 @@ class StreamedProvider : MainAPI() {
                 url = correctedUrl,
                 dataUrl = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
             ) {
-                this.name = this@StreamedProvider.name
+                this.apiName = this@StreamedProvider.name // Changed from 'name' to 'apiName'
                 this.plot = "The requested stream could not be found."
             }
         }
@@ -186,7 +186,7 @@ class StreamedProvider : MainAPI() {
             url = correctedUrl,
             dataUrl = m3u8Url
         ) {
-            this.name = this@StreamedProvider.name
+            this.apiName = this@StreamedProvider.name // Changed from 'name' to 'apiName'
             this.plot = "Live stream from Streamed Sports"
         }
     }
@@ -281,11 +281,11 @@ class StreamedProvider : MainAPI() {
 
         callback(
             ExtractorLink(
-                this.name,
-                "Streamed Sports",
-                data,
-                "https://embedme.top/",
-                -1, // Use -1 for unknown quality since Qualities.Unknown might not exist
+                source = this.name,
+                name = "Streamed Sports",
+                url = data,
+                referer = "https://embedme.top/",
+                quality = -1, // Use -1 for unknown quality
                 headers = streamHeaders,
                 isM3u8 = true
             )
