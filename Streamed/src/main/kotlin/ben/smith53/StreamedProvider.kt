@@ -19,7 +19,7 @@ import java.util.zip.GZIPInputStream
 class StreamedProvider : MainAPI() {
     override var mainUrl = "https://streamed.su"
     override var name = "Streamed"
-    override val supportedTypes = setOf(TvType.Live) // Fixed: Use TvType.Live
+    override val supportedTypes = setOf(TvType.Live)
     override var lang = "en"
     override val hasMainPage = true
     override val hasDownloadSupport = false
@@ -56,7 +56,7 @@ class StreamedProvider : MainAPI() {
         val source: String
     )
 
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? { // Fixed: Added ? and correct signature
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
         val response = app.get("$mainUrl/api/matches/all", headers = headers, timeout = 30)
         val matchesText = if (response.headers["Content-Encoding"]?.equals("gzip") == true) {
             GZIPInputStream(response.body.byteStream()).bufferedReader().use { it.readText() }
@@ -65,7 +65,7 @@ class StreamedProvider : MainAPI() {
         }
         println("Fetched matches from API: $matchesText")
 
-        val matches = mapper.readValue(matchesText, object : TypeReference<List<APIMatch>>() {}) // Fixed: Use TypeReference
+        val matches = mapper.readValue(matchesText, object : TypeReference<List<APIMatch>>() {})
         println("Parsed ${matches.size} matches")
 
         val homePageList = matches.mapNotNull { match ->
@@ -77,7 +77,7 @@ class StreamedProvider : MainAPI() {
                 match.title,
                 listOf(
                     newLiveSearchResponse(match.title, url, this.name) {
-                        this.type = TvType.Live
+                        this.type = TvType.Live // Fixed: Correctly assign TvType.Live
                     }
                 )
             )
@@ -134,7 +134,7 @@ class StreamedProvider : MainAPI() {
         } else {
             matchResponse.text
         }
-        val matches = mapper.readValue(matchesText, object : TypeReference<List<APIMatch>>() {}) // Fixed: Use TypeReference
+        val matches = mapper.readValue(matchesText, object : TypeReference<List<APIMatch>>() {})
         val match = matches.find { it.id == matchId } ?: throw ErrorLoadingException("Match not found: $matchId")
         val teamSlug = match.teams?.let { teams ->
             "${teams.home?.name?.lowercase()?.replace(" ", "-")}-vs-${teams.away?.name?.lowercase()?.replace(" ", "-")}"
@@ -161,7 +161,7 @@ class StreamedProvider : MainAPI() {
             }
         }
 
-        val streams = mapper.readValue(text, object : TypeReference<List<Stream>>() {}) // Fixed: Use TypeReference
+        val streams = mapper.readValue(text, object : TypeReference<List<Stream>>() {})
         if (streams.isEmpty()) {
             println("No streams available for $streamUrl")
             return newLiveStreamLoadResponse("No Streams Available - $matchId", correctedUrl, "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8") {
@@ -175,7 +175,6 @@ class StreamedProvider : MainAPI() {
             ?: throw ErrorLoadingException("Failed to fetch encrypted stream data")
         println("Encrypted stream data: $encrypted")
 
-        // Static M3U8 fetch (to be refined with Network data)
         val m3u8Url = try {
             val m3u8Response = app.get(
                 "https://rr.vipstreams.in/s/S5sTu7faadwl9LhcLRFyyPX7XEULMSD_PTPKC2cKyCPdatz8HTuQecYh3Et3g8OD/0vTGmyGsnDSU99wFeaGAR_X0irbFxOQ92t3IihtLAO8qttPQm1XhIlPPt-T54YNZi4o4abRCScehK5vrDFqKtPukx_ZBCKDbGSDfEnVU85I/8KsQiiYtSHdESxeBDxS05hnZEEpT8nyWTTW4fA68hVXIyNvjSKPwASFVCTp8aF1d/strm.m3u8",
