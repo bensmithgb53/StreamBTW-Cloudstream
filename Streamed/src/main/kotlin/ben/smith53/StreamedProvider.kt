@@ -1,22 +1,23 @@
 package ben.smith53
 
+import android.content.Context
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
 import java.util.zip.GZIPInputStream
+import okhttp3.Headers
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
-class StreamedProvider : MainAPI() {
+class StreamedProvider(private val context: Context) : MainAPI() {
     override var mainUrl = "https://streamed.su"
     override var name = "Streamed Sports"
     override val supportedTypes = setOf(TvType.Live)
@@ -156,7 +157,6 @@ class StreamedProvider : MainAPI() {
         println("Loading stream with corrected URL: $correctedUrl")
         println("Parsed: matchId=$matchId, sourceType=$sourceType, sourceId=$sourceId")
 
-        // Fetch match data to get team names
         val matchResponse = app.get("$mainUrl/api/matches/all", headers = headers, timeout = 30)
         val matchesText = if (matchResponse.headers["Content-Encoding"] == "gzip") {
             GZIPInputStream(matchResponse.body.byteStream()).bufferedReader().use { it.readText() }
@@ -216,9 +216,7 @@ class StreamedProvider : MainAPI() {
         val firstStream = streams.first()
         println("Selected default stream: id=${firstStream.id}, streamNo=${firstStream.streamNo}, hd=${firstStream.hd}, source=${firstStream.source}")
         val encrypted = fetchEncryptedData(sourceType, matchId, firstStream.streamNo.toString())
-        val decrypted = runBlocking { 
-            decryptWithWebView(encrypted ?: throw ErrorLoadingException("Failed to fetch encrypted stream data"), sourceType, teamSlug, firstStream.streamNo.toString()) 
-        }
+        val decrypted = decryptWithWebView(encrypted ?: throw ErrorLoadingException("Failed to fetch encrypted stream data"), sourceType, teamSlug, firstStream.streamNo.toString())
         val defaultM3u8Url = "https://rr.vipstreams.in$decrypted"
         println("Default M3U8 URL: $defaultM3u8Url")
 
@@ -242,7 +240,6 @@ class StreamedProvider : MainAPI() {
         val sourceType = if (parts.size > 1) parts[1] else "alpha"
         val sourceId = if (parts.size > 2) parts[2] else matchId
 
-        // Fetch match data to get team names
         val matchResponse = app.get("$mainUrl/api/matches/all", headers = headers, timeout = 30)
         val matchesText = if (matchResponse.headers["Content-Encoding"] == "gzip") {
             GZIPInputStream(matchResponse.body.byteStream()).bufferedReader().use { it.readText() }
@@ -280,9 +277,7 @@ class StreamedProvider : MainAPI() {
         streams.forEach { stream ->
             println("Processing stream: id=${stream.id}, streamNo=${stream.streamNo}, hd=${stream.hd}, source=${stream.source}")
             val encrypted = fetchEncryptedData(sourceType, matchId, stream.streamNo.toString())
-            val decrypted = runBlocking { 
-                decryptWithWebView(encrypted ?: return@runBlocking null, sourceType, teamSlug, stream.streamNo.toString()) 
-            } ?: return false
+            val decrypted = decryptWithWebView(encrypted ?: return@forEach, sourceType, teamSlug, stream.streamNo.toString()) ?: return false
             val m3u8Url = "https://rr.vipstreams.in$decrypted"
 
             callback.invoke(
@@ -291,16 +286,15 @@ class StreamedProvider : MainAPI() {
                     name = "${stream.source} - ${if (stream.hd) "HD" else "SD"} (${stream.language})",
                     url = m3u8Url,
                     referer = "https://embedme.top/",
-                    quality = if (stream.hd) 720 else Qualities.Unknown.value,
+                    quality = if (stream.hd) 720 else -1, // Using hardcoded quality since Qualities might not be available
                     isM3u8 = true,
-                    headers = embedHeaders
+                    headers = Headers.Builder().apply { embedHeaders.forEach { add(it.key, it.value) } }.build()
                 )
             )
         }
         return true
     }
 
-    // Fetch encrypted data from embedme.top
     private fun fetchEncryptedData(source: String, id: String, streamNo: String): String? {
         val client = OkHttpClient()
         val json = """{"source": "$source", "id": "$id", "streamNo": "$streamNo"}"""
@@ -308,7 +302,7 @@ class StreamedProvider : MainAPI() {
         val request = Request.Builder()
             .url("https://embedme.top/fetch")
             .post(body)
-            .headers(embedHeaders.toHeaders())
+            .headers(Headers.Builder().apply { embedHeaders.forEach { add(it.key, it.value) } }.build())
             .build()
 
         return client.newCall(request).execute().use { response ->
@@ -317,9 +311,8 @@ class StreamedProvider : MainAPI() {
         }
     }
 
-    // Decrypt using WebView with dynamic team-based URL
     private suspend fun decryptWithWebView(encrypted: String, sourceType: String, teamSlug: String, streamNo: String): String = suspendCancellableCoroutine { cont ->
-        val webView = WebView(app.context)
+        val webView = WebView(context)
         webView.settings.javaScriptEnabled = true
         webView.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView?, url: String?) {
