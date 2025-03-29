@@ -84,7 +84,7 @@ class StreamedProvider : MainAPI() {
             return listOf(
                 HomePageList(
                     "No Live Matches",
-                    listOf(newLiveSearchResponse("No live matches available", "$mainUrl|alpha|default", TvType.Live)),
+                    listOf(newLiveSearchResponse("No live matches available", "$mainUrl|alpha|default")),
                     isHorizontalImages = false
                 )
             )
@@ -107,7 +107,7 @@ class StreamedProvider : MainAPI() {
                     }
                 }
                 val homeBadge = match.teams?.home?.badge?.let { "$badgeBase/$it.webp" }
-                newLiveSearchResponse(match.title, "${match.id}|${source.source}|${source.id}", TvType.Live) {
+                newLiveSearchResponse(match.title, "${match.id}|${source.source}|${source.id}") {
                     this.posterUrl = posterUrl ?: homeBadge
                 }
             }
@@ -166,11 +166,11 @@ class StreamedProvider : MainAPI() {
         val stream = streams.firstOrNull() ?: run {
             println("No streams available for $streamUrl, falling back to default")
             return newLiveStreamLoadResponse(
-                "Stream Unavailable - $matchId",
-                correctedUrl,
-                TvType.Live
+                name = "Stream Unavailable - $matchId",
+                url = correctedUrl,
+                dataUrl = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
             ) {
-                this.apiName = this@StreamedProvider.name
+                this.name = this@StreamedProvider.name
                 this.plot = "The requested stream could not be found."
             }
         }
@@ -182,12 +182,11 @@ class StreamedProvider : MainAPI() {
         }
 
         return newLiveStreamLoadResponse(
-            "${stream.source.capitalize()} - ${if (stream.hd) "HD" else "SD"}",
-            correctedUrl,
-            TvType.Live,
-            m3u8Url
+            name = "${stream.source.capitalize()} - ${if (stream.hd) "HD" else "SD"}",
+            url = correctedUrl,
+            dataUrl = m3u8Url
         ) {
-            this.apiName = this@StreamedProvider.name
+            this.name = this@StreamedProvider.name
             this.plot = "Live stream from Streamed Sports"
         }
     }
@@ -249,17 +248,13 @@ class StreamedProvider : MainAPI() {
             }
     }
 
-    // Tentative decrypt function
     private fun decrypt(encrypted: String): String {
-        // Known encrypted-to-URL mapping for "alpha/wwe-network/1"
         if (encrypted == "sc9NgC3sNMLsCGm2SAFN8wUHH1aJVuPl3yMM71LUKI699iaRiU68FqgyVUqlXOLlcfQCfXIcSIRZo_YUF736JzHRTMBpIwNA4ibg5OyKF2wkS175JKV61srvKvMhTFIkKdFwFBNQyZivu0eVnyVQEK_freOGTfu1qEm8HS3wPgbLtNo1qYdjGYNQiAmvi4Y4ZnrJOFFou6XmHwSk332WLYvi5FvcqY4TrVBvdpzNJC65dTKU5wjiNej2pv1JzgxnMcq6s79jDWR23RzIn5BQdGoFQDEz6ARiA7g0J4oQT9YQ2ruJiFgmfp51FUdMVy-dNAoOmktIIcNkkFBx9tlwNJSlqK-F7TTRCHAfrQVAPhCQaTLkdQL17Jjkqc69Dd3urY4bAyTYuShLQPF-8r3Q") {
             return "/s/XFkrw-SAIckUsalIB1Dcr8ozlK_L9zQNDW-V-mw2u373iB1s4572s9yVO9445UcA/zU-ueKTjrhpySCT7NYWVytXb6LPdqYu-TevKYX3MQGjFBZPKMVG_ZOEddgO_3-8k/aQ5gmG-MQOVtszW36YnCsh4jWxG_94HX7-l0bVCSZAf79SkvUSRqSnG4RW7LNgz9/strm.m3u8?md5=g3-FZo20STlEighBdEJgFw&expiry=1743254048"
         }
-
-        // Attempt AES decryption (placeholder key, needs real key)
         try {
-            val key = "embedmetopsecret".toByteArray() // 16 bytes, AES-128, placeholder
-            val cipher = Cipher.getInstance("AES/ECB/PKCS5Padding") // Common mode, adjust if CBC
+            val key = "embedmetopsecret".toByteArray() // Placeholder, needs real key
+            val cipher = Cipher.getInstance("AES/ECB/PKCS5Padding")
             val secretKey = SecretKeySpec(key, "AES")
             cipher.init(Cipher.DECRYPT_MODE, secretKey)
             val decodedBytes = Base64.getDecoder().decode(encrypted)
@@ -267,7 +262,7 @@ class StreamedProvider : MainAPI() {
             return String(decryptedBytes)
         } catch (e: Exception) {
             println("AES decryption failed: ${e.message}")
-            throw e // Let caller handle fallback
+            throw e
         }
     }
 
@@ -286,13 +281,13 @@ class StreamedProvider : MainAPI() {
 
         callback(
             ExtractorLink(
-                source = this.name,
-                name = "Streamed Sports",
-                url = data,
-                referer = "https://embedme.top/",
-                quality = Qualities.Unknown.value,
-                isM3u8 = true,
-                headers = streamHeaders
+                this.name,
+                "Streamed Sports",
+                data,
+                "https://embedme.top/",
+                -1, // Use -1 for unknown quality since Qualities.Unknown might not exist
+                headers = streamHeaders,
+                isM3u8 = true
             )
         )
         return true
