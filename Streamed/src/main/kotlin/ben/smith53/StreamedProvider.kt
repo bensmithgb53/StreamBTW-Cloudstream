@@ -17,14 +17,14 @@ class StreamedProvider : MainAPI() {
     override val supportedTypes = setOf(TvType.Live)
     override var lang = "en"
     override val hasMainPage = true
-    override val vpnStatus = VPNStatus.MightBeNeeded // Kept as "MightBeNeeded" for now
+    override val vpnStatus = VPNStatus.MightBeNeeded
     override val hasDownloadSupport = false
     override val instantLinkLoading = true
 
     private val headers = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
         "Referer" to "https://streamed.su/",
-        "Accept-Encoding" to "gzip, deflate, br, zstd",
+        "Accept-Encoding" to "gzip, deflate, br",
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
     )
 
@@ -145,8 +145,9 @@ class StreamedProvider : MainAPI() {
 
         val streamUrl = "$mainUrl/api/stream/$sourceType/$sourceId"
         val streamHeaders = mapOf(
-            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
-            "Referer" to "https://streamed.su/"
+            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+            "Referer" to "https://streamed.su/",
+            "Accept-Encoding" to "gzip, deflate, br"
         )
         val response = app.get(streamUrl, headers = streamHeaders, timeout = 30)
         val text = if (response.headers["Content-Encoding"] == "gzip") {
@@ -175,7 +176,7 @@ class StreamedProvider : MainAPI() {
         }
 
         val streamData = mapper.writeValueAsString(streams.map { stream ->
-            val m3u8Url = fetchM3u8Url(sourceType, matchId, stream.streamNo) ?: "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
+            val m3u8Url = getM3u8Url(sourceType, matchId, stream.streamNo) ?: "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
             mapOf(
                 "streamNo" to stream.streamNo,
                 "language" to stream.language,
@@ -196,67 +197,15 @@ class StreamedProvider : MainAPI() {
         }
     }
 
-    private suspend fun fetchM3u8Url(sourceType: String, matchId: String, streamNo: Int): String? {
-        val fetchHeaders = mapOf(
-            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
-            "Referer" to "https://embedme.top/",
-            "Content-Type" to "application/json",
-            "Origin" to "https://embedme.top",
-            "Accept" to "*/*",
-            "Accept-Encoding" to "gzip, deflate, br, zstd"
-        )
-        val fetchBody = """{"source":"$sourceType","id":"$matchId","streamNo":"$streamNo"}""".toRequestBody("application/json".toMediaType())
-
-        println("Fetching M3U8: POST https://embedme.top/fetch, Headers=$fetchHeaders, Body=$fetchBody")
-        val fetchResponse = app.post("https://embedme.top/fetch", headers = fetchHeaders, requestBody = fetchBody, timeout = 30)
-        val fetchBytes = fetchResponse.body.bytes()
-        val fetchText = Base64.getEncoder().encodeToString(fetchBytes)
-        println("Fetch response: Status=${fetchResponse.code}, Headers=${fetchResponse.headers}, Text (Base64)=$fetchText")
-
-        return if (fetchResponse.isSuccessful && fetchBytes.isNotEmpty()) {
-            if (fetchText.contains(".m3u8")) {
-                println("Direct M3U8 URL from fetch: $fetchText")
-                fetchText
-            } else {
-                println("Encrypted response from fetch (Base64): $fetchText")
-                val decryptedPath = try {
-                    decrypt(fetchBytes)
-                } catch (e: Exception) {
-                    println("Decryption failed: ${e.message}, falling back to scraping")
-                    null
-                }
-                val m3u8Url = decryptedPath?.let { "https://rr.vipstreams.in$it" }
-                if (m3u8Url != null) {
-                    println("Decrypted M3U8 URL: $m3u8Url")
-                    val testResponse = app.get(m3u8Url, headers = mapOf(
-                        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
-                        "Referer" to "https://embedme.top/",
-                        "Accept" to "*/*"
-                    ), timeout = 10)
-                    if (testResponse.isSuccessful) {
-                        println("M3U8 URL test: Status=${testResponse.code}, Body=${testResponse.text.take(200)}")
-                        m3u8Url
-                    } else {
-                        println("M3U8 URL blocked: Status=${testResponse.code}, Body=${testResponse.text}, falling back to scraping")
-                        scrapeEmbedPage(sourceType, matchId, streamNo)
-                    }
-                } else {
-                    scrapeEmbedPage(sourceType, matchId, streamNo)
-                }
-            }
-        } else {
-            println("Fetch failed (status=${fetchResponse.code}, body=${fetchResponse.text}), falling back to scraping")
-            scrapeEmbedPage(sourceType, matchId, streamNo)
-        }
-    }
-
-    private suspend fun scrapeEmbedPage(sourceType: String, matchId: String, streamNo: Int): String? {
+    private suspend fun getM3u8Url(sourceType: String, matchId: String, streamNo: Int): String? {
+        // Try scraping embed page first
         val embedUrl = "https://embedme.top/embed/$sourceType/$matchId/$streamNo"
         val embedHeaders = mapOf(
-            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
             "Referer" to "https://embedme.top/",
             "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-            "Accept-Encoding" to "gzip, deflate, br, zstd"
+            "Accept-Encoding" to "gzip, deflate, br",
+            "Accept-Language" to "en-US,en;q=0.9"
         )
         val embedResponse = app.get(embedUrl, headers = embedHeaders, timeout = 30)
         val embedText = if (embedResponse.headers["Content-Encoding"] == "gzip") {
@@ -270,27 +219,73 @@ class StreamedProvider : MainAPI() {
         val m3u8Match = m3u8Regex.find(embedText)
         if (m3u8Match != null) {
             println("Found M3U8 in embed page: ${m3u8Match.value}")
-            return m3u8Match.value
+            val testResponse = app.get(m3u8Match.value, headers = embedHeaders, timeout = 10)
+            if (testResponse.isSuccessful) {
+                println("M3U8 URL test: Status=${testResponse.code}, Body=${testResponse.text.take(200)}")
+                return m3u8Match.value
+            } else {
+                println("M3U8 URL test failed: Status=${testResponse.code}, Body=${testResponse.text}")
+            }
         }
 
-        println("No direct M3U8 found, trying to extract encrypted string")
-        val encryptedRegex = Regex("[A-Za-z0-9+/=]{100,}")
-        val encryptedMatch = encryptedRegex.find(embedText)
-        return encryptedMatch?.value?.let { encrypted ->
-            println("Found potential encrypted string in embed page: $encrypted")
-            try {
-                val decryptedPath = decrypt(Base64.getDecoder().decode(encrypted))
-                val m3u8Url = "https://rr.vipstreams.in$decryptedPath"
-                println("Decrypted M3U8 from embed page: $m3u8Url")
-                m3u8Url
-            } catch (e: Exception) {
-                println("Fallback decryption failed: ${e.message}")
-                null
+        // Fallback to fetch if scraping fails
+        println("No M3U8 found in embed page, falling back to fetch")
+        val fetchHeaders = mapOf(
+            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+            "Referer" to "https://embedme.top/",
+            "Content-Type" to "application/json",
+            "Origin" to "https://embedme.top",
+            "Accept" to "*/*",
+            "Accept-Encoding" to "gzip, deflate, br",
+            "Accept-Language" to "en-US,en;q=0.9"
+        )
+        val fetchBody = """{"source":"$sourceType","id":"$matchId","streamNo":"$streamNo"}""".to<RRequestBody>("application/json".toMediaType())
+
+        println("Fetching M3U8: POST https://embedme.top/fetch, Headers=$fetchHeaders, Body=$fetchBody")
+        val fetchResponse = app.post("https://embedme.top/fetch", headers = fetchHeaders, requestBody = fetchBody, timeout = 30)
+        val fetchText = fetchResponse.text
+        println("Fetch response: Status=${fetchResponse.code}, Headers=${fetchResponse.headers}, Text=$fetchText")
+
+        return if (fetchResponse.isSuccessful && fetchText.isNotEmpty()) {
+            if (fetchText.contains(".m3u8")) {
+                println("Direct M3U8 URL from fetch: $fetchText")
+                fetchText
+            } else {
+                println("Encrypted response from fetch: $fetchText")
+                val encryptedBytes = try {
+                    Base64.getDecoder().decode(fetchText)
+                } catch (e: Exception) {
+                    println("Base64 decode failed: ${e.message}")
+                    null
+                }
+                val decryptedPath = encryptedBytes?.let {
+                    try {
+                        decrypt(it)
+                    } catch (e: Exception) {
+                        println("Decryption failed: ${e.message}")
+                        null
+                    }
+                }
+                val m3u8Url = decryptedPath?.let { "https://rr.vipstreams.in$it" }
+                if (m3u8Url != null) {
+                    println("Decrypted M3U8 URL: $m3u8Url")
+                    val testResponse = app.get(m3u8Url, headers = fetchHeaders, timeout = 10)
+                    if (testResponse.isSuccessful) {
+                        println("M3U8 URL test: Status=${testResponse.code}, Body=${testResponse.text.take(200)}")
+                        m3u8Url
+                    } else {
+                        println("M3U8 URL blocked: Status=${testResponse.code}, Body=${testResponse.text}")
+                        null
+                    }
+                } else {
+                    println("No valid M3U8 URL from fetch")
+                    null
+                }
             }
-        } ?: run {
-            println("No M3U8 or encrypted string found, using test stream")
-            "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
-        }
+        } else {
+            println("Fetch failed: Status=${fetchResponse.code}")
+            null
+        } ?: "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
     }
 
     private fun decrypt(encryptedBytes: ByteArray): String {
@@ -314,9 +309,11 @@ class StreamedProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val streamHeaders = mapOf(
-            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
+            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
             "Referer" to "https://embedme.top/",
-            "Accept" to "*/*"
+            "Accept" to "*/*",
+            "Accept-Encoding" to "gzip, deflate, br",
+            "Accept-Language" to "en-US,en;q=0.9"
         )
 
         println("Loading links from data: $data")
