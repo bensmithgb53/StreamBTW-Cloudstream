@@ -33,6 +33,11 @@ class StreamedProvider(private val context: Context) : MainAPI() {
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
     )
 
+    private val streamHeaders = mapOf(
+        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
+        "Referer" to "https://embedme.top/"
+    )
+
     private val embedHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
         "Referer" to "https://embedme.top/",
@@ -169,12 +174,12 @@ class StreamedProvider(private val context: Context) : MainAPI() {
         } ?: match.title.lowercase().replace(" ", "-")
 
         val streamUrl = "$mainUrl/api/stream/$sourceType/$sourceId"
-        val streamHeaders = mapOf(
+        val streamApiHeaders = mapOf(
             "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
             "Referer" to "https://streamed.su/"
         )
-        val response = app.get(streamUrl, headers = streamHeaders, timeout = 30)
-        println("Stream API request: URL=$streamUrl, Headers=$streamHeaders, Status=${response.code}")
+        val response = app.get(streamUrl, headers = streamApiHeaders, timeout = 30)
+        println("Stream API request: URL=$streamUrl, Headers=$streamApiHeaders, Status=${response.code}")
         val text = if (response.headers["Content-Encoding"] == "gzip") {
             GZIPInputStream(response.body.byteStream()).bufferedReader().use { it.readText() }
         } else {
@@ -252,11 +257,11 @@ class StreamedProvider(private val context: Context) : MainAPI() {
         } ?: match.title.lowercase().replace(" ", "-")
 
         val streamUrl = "$mainUrl/api/stream/$sourceType/$sourceId"
-        val streamHeaders = mapOf(
+        val streamApiHeaders = mapOf(
             "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
             "Referer" to "https://streamed.su/"
         )
-        val response = app.get(streamUrl, headers = streamHeaders, timeout = 30)
+        val response = app.get(streamUrl, headers = streamApiHeaders, timeout = 30)
         val text = if (response.headers["Content-Encoding"] == "gzip") {
             GZIPInputStream(response.body.byteStream()).bufferedReader().use { it.readText() }
         } else {
@@ -287,7 +292,7 @@ class StreamedProvider(private val context: Context) : MainAPI() {
                     referer = "https://embedme.top/",
                     quality = if (stream.hd) 720 else -1,
                     isM3u8 = true,
-                    headers = embedHeaders
+                    headers = streamHeaders // Headers for .m3u8 playback
                 )
             )
         }
