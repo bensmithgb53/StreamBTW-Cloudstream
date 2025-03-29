@@ -10,6 +10,8 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import kotlinx.coroutines.Dispatchers
@@ -319,16 +321,37 @@ class StreamedProvider(private val context: Context) : MainAPI() {
     private suspend fun decryptWithWebView(encrypted: String, sourceType: String, teamSlug: String, streamNo: String): String? {
         return withContext(Dispatchers.Main) {
             suspendCancellableCoroutine { continuation ->
-                val webView = WebView(context)
-                webView.settings.javaScriptEnabled = true
+                println("Initializing WebView for decryption")
+                val webView = WebView(context).apply {
+                    settings.javaScriptEnabled = true
+                    settings.domStorageEnabled = true
+                    settings.loadWithOverviewMode = true
+                    settings.useWideViewPort = true
+                }
                 webView.webViewClient = object : WebViewClient() {
+                    override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                        println("WebView started loading: $url")
+                    }
+
                     override fun onPageFinished(view: WebView?, url: String?) {
+                        println("WebView finished loading: $url")
                         val js = """
-                            window.decrypt('$encrypted').then(result => {
-                                window.androidCallback(result);
-                            });
+                            if (typeof window.decrypt === 'function') {
+                                window.decrypt('$encrypted').then(result => {
+                                    console.log('Decryption result: ' + result);
+                                    window.androidCallback(result);
+                                }).catch(err => {
+                                    console.error('Decryption error: ' + err);
+                                    window.androidCallback(null);
+                                });
+                            } else {
+                                console.error('window.decrypt is not a function');
+                                window.androidCallback(null);
+                            }
                         """
+                        println("Executing JavaScript: $js")
                         webView.evaluateJavascript(js) { value ->
+                            println("JavaScript callback received: $value")
                             if (value != null && value != "null") {
                                 println("Decrypted result: $value")
                                 continuation.resume(value.trim('"'))
@@ -338,12 +361,22 @@ class StreamedProvider(private val context: Context) : MainAPI() {
                             }
                         }
                     }
+
+                    override fun onReceivedError(
+                        view: WebView?,
+                        request: WebResourceRequest?,
+                        error: WebResourceError?
+                    ) {
+                        println("WebView error: ${error?.description} (code: ${error?.errorCode})")
+                        continuation.resume(null)
+                    }
                 }
                 val embedUrl = "https://embedme.top/embed/$sourceType/$teamSlug/$streamNo"
                 println("Loading WebView with URL: $embedUrl")
                 webView.loadUrl(embedUrl)
 
                 continuation.invokeOnCancellation {
+                    println("WebView cancelled, destroying")
                     webView.destroy()
                 }
             }
