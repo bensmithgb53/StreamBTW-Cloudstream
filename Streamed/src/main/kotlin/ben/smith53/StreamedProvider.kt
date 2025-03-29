@@ -17,7 +17,7 @@ class StreamedProvider : MainAPI() {
     override val supportedTypes = setOf(TvType.Live)
     override var lang = "en"
     override val hasMainPage = true
-    override val vpnStatus = VPNStatus.MightBeNeeded
+    override val vpnStatus = VPNStatus.MightBeNeeded // Kept as "MightBeNeeded" for now
     override val hasDownloadSupport = false
     override val instantLinkLoading = true
 
@@ -192,7 +192,7 @@ class StreamedProvider : MainAPI() {
             dataUrl = streamData
         ) {
             this.apiName = this@StreamedProvider.name
-            this.plot = "Live stream from Streamed Sports with ${streams.size} options"
+            this.plot = "Live stream from Streamed Sports with ${streams.size} options."
         }
     }
 
@@ -211,7 +211,7 @@ class StreamedProvider : MainAPI() {
         val fetchResponse = app.post("https://embedme.top/fetch", headers = fetchHeaders, requestBody = fetchBody, timeout = 30)
         val fetchBytes = fetchResponse.body.bytes()
         val fetchText = Base64.getEncoder().encodeToString(fetchBytes)
-        println("Fetch response: Status=${fetchResponse.code}, Text (Base64)=$fetchText")
+        println("Fetch response: Status=${fetchResponse.code}, Headers=${fetchResponse.headers}, Text (Base64)=$fetchText")
 
         return if (fetchResponse.isSuccessful && fetchBytes.isNotEmpty()) {
             if (fetchText.contains(".m3u8")) {
@@ -225,11 +225,27 @@ class StreamedProvider : MainAPI() {
                     println("Decryption failed: ${e.message}, falling back to scraping")
                     null
                 }
-                decryptedPath?.let { "https://rr.vipstreams.in$it" }?.also { println("Decrypted M3U8 URL: $it") }
-                    ?: scrapeEmbedPage(sourceType, matchId, streamNo)
+                val m3u8Url = decryptedPath?.let { "https://rr.vipstreams.in$it" }
+                if (m3u8Url != null) {
+                    println("Decrypted M3U8 URL: $m3u8Url")
+                    val testResponse = app.get(m3u8Url, headers = mapOf(
+                        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
+                        "Referer" to "https://embedme.top/",
+                        "Accept" to "*/*"
+                    ), timeout = 10)
+                    if (testResponse.isSuccessful) {
+                        println("M3U8 URL test: Status=${testResponse.code}, Body=${testResponse.text.take(200)}")
+                        m3u8Url
+                    } else {
+                        println("M3U8 URL blocked: Status=${testResponse.code}, Body=${testResponse.text}, falling back to scraping")
+                        scrapeEmbedPage(sourceType, matchId, streamNo)
+                    }
+                } else {
+                    scrapeEmbedPage(sourceType, matchId, streamNo)
+                }
             }
         } else {
-            println("Fetch failed (status=${fetchResponse.code}), falling back to scraping")
+            println("Fetch failed (status=${fetchResponse.code}, body=${fetchResponse.text}), falling back to scraping")
             scrapeEmbedPage(sourceType, matchId, streamNo)
         }
     }
@@ -334,9 +350,8 @@ class StreamedProvider : MainAPI() {
                     url = m3u8Url,
                     referer = "https://embedme.top/",
                     quality = if (hd) 1080 else 720,
-                    headers = streamHeaders,
                     isM3u8 = true,
-                    headerMode = ExtractorLink.HEADER_MODE_PASSTHROUGH
+                    headers = streamHeaders
                 )
             )
         }
