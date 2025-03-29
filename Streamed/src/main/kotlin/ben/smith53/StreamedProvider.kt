@@ -303,7 +303,7 @@ class StreamedProvider(private val context: Context) : MainAPI() {
         val body = json.toRequestBody("application/json".toMediaType())
         val request = Request.Builder()
             .url("https://embedme.top/fetch")
-            .post evaluating(body)
+            .post(body)
             .headers(okhttp3.Headers.Builder().apply { embedHeaders.forEach { add(it.key, it.value) } }.build())
             .build()
 
