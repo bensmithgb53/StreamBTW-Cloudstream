@@ -162,7 +162,7 @@ class StreamedProvider : MainAPI() {
             println("Failed to parse streams: ${e.message}")
             emptyList()
         }
-        val stream = streams.firstOrNull() ?: run {
+        if (streams.isEmpty()) {
             println("No streams available for $streamUrl, falling back to default")
             return newLiveStreamLoadResponse(
                 name = "Stream Unavailable - $matchId",
@@ -173,31 +173,30 @@ class StreamedProvider : MainAPI() {
                 this.plot = "The requested stream could not be found."
             }
         }
-        println("Selected stream: id=${stream.id}, streamNo=${stream.streamNo}, hd=${stream.hd}, source=${stream.source}")
 
-        val m3u8Url = fetchM3u8Url(sourceType, matchId, stream.streamNo) ?: run {
-            println("Failed to fetch M3U8, using test stream")
-            "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
-        }
+        val streamData = mapper.writeValueAsString(streams.map { stream ->
+            val m3u8Url = fetchM3u8Url(sourceType, matchId, stream.streamNo) ?: "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
+            mapOf(
+                "streamNo" to stream.streamNo,
+                "language" to stream.language,
+                "hd" to stream.hd,
+                "source" to stream.source,
+                "m3u8Url" to m3u8Url
+            )
+        })
+        println("Generated stream data: $streamData")
 
         return newLiveStreamLoadResponse(
-            name = "${stream.source.capitalize()} - ${if (stream.hd) "HD" else "SD"}",
+            name = streams.first().source.capitalize(),
             url = correctedUrl,
-            dataUrl = m3u8Url
+            dataUrl = streamData
         ) {
             this.apiName = this@StreamedProvider.name
-            this.plot = "Live stream from Streamed Sports"
+            this.plot = "Live stream from Streamed Sports with ${streams.size} options"
         }
     }
 
     private suspend fun fetchM3u8Url(sourceType: String, matchId: String, streamNo: Int): String? {
-        // Hardcode for fulham-vs-crystal-palace-2229629 stream 1
-        if (matchId == "fulham-vs-crystal-palace-2229629" && sourceType == "alpha" && streamNo == 1) {
-            val hardcodedM3u8 = "https://rr.vipstreams.in/s/-pEzojihAMYQrgO_XDRB_P-qvGzgISQXJ6qrOCUCYgFviakkTfsUfUWOWk9_narA/hxXAfLKHZLqZWQsZix1EzeQkYoV-ZaDoYkAzEUePSxD411OYz4vWMg_sepBx5b8HTRX8MUe5z-Bb1xMKSEXcLQ/S2y3aSVq0SyJsqhbFW3SOa5c-lgTn0DhTvodoBvhLLiMZz4zx4QeaTOF_sHDieQT/strm.m3u8?md5=fPzGg-huwuRVEFbbBg-KZA&expiry=1743265441"
-            println("Using hardcoded M3U8 for fulham-vs-crystal-palace-2229629: $hardcodedM3u8")
-            return hardcodedM3u8
-        }
-
         val fetchHeaders = mapOf(
             "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
             "Referer" to "https://embedme.top/",
@@ -207,7 +206,7 @@ class StreamedProvider : MainAPI() {
             "Accept-Encoding" to "gzip, deflate, br, zstd"
         )
         val fetchBody = """{"source":"$sourceType","id":"$matchId","streamNo":"$streamNo"}""".toRequestBody("application/json".toMediaType())
-        
+
         println("Fetching M3U8: POST https://embedme.top/fetch, Headers=$fetchHeaders, Body=$fetchBody")
         val fetchResponse = app.post("https://embedme.top/fetch", headers = fetchHeaders, requestBody = fetchBody, timeout = 30)
         val fetchBytes = fetchResponse.body.bytes()
@@ -230,7 +229,7 @@ class StreamedProvider : MainAPI() {
                     ?: scrapeEmbedPage(sourceType, matchId, streamNo)
             }
         } else {
-            println("Fetch failed (status=${fetchResponse.code}), scraping embed page")
+            println("Fetch failed (status=${fetchResponse.code}), falling back to scraping")
             scrapeEmbedPage(sourceType, matchId, streamNo)
         }
     }
@@ -279,17 +278,8 @@ class StreamedProvider : MainAPI() {
     }
 
     private fun decrypt(encryptedBytes: ByteArray): String {
-        val fetchBase64 = Base64.getEncoder().encodeToString(encryptedBytes)
-        when (fetchBase64) {
-            "KP8v+ARYrAy8n2H0ZGbwZXrTmmEtcR5tyRjJRLk2itSr41RZB/qH0u+WpFRZBy+n/2D2p1thLXMeqY0JyUTM6uWvXwuP/5l9eV2K7r5l1nOzvHOvxiSka9ePRbszTyAgy9mY2EmPVSPAMz/gjZ6Y4kmVFz3gF/x8/P7Zmxv6XWxZtRhhSUtC6rKWfSlrOC+wCr6vCkjJqds51eM+dqYMA8i8FudmcHgJTVwH/2xH6OJEk+TkpxTSh8AhTaNFt2X50hA2hieVgX3EPk3+d9u7Yb4cucF8J3x8F8k2/8V+drguR2x5cWxJPUDAzMXVcxrvkR2vKeV7wU2hjdVtS2r5kO2U2wOEjvuHGUXb5U2gDRNeDoqYYDjg+7AY/IJH5deGYZZzDRL56OoxmDjhKWlCrgBUiXLOt2VY3ffWsC8R2xmiHgrtVZgBRJctbW0dt7f7eB2/P5GudvZmcMB2gFzkprMDfY73hH8D" -> {
-                return "/s/XFkrw-SAIckUsalIB1Dcr8ozlK_L9zQNDW-V-mw2u373iB1s4572s9yVO9445UcA/zU-ueKTjrhpySCT7NYWVytXb6LPdqYu-TevKYX3MQGjFBZPKMVG_ZOEddgO_3-8k/aQ5gmG-MQOVtszW36YnCsh4jWxG_94HX7-l0bVCSZAf79SkvUSRqSnG4RW7LNgz9/strm.m3u8?md5=U15kQBHjmEbVL9rmd3y3Fw&expiry=1743257779"
-            }
-            "I_LobsF6ME_W-1D1jpnIsy4IMXKYTx7ExWlKBRgslxfn8eOk-jiiM4jeNK5QXtefgBtNOWlupAk22KFqqXvghLcpOA2YHuAmWDuiyWMoYuCDTqkU-gkmBZkVKLSu-aTvVaCsDS4A0ovq-j2y6cedfpc3nUOtr7urRUtLfrAwzExfLgLul1v7wCIGDYKodWAcYby08t9g6K-WVoN8f9A4BrS9wwKLq-1j04g4WNGYAQFJQ-Z289Cn4Dn1F28cBK9dnKE83sDHU6GOWIim4rYfwFykDRgmh_wGHVPb4SmxGYhz7b33pHpPfbv07cVXxZlRldTy-uq-7FGjHbqfunsW2DFBrp7rNCJRVP-pcJ1eaCjpkAOA8A0jNKbZPvq_-GYk__iD_FDKHorgap2d-aoRZlTfRirjW0xGLs6YavIy0Jho4RAK4sjYIT_uWK-8tsv3" -> {
-                return "/s/XFkrw-SAIckUsalIB1Dcr8ozlK_L9zQNDW-V-mw2u373iB1s4572s9yVO9445UcA/zU-ueKTjrhpySCT7NYWVytXb6LPdqYu-TevKYX3MQGjFBZPKMVG_ZOEddgO_3-8k/aQ5gmG-MQOVtszW36YnCsh4jWxG_94HX7-l0bVCSZAf79SkvUSRqSnG4RW7LNgz9/strm.m3u8?md5=U15kQBHjmEbVL9rmd3y3Fw&expiry=1743257779"
-            }
-        }
         try {
-            val key = "embedmetopsecret".toByteArray() // Placeholder key
+            val key = "embedmetopsecret".toByteArray()
             val cipher = Cipher.getInstance("AES/ECB/PKCS5Padding")
             val secretKey = SecretKeySpec(key, "AES")
             cipher.init(Cipher.DECRYPT_MODE, secretKey)
@@ -313,21 +303,43 @@ class StreamedProvider : MainAPI() {
             "Accept" to "*/*"
         )
 
-        println("Loading M3U8 link: $data with headers: $streamHeaders")
-        // Skip test fetch, let ExoPlayer handle it directly
-        println("Bypassing test fetch, passing directly to ExoPlayer")
+        println("Loading links from data: $data")
+        val streams: List<Map<String, Any>> = try {
+            mapper.readValue(data)
+        } catch (e: Exception) {
+            println("Failed to parse stream data: ${e.message}")
+            return false
+        }
 
-        callback(
-            ExtractorLink(
-                source = this.name,
-                name = "Streamed Sports",
-                url = data,
-                referer = "https://embedme.top/",
-                quality = -1,
-                headers = streamHeaders,
-                isM3u8 = true
+        streams.forEach { stream ->
+            val streamNo = stream["streamNo"] as? Int ?: 1
+            val language = stream["language"] as? String ?: "Unknown"
+            val hd = stream["hd"] as? Boolean ?: false
+            val source = stream["source"] as? String ?: "Streamed"
+            val m3u8Url = stream["m3u8Url"] as? String ?: return@forEach
+
+            println("Processing stream: No=$streamNo, Lang=$language, HD=$hd, URL=$m3u8Url")
+            val testResponse = app.get(m3u8Url, headers = streamHeaders, timeout = 10)
+            println("Test fetch result: Status=${testResponse.code}, Headers=${testResponse.headers}, Body=${testResponse.text.take(200)}")
+            if (!testResponse.isSuccessful) {
+                println("Test fetch failed: ${testResponse.code} - ${testResponse.text}")
+            } else {
+                println("Test fetch succeeded: M3U8 content starts with ${testResponse.text.take(50)}")
+            }
+
+            callback(
+                ExtractorLink(
+                    source = this.name,
+                    name = "$source - Stream $streamNo (${if (hd) "HD" else "SD"}, $language)",
+                    url = m3u8Url,
+                    referer = "https://embedme.top/",
+                    quality = if (hd) 1080 else 720,
+                    headers = streamHeaders,
+                    isM3u8 = true,
+                    headerMode = ExtractorLink.HEADER_MODE_PASSTHROUGH
+                )
             )
-        )
+        }
         return true
     }
 }
