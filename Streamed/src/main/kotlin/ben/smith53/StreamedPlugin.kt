@@ -7,7 +7,6 @@ import android.content.Context
 @CloudstreamPlugin
 class StreamedPlugin : Plugin() {
     override fun load(context: Context) {
-        registerMainAPI(StreamedProvider())
-        // Removed registerExtractorAPI(PPVLandExtractor())
+        registerMainAPI(StreamedProvider(context)) // Pass the context here
     }
 }
