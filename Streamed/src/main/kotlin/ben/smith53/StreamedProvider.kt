@@ -14,6 +14,8 @@ import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.webkit.WebChromeClient
+import android.webkit.ConsoleMessage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -222,8 +224,9 @@ class StreamedProvider(private val context: Context) : MainAPI() {
         val firstStream = streams.first()
         println("Selected default stream: id=${firstStream.id}, streamNo=${firstStream.streamNo}, hd=${firstStream.hd}, source=${firstStream.source}")
         val encrypted = fetchEncryptedData(sourceType, matchId, firstStream.streamNo.toString())
-        val decrypted = decryptWithWebView(encrypted ?: throw ErrorLoadingException("Failed to fetch encrypted stream data"), sourceType, teamSlug, firstStream.streamNo.toString())
-        val defaultM3u8Url = "https://rr.vipstreams.in$decrypted"
+            ?: throw ErrorLoadingException("Failed to fetch encrypted stream data")
+        val decrypted = decryptWithWebView(encrypted, sourceType, teamSlug, firstStream.streamNo.toString())
+        val defaultM3u8Url = decrypted?.let { "https://rr.vipstreams.in$it" } ?: "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
         println("Default M3U8 URL: $defaultM3u8Url")
 
         return newLiveStreamLoadResponse(
@@ -232,6 +235,9 @@ class StreamedProvider(private val context: Context) : MainAPI() {
             defaultM3u8Url
         ) {
             this.apiName = this@StreamedProvider.name
+            if (decrypted == null) {
+                this.plot = "Failed to decrypt stream URL. Using a test stream instead."
+            }
         }
     }
 
@@ -327,6 +333,12 @@ class StreamedProvider(private val context: Context) : MainAPI() {
                     settings.domStorageEnabled = true
                     settings.loadWithOverviewMode = true
                     settings.useWideViewPort = true
+                }
+                webView.webChromeClient = object : WebChromeClient() {
+                    override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
+                        println("WebView console: ${consoleMessage?.message()} (line ${consoleMessage?.lineNumber()})")
+                        return true
+                    }
                 }
                 webView.webViewClient = object : WebViewClient() {
                     override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
