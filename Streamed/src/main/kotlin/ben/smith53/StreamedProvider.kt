@@ -239,7 +239,7 @@ class StreamedProvider : MainAPI() {
             "Accept-Encoding" to "gzip, deflate, br",
             "Accept-Language" to "en-US,en;q=0.9"
         )
-        val fetchBody = """{"source":"$sourceType","id":"$matchId","streamNo":"$streamNo"}""".to<RRequestBody>("application/json".toMediaType())
+        val fetchBody = """{"source":"$sourceType","id":"$matchId","streamNo":"$streamNo"}""".toRequestBody("application/json".toMediaType())
 
         println("Fetching M3U8: POST https://embedme.top/fetch, Headers=$fetchHeaders, Body=$fetchBody")
         val fetchResponse = app.post("https://embedme.top/fetch", headers = fetchHeaders, requestBody = fetchBody, timeout = 30)
