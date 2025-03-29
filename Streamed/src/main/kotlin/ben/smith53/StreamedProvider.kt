@@ -198,7 +198,6 @@ class StreamedProvider : MainAPI() {
     }
 
     private suspend fun getM3u8Url(sourceType: String, matchId: String, streamNo: Int): String? {
-        // Try scraping embed page first
         val embedUrl = "https://embedme.top/embed/$sourceType/$matchId/$streamNo"
         val embedHeaders = mapOf(
             "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
@@ -228,7 +227,6 @@ class StreamedProvider : MainAPI() {
             }
         }
 
-        // Fallback to fetch if scraping fails
         println("No M3U8 found in embed page, falling back to fetch")
         val fetchHeaders = mapOf(
             "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
@@ -310,7 +308,7 @@ class StreamedProvider : MainAPI() {
     ): Boolean {
         val streamHeaders = mapOf(
             "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-            "Referer" to "https://embedme.top/",
+            "Referer" to "https://embedme.top/", // Consistent with embed page
             "Accept" to "*/*",
             "Accept-Encoding" to "gzip, deflate, br",
             "Accept-Language" to "en-US,en;q=0.9"
@@ -345,7 +343,7 @@ class StreamedProvider : MainAPI() {
                     source = this.name,
                     name = "$source - Stream $streamNo (${if (hd) "HD" else "SD"}, $language)",
                     url = m3u8Url,
-                    referer = "https://embedme.top/",
+                    referer = "", // Empty since Referer is in headers
                     quality = if (hd) 1080 else 720,
                     isM3u8 = true,
                     headers = streamHeaders
