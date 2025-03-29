@@ -191,7 +191,7 @@ class StreamedProvider : MainAPI() {
     }
 
     private suspend fun fetchM3u8Url(sourceType: String, matchId: String, streamNo: Int): String? {
-        // Hardcode for fulham-vs-crystal-palace-2229629 stream 1 with fresh URL
+        // Hardcode for fulham-vs-crystal-palace-2229629 stream 1
         if (matchId == "fulham-vs-crystal-palace-2229629" && sourceType == "alpha" && streamNo == 1) {
             val hardcodedM3u8 = "https://rr.vipstreams.in/s/-pEzojihAMYQrgO_XDRB_P-qvGzgISQXJ6qrOCUCYgFviakkTfsUfUWOWk9_narA/hxXAfLKHZLqZWQsZix1EzeQkYoV-ZaDoYkAzEUePSxD411OYz4vWMg_sepBx5b8HTRX8MUe5z-Bb1xMKSEXcLQ/S2y3aSVq0SyJsqhbFW3SOa5c-lgTn0DhTvodoBvhLLiMZz4zx4QeaTOF_sHDieQT/strm.m3u8?md5=fPzGg-huwuRVEFbbBg-KZA&expiry=1743265441"
             println("Using hardcoded M3U8 for fulham-vs-crystal-palace-2229629: $hardcodedM3u8")
@@ -310,15 +310,12 @@ class StreamedProvider : MainAPI() {
         val streamHeaders = mapOf(
             "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
             "Referer" to "https://embedme.top/",
-            "Origin" to "https://embedme.top",
-            "Accept" to "*/*",
-            "Host" to "rr.vipstreams.in",
-            "Accept-Encoding" to "gzip, deflate, br"
+            "Accept" to "*/*"
         )
 
         println("Loading M3U8 link: $data with headers: $streamHeaders")
-        val testResponse = app.get(data, headers = streamHeaders, timeout = 10)
-        println("Test fetch result: Status=${testResponse.code}, Body=${testResponse.text.take(100)}")
+        // Skip test fetch, let ExoPlayer handle it directly
+        println("Bypassing test fetch, passing directly to ExoPlayer")
 
         callback(
             ExtractorLink(
