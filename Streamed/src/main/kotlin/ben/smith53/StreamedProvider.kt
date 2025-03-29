@@ -175,7 +175,7 @@ class StreamedProvider : MainAPI() {
         }
         println("Selected stream: id=${stream.id}, streamNo=${stream.streamNo}, hd=${stream.hd}, source=${stream.source}")
 
-        val m3u8Url = fetchM3u8Url(sourceType, matchId, stream.streamNo) ?: run {
+        val m3u8Url = fetchM3u8Url(sourceType, matchId, streamNo) ?: run {
             println("Failed to fetch M3U8, using test stream")
             "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
         }
@@ -193,9 +193,9 @@ class StreamedProvider : MainAPI() {
     private suspend fun fetchM3u8Url(sourceType: String, matchId: String, streamNo: Int): String? {
         // Hardcode for dinaz-vyshgorod-vs-minaj stream 1 with fresh URL
         if (matchId == "dinaz-vyshgorod-vs-minaj" && sourceType == "alpha" && streamNo == 1) {
-            val hardcodedM3u8 = "https://rr.vipstreams.in/s/-pEzojihAMYQrgO_XDRB_P-qvGzgISQXJ6qrOCUCYgFviakkTfsUfUWOWk9_narA/9PCOpHMPl4HoOZiA3hl0rwIUQDb6E-R9tGtJJ8ugd-Vz8A_h4Wn1n0tb6WgzptjjTRX8MUe5z-Bb1xMKSEXcLQ/S2y3aSVq0SyJsqhbFW3SOa5c-lgTn0DhTvodoBvhLLiMZz4zx4QeaTOF_sHDieQT/strm.m3u8?md5=DbrdgkKS2q-xuHVXv5UOyw&expiry=1743262730"
+            val hardcodedM3u8 = "https://rr.vipstreams.in/s/-pEzojihAMYQrgO_XDRB_P-qvGzgISQXJ6qrOCUCYgFviakkTfsUfUWOWk9_narA/hxXAfLKHZLqZWQsZix1EzeQkYoV-ZaDoYkAzEUePSxD411OYz4vWMg_sepBx5b8HTRX8MUe5z-Bb1xMKSEXcLQ/S2y3aSVq0SyJsqhbFW3SOa5c-lgTn0DhTvodoBvhLLiMZz4zx4QeaTOF_sHDieQT/strm.m3u8?md5=fPzGg-huwuRVEFbbBg-KZA&expiry=1743265441"
             println("Using hardcoded M3U8 for dinaz-vyshgorod-vs-minaj: $hardcodedM3u8")
-            return hardcodedM3u8 // Skip verification, trust it works based on ffmpeg test
+            return hardcodedM3u8
         }
 
         val fetchHeaders = mapOf(
@@ -312,10 +312,14 @@ class StreamedProvider : MainAPI() {
             "Referer" to "https://embedme.top/",
             "Origin" to "https://embedme.top",
             "Accept" to "*/*",
-            "Host" to "rr.vipstreams.in"
+            "Host" to "rr.vipstreams.in",
+            "Accept-Encoding" to "gzip, deflate, br"
         )
 
         println("Loading M3U8 link: $data with headers: $streamHeaders")
+        val testResponse = app.get(data, headers = streamHeaders, timeout = 10)
+        println("Test fetch result: Status=${testResponse.code}, Body=${testResponse.text.take(100)}")
+
         callback(
             ExtractorLink(
                 source = this.name,
