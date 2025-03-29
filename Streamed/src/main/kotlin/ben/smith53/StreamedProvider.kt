@@ -14,7 +14,6 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
 
 class StreamedProvider(private val context: Context) : MainAPI() {
     override var mainUrl = "https://streamed.su"
@@ -87,7 +86,7 @@ class StreamedProvider(private val context: Context) : MainAPI() {
 
     private suspend fun fetchLiveMatches(): List<HomePageList> {
         val response = app.get("$mainUrl/api/matches/all", headers = headers, timeout = 30)
-        val text = if (response.headers["Content-Encoding"] == "gzip") {
+        val text = if (response.headers["Content-Encoding"]?.equals("gzip") == true) {
             GZIPInputStream(response.body.byteStream()).bufferedReader().use { it.readText() }
         } else {
             response.text
@@ -162,7 +161,7 @@ class StreamedProvider(private val context: Context) : MainAPI() {
         println("Parsed: matchId=$matchId, sourceType=$sourceType, sourceId=$sourceId")
 
         val matchResponse = app.get("$mainUrl/api/matches/all", headers = headers, timeout = 30)
-        val matchesText = if (matchResponse.headers["Content-Encoding"] == "gzip") {
+        val matchesText = if (matchResponse.headers["Content-Encoding"]?.equals("gzip") == true) {
             GZIPInputStream(matchResponse.body.byteStream()).bufferedReader().use { it.readText() }
         } else {
             matchResponse.text
@@ -179,8 +178,7 @@ class StreamedProvider(private val context: Context) : MainAPI() {
             "Referer" to "https://streamed.su/"
         )
         val response = app.get(streamUrl, headers = streamApiHeaders, timeout = 30)
-        println("Stream API request: URL=$streamUrl, Headers=$streamApiHeaders, Status=${response.code}")
-        val text = if (response.headers["Content-Encoding"] == "gzip") {
+        val text = if (response.headers["Content-Encoding"]?.equals("gzip") == true) {
             GZIPInputStream(response.body.byteStream()).bufferedReader().use { it.readText() }
         } else {
             response.text
@@ -188,7 +186,7 @@ class StreamedProvider(private val context: Context) : MainAPI() {
         println("Stream API response for $streamUrl: $text")
 
         if (!response.isSuccessful || text.contains("Not Found")) {
-            println("Stream not found for $streamUrl, status=${response.code}, attempting fallback with matchId")
+            println("Stream not found for $streamUrl, status=${response.code}")
             return newLiveStreamLoadResponse(
                 "Stream Unavailable - $matchId",
                 correctedUrl,
@@ -245,7 +243,7 @@ class StreamedProvider(private val context: Context) : MainAPI() {
         val sourceId = if (parts.size > 2) parts[2] else matchId
 
         val matchResponse = app.get("$mainUrl/api/matches/all", headers = headers, timeout = 30)
-        val matchesText = if (matchResponse.headers["Content-Encoding"] == "gzip") {
+        val matchesText = if (matchResponse.headers["Content-Encoding"]?.equals("gzip") == true) {
             GZIPInputStream(matchResponse.body.byteStream()).bufferedReader().use { it.readText() }
         } else {
             matchResponse.text
@@ -262,7 +260,7 @@ class StreamedProvider(private val context: Context) : MainAPI() {
             "Referer" to "https://streamed.su/"
         )
         val response = app.get(streamUrl, headers = streamApiHeaders, timeout = 30)
-        val text = if (response.headers["Content-Encoding"] == "gzip") {
+        val text = if (response.headers["Content-Encoding"]?.equals("gzip") == true) {
             GZIPInputStream(response.body.byteStream()).bufferedReader().use { it.readText() }
         } else {
             response.text
@@ -292,7 +290,7 @@ class StreamedProvider(private val context: Context) : MainAPI() {
                     referer = "https://embedme.top/",
                     quality = if (stream.hd) 720 else -1,
                     isM3u8 = true,
-                    headers = streamHeaders // Headers for .m3u8 playback
+                    headers = streamHeaders
                 )
             )
         }
@@ -315,30 +313,36 @@ class StreamedProvider(private val context: Context) : MainAPI() {
         }
     }
 
-    private suspend fun decryptWithWebView(encrypted: String, sourceType: String, teamSlug: String, streamNo: String): String = suspendCancellableCoroutine<String> { cont ->
-        val webView = WebView(context)
-        webView.settings.javaScriptEnabled = true
-        webView.webViewClient = object : WebViewClient() {
-            override fun onPageFinished(view: WebView?, url: String?) {
-                val js = """
-                    window.decrypt('$encrypted').then(result => {
-                        window.androidCallback(result);
-                    });
-                """
-                webView.evaluateJavascript(js) { result ->
-                    if (result != null && result != "null") {
-                        println("Decrypted result: $result")
-                        cont.resume(result.trim('"'))
-                    } else {
-                        println("Decryption failed: $result")
-                        cont.resumeWithException(Exception("Decryption failed"))
+    private suspend fun decryptWithWebView(encrypted: String, sourceType: String, teamSlug: String, streamNo: String): String? {
+        return suspendCancellableCoroutine { continuation ->
+            val webView = WebView(context)
+            webView.settings.javaScriptEnabled = true
+            webView.webViewClient = object : WebViewClient() {
+                override fun onPageFinished(view: WebView?, url: String?) {
+                    val js = """
+                        window.decrypt('$encrypted').then(result => {
+                            window.androidCallback(result);
+                        });
+                    """
+                    webView.evaluateJavascript(js) { value ->
+                        if (value != null && value != "null") {
+                            println("Decrypted result: $value")
+                            continuation.resume(value.trim('"'))
+                        } else {
+                            println("Decryption failed: $value")
+                            continuation.resume(null)
+                        }
                     }
                 }
             }
+            val embedUrl = "https://embedme.top/embed/$sourceType/$teamSlug/$streamNo"
+            println("Loading WebView with URL: $embedUrl")
+            webView.loadUrl(embedUrl)
+
+            continuation.invokeOnCancellation {
+                webView.destroy()
+            }
         }
-        val embedUrl = "https://embedme.top/embed/$sourceType/$teamSlug/$streamNo"
-        println("Loading WebView with URL: $embedUrl")
-        webView.loadUrl(embedUrl)
     }
 
     private fun String.capitalize(): String {
