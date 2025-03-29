@@ -6,8 +6,9 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.lagradost.cloudstream3.ErrorLoadingException
 import com.lagradost.cloudstream3.HomePageList
 import com.lagradost.cloudstream3.HomePageResponse
-import com.lagradost.cloudstream3.LiveSearchResponse
+import com.lagradost.cloudstream3.LoadResponse
 import com.lagradost.cloudstream3.MainAPI
+import com.lagradost.cloudstream3.MainPageRequest
 import com.lagradost.cloudstream3.TvType
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.newHomePageResponse
@@ -18,7 +19,7 @@ import java.util.zip.GZIPInputStream
 class StreamedProvider : MainAPI() {
     override var mainUrl = "https://streamed.su"
     override var name = "Streamed"
-    override val supportedTypes = setOf(TvType.LIVE) // Fixed: Use TvType.LIVE
+    override val supportedTypes = setOf(TvType.Live) // Fixed: Use TvType.Live
     override var lang = "en"
     override val hasMainPage = true
     override val hasDownloadSupport = false
@@ -55,7 +56,7 @@ class StreamedProvider : MainAPI() {
         val source: String
     )
 
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? { // Fixed: Added ? and correct signature
         val response = app.get("$mainUrl/api/matches/all", headers = headers, timeout = 30)
         val matchesText = if (response.headers["Content-Encoding"]?.equals("gzip") == true) {
             GZIPInputStream(response.body.byteStream()).bufferedReader().use { it.readText() }
@@ -64,7 +65,7 @@ class StreamedProvider : MainAPI() {
         }
         println("Fetched matches from API: $matchesText")
 
-        val matches = mapper.readValue<List<APIMatch>>(matchesText) // Fixed: Specify type explicitly
+        val matches = mapper.readValue(matchesText, object : TypeReference<List<APIMatch>>() {}) // Fixed: Use TypeReference
         println("Parsed ${matches.size} matches")
 
         val homePageList = matches.mapNotNull { match ->
@@ -75,17 +76,13 @@ class StreamedProvider : MainAPI() {
             HomePageList(
                 match.title,
                 listOf(
-                    newLiveSearchResponse(
-                        name = match.title,
-                        url = url,
-                        apiName = this.name
-                    ) {
-                        this.type = TvType.LIVE
+                    newLiveSearchResponse(match.title, url, this.name) {
+                        this.type = TvType.Live
                     }
                 )
             )
         }
-        return newHomePageResponse(homePageList) // Fixed: Use newHomePageResponse
+        return newHomePageResponse(homePageList)
     }
 
     private suspend fun fetchEncryptedData(sourceType: String, matchId: String, streamNo: String): String? {
@@ -112,7 +109,7 @@ class StreamedProvider : MainAPI() {
         }
     }
 
-    override suspend fun load(url: String): com.lagradost.cloudstream3.LoadResponse {
+    override suspend fun load(url: String): LoadResponse {
         println("Original URL received: $url")
         val correctedUrl = if (url.startsWith("$mainUrl/watch/")) {
             val parts = url.split("/")
@@ -137,7 +134,7 @@ class StreamedProvider : MainAPI() {
         } else {
             matchResponse.text
         }
-        val matches = mapper.readValue<List<APIMatch>>(matchesText) // Fixed: Specify type explicitly
+        val matches = mapper.readValue(matchesText, object : TypeReference<List<APIMatch>>() {}) // Fixed: Use TypeReference
         val match = matches.find { it.id == matchId } ?: throw ErrorLoadingException("Match not found: $matchId")
         val teamSlug = match.teams?.let { teams ->
             "${teams.home?.name?.lowercase()?.replace(" ", "-")}-vs-${teams.away?.name?.lowercase()?.replace(" ", "-")}"
@@ -159,25 +156,15 @@ class StreamedProvider : MainAPI() {
 
         if (!response.isSuccessful || text.contains("Not Found")) {
             println("Stream not found for $streamUrl, status=${response.code}")
-            return newLiveStreamLoadResponse(
-                name = "Stream Unavailable - $matchId",
-                url = correctedUrl,
-                dataUrl = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
-                apiName = this.name
-            ) {
+            return newLiveStreamLoadResponse("Stream Unavailable - $matchId", correctedUrl, "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8") {
                 this.plot = "The requested stream could not be found. Using a test stream instead."
             }
         }
 
-        val streams = mapper.readValue<List<Stream>>(text) // Fixed: Specify type explicitly
+        val streams = mapper.readValue(text, object : TypeReference<List<Stream>>() {}) // Fixed: Use TypeReference
         if (streams.isEmpty()) {
             println("No streams available for $streamUrl")
-            return newLiveStreamLoadResponse(
-                name = "No Streams Available - $matchId",
-                url = correctedUrl,
-                dataUrl = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
-                apiName = this.name
-            ) {
+            return newLiveStreamLoadResponse("No Streams Available - $matchId", correctedUrl, "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8") {
                 this.plot = "No streams were returned for this match. Using a test stream instead."
             }
         }
@@ -208,12 +195,7 @@ class StreamedProvider : MainAPI() {
         }
         println("Default M3U8 URL: $m3u8Url")
 
-        return newLiveStreamLoadResponse(
-            name = "${firstStream.source} - ${if (firstStream.hd) "HD" else "SD"}",
-            url = correctedUrl,
-            dataUrl = m3u8Url,
-            apiName = this.name
-        ) {
+        return newLiveStreamLoadResponse("${firstStream.source} - ${if (firstStream.hd) "HD" else "SD"}", correctedUrl, m3u8Url) {
             if (m3u8Url.contains("test-streams")) {
                 this.plot = "Failed to fetch live stream URL. Using a test stream instead."
             }
