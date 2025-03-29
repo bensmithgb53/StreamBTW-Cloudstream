@@ -64,24 +64,14 @@ subprojects {
         val apk by configurations
         val implementation by configurations
 
-        // Cloudstream core
-        apk("com.lagradost:cloudstream3:pre-release")
-
-        // Kotlin and standard libraries
+        apk("com.lagradost:cloudstream3:pre-release") // Includes nicehttp for app.get
         implementation(kotlin("stdlib"))
-
-        // HTTP client (adding OkHttp since it's used directly)
-        implementation("com.squareup.okhttp3:okhttp:4.12.0") // Latest stable version as of now
-
-        // HTML parser (not used in this provider, but kept for consistency)
-        implementation("org.jsoup:jsoup:1.18.1")
-
-        // JSON parsing (already included, keeping versions consistent)
-        implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.16.0")
-        implementation("com.fasterxml.jackson.core:jackson-databind:2.16.0")
-
-        // Optional: Remove NiceHttp if you don’t need it elsewhere
-        // implementation("com.github.Blatzar:NiceHttp:0.4.11")
+        implementation("com.github.Blatzar:NiceHttp:0.4.11") // Already present, but not used here
+        implementation("org.jsoup:jsoup:1.18.1") // For other providers, not needed here
+        implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.16.0") // For JSON parsing
+        implementation("com.fasterxml.jackson.core:jackson-databind:2.16.0") // For JSON parsing
+        implementation("com.squareup.okhttp3:okhttp:4.12.0") // For fetchEncryptedData
+        implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1") // For suspendCancellableCoroutine
     }
 }
 
