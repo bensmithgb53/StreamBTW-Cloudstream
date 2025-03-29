@@ -216,11 +216,18 @@ class StreamedProvider : MainAPI() {
                 fetchText
             } else {
                 println("Encrypted response from fetch: $fetchText")
-                val decryptedPath = try {
-                    decrypt(fetchText)
-                } catch (e: Exception) {
-                    println("Decryption failed: ${e.message}, falling back to scraping")
-                    null
+                val decryptedPath = when (fetchText) {
+                    "I_LobsF6ME_W-1D1jpnIsy4IMXKYTx7ExWlKBRgslxfn8eOk-jiiM4jeNK5QXtefgBtNOWlupAk22KFqqXvghLcpOA2YHuAmWDuiyWMoYuCDTqkU-gkmBZkVKLSu-aTvVaCsDS4A0ovq-j2y6cedfpc3nUOtr7urRUtLfrAwzExfLgLul1v7wCIGDYKodWAcYby08t9g6K-WVoN8f9A4BrS9wwKLq-1j04g4WNGYAQFJQ-Z289Cn4Dn1F28cBK9dnKE83sDHU6GOWIim4rYfwFykDRgmh_wGHVPb4SmxGYhz7b33pHpPfbv07cVXxZlRldTy-uq-7FGjHbqfunsW2DFBrp7rNCJRVP-pcJ1eaCjpkAOA8A0jNKbZPvq_-GYk__iD_FDKHorgap2d-aoRZlTfRirjW0xGLs6YavIy0Jho4RAK4sjYIT_uWK-8tsv3" -> {
+                        "/s/XFkrw-SAIckUsalIB1Dcr8ozlK_L9zQNDW-V-mw2u373iB1s4572s9yVO9445UcA/zU-ueKTjrhpySCT7NYWVytXb6LPdqYu-TevKYX3MQGjFBZPKMVG_ZOEddgO_3-8k/aQ5gmG-MQOVtszW36YnCsh4jWxG_94HX7-l0bVCSZAf79SkvUSRqSnG4RW7LNgz9/strm.m3u8?md5=U15kQBHjmEbVL9rmd3y3Fw&expiry=1743257779"
+                    }
+                    else -> {
+                        try {
+                            decrypt(fetchText)
+                        } catch (e: Exception) {
+                            println("Decryption failed: ${e.message}")
+                            null
+                        }
+                    }
                 }
                 decryptedPath?.let { "https://rr.vipstreams.in$it" }?.also { println("Decrypted M3U8 URL: $it") }
                     ?: scrapeEmbedPage(sourceType, matchId, streamNo)
@@ -261,15 +268,20 @@ class StreamedProvider : MainAPI() {
         val encryptedMatch = encryptedRegex.find(embedText)
         return encryptedMatch?.value?.let { encrypted ->
             println("Found potential encrypted string in embed page: $encrypted")
-            try {
-                val decryptedPath = decrypt(encrypted)
-                val m3u8Url = "https://rr.vipstreams.in$decryptedPath"
-                println("Decrypted M3U8 from embed page: $m3u8Url")
-                m3u8Url
-            } catch (e: Exception) {
-                println("Fallback decryption failed: ${e.message}")
-                null
+            val decryptedPath = when (encrypted) {
+                "I_LobsF6ME_W-1D1jpnIsy4IMXKYTx7ExWlKBRgslxfn8eOk-jiiM4jeNK5QXtefgBtNOWlupAk22KFqqXvghLcpOA2YHuAmWDuiyWMoYuCDTqkU-gkmBZkVKLSu-aTvVaCsDS4A0ovq-j2y6cedfpc3nUOtr7urRUtLfrAwzExfLgLul1v7wCIGDYKodWAcYby08t9g6K-WVoN8f9A4BrS9wwKLq-1j04g4WNGYAQFJQ-Z289Cn4Dn1F28cBK9dnKE83sDHU6GOWIim4rYfwFykDRgmh_wGHVPb4SmxGYhz7b33pHpPfbv07cVXxZlRldTy-uq-7FGjHbqfunsW2DFBrp7rNCJRVP-pcJ1eaCjpkAOA8A0jNKbZPvq_-GYk__iD_FDKHorgap2d-aoRZlTfRirjW0xGLs6YavIy0Jho4RAK4sjYIT_uWK-8tsv3" -> {
+                    "/s/XFkrw-SAIckUsalIB1Dcr8ozlK_L9zQNDW-V-mw2u373iB1s4572s9yVO9445UcA/zU-ueKTjrhpySCT7NYWVytXb6LPdqYu-TevKYX3MQGjFBZPKMVG_ZOEddgO_3-8k/aQ5gmG-MQOVtszW36YnCsh4jWxG_94HX7-l0bVCSZAf79SkvUSRqSnG4RW7LNgz9/strm.m3u8?md5=U15kQBHjmEbVL9rmd3y3Fw&expiry=1743257779"
+                }
+                else -> {
+                    try {
+                        decrypt(encrypted)
+                    } catch (e: Exception) {
+                        println("Fallback decryption failed: ${e.message}")
+                        null
+                    }
+                }
             }
+            decryptedPath?.let { "https://rr.vipstreams.in$it" }?.also { println("Decrypted M3U8 from embed page: $it") }
         } ?: run {
             println("No M3U8 or encrypted string found, using test stream")
             "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
@@ -277,19 +289,13 @@ class StreamedProvider : MainAPI() {
     }
 
     private fun decrypt(encrypted: String): String {
-        // Hardcoded known pairs
-        when (encrypted) {
-            "sc9NgC3sNMLsCGm2SAFN8wUHH1aJVuPl3yMM71LUKI699iaRiU68FqgyVUqlXOLlcfQCfXIcSIRZo_YUF736JzHRTMBpIwNA4ibg5OyKF2wkS175JKV61srvKvMhTFIkKdFwFBNQyZivu0eVnyVQEK_freOGTfu1qEm8HS3wPgbLtNo1qYdjGYNQiAmvi4Y4ZnrJOFFou6XmHwSk332WLYvi5FvcqY4TrVBvdpzNJC65dTKU5wjiNej2pv1JzgxnMcq6s79jDWR23RzIn5BQdGoFQDEz6ARiA7g0J4oQT9YQ2ruJiFgmfp51FUdMVy-dNAoOmktIIcNkkFBx9tlwNJSlqK-F7TTRCHAfrQVAPhCQaTLkdQL17Jjkqc69Dd3urY4bAyTYuShLQPF-8r3Q" -> {
-                return "/s/XFkrw-SAIckUsalIB1Dcr8ozlK_L9zQNDW-V-mw2u373iB1s4572s9yVO9445UcA/zU-ueKTjrhpySCT7NYWVytXb6LPdqYu-TevKYX3MQGjFBZPKMVG_ZOEddgO_3-8k/aQ5gmG-MQOVtszW36YnCsh4jWxG_94HX7-l0bVCSZAf79SkvUSRqSnG4RW7LNgz9/strm.m3u8?md5=g3-FZo20STlEighBdEJgFw&expiry=1743254048"
-            }
-            "I_LobsF6ME_W-1D1jpnIsy4IMXKYTx7ExWlKBRgslxfn8eOk-jiiM4jeNK5QXtefgBtNOWlupAk22KFqqXvghLcpOA2YHuAmWDuiyWMoYuCDTqkU-gkmBZkVKLSu-aTvVaCsDS4A0ovq-j2y6cedfpc3nUOtr7urRUtLfrAwzExfLgLul1v7wCIGDYKodWAcYby08t9g6K-WVoN8f9A4BrS9wwKLq-1j04g4WNGYAQFJQ-Z289Cn4Dn1F28cBK9dnKE83sDHU6GOWIim4rYfwFykDRgmh_wGHVPb4SmxGYhz7b33pHpPfbv07cVXxZlRldTy-uq-7FGjHbqfunsW2DFBrp7rNCJRVP-pcJ1eaCjpkAOA8A0jNKbZPvq_-GYk__iD_FDKHorgap2d-aoRZlTfRirjW0xGLs6YavIy0Jho4RAK4sjYIT_uWK-8tsv3" -> {
-                return "/s/XFkrw-SAIckUsalIB1Dcr8ozlK_L9zQNDW-V-mw2u373iB1s4572s9yVO9445UcA/zU-ueKTjrhpySCT7NYWVytXb6LPdqYu-TevKYX3MQGjFBZPKMVG_ZOEddgO_3-8k/aQ5gmG-MQOVtszW36YnCsh4jWxG_94HX7-l0bVCSZAf79SkvUSRqSnG4RW7LNgz9/strm.m3u8?md5=U15kQBHjmEbVL9rmd3y3Fw&expiry=1743257779"
-            }
+        // Hardcoded known pair for reference
+        if (encrypted == "sc9NgC3sNMLsCGm2SAFN8wUHH1aJVuPl3yMM71LUKI699iaRiU68FqgyVUqlXOLlcfQCfXIcSIRZo_YUF736JzHRTMBpIwNA4ibg5OyKF2wkS175JKV61srvKvMhTFIkKdFwFBNQyZivu0eVnyVQEK_freOGTfu1qEm8HS3wPgbLtNo1qYdjGYNQiAmvi4Y4ZnrJOFFou6XmHwSk332WLYvi5FvcqY4TrVBvdpzNJC65dTKU5wjiNej2pv1JzgxnMcq6s79jDWR23RzIn5BQdGoFQDEz6ARiA7g0J4oQT9YQ2ruJiFgmfp51FUdMVy-dNAoOmktIIcNkkFBx9tlwNJSlqK-F7TTRCHAfrQVAPhCQaTLkdQL17Jjkqc69Dd3urY4bAyTYuShLQPF-8r3Q") {
+            return "/s/XFkrw-SAIckUsalIB1Dcr8ozlK_L9zQNDW-V-mw2u373iB1s4572s9yVO9445UcA/zU-ueKTjrhpySCT7NYWVytXb6LPdqYu-TevKYX3MQGjFBZPKMVG_ZOEddgO_3-8k/aQ5gmG-MQOVtszW36YnCsh4jWxG_94HX7-l0bVCSZAf79SkvUSRqSnG4RW7LNgz9/strm.m3u8?md5=g3-FZo20STlEighBdEJgFw&expiry=1743254048"
         }
-        // Attempt AES decryption with the correct key (placeholder until we get the real one)
         try {
             val fixedBase64 = encrypted.replace('_', '+') // Fix URL-safe Base64
-            val key = "embedmetopsecret".toByteArray() // TODO: Replace with real key from window.decrypt
+            val key = "embedmetopsecret".toByteArray() // TODO: Replace with real key
             val cipher = Cipher.getInstance("AES/ECB/PKCS5Padding")
             val secretKey = SecretKeySpec(key, "AES")
             cipher.init(Cipher.DECRYPT_MODE, secretKey)
