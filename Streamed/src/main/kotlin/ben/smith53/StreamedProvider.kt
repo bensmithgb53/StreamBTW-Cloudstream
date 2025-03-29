@@ -12,7 +12,9 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
 
 class StreamedProvider(private val context: Context) : MainAPI() {
@@ -315,33 +317,35 @@ class StreamedProvider(private val context: Context) : MainAPI() {
     }
 
     private suspend fun decryptWithWebView(encrypted: String, sourceType: String, teamSlug: String, streamNo: String): String? {
-        return suspendCancellableCoroutine { continuation ->
-            val webView = WebView(context)
-            webView.settings.javaScriptEnabled = true
-            webView.webViewClient = object : WebViewClient() {
-                override fun onPageFinished(view: WebView?, url: String?) {
-                    val js = """
-                        window.decrypt('$encrypted').then(result => {
-                            window.androidCallback(result);
-                        });
-                    """
-                    webView.evaluateJavascript(js) { value ->
-                        if (value != null && value != "null") {
-                            println("Decrypted result: $value")
-                            continuation.resume(value.trim('"'))
-                        } else {
-                            println("Decryption failed: $value")
-                            continuation.resume(null)
+        return withContext(Dispatchers.Main) {
+            suspendCancellableCoroutine { continuation ->
+                val webView = WebView(context)
+                webView.settings.javaScriptEnabled = true
+                webView.webViewClient = object : WebViewClient() {
+                    override fun onPageFinished(view: WebView?, url: String?) {
+                        val js = """
+                            window.decrypt('$encrypted').then(result => {
+                                window.androidCallback(result);
+                            });
+                        """
+                        webView.evaluateJavascript(js) { value ->
+                            if (value != null && value != "null") {
+                                println("Decrypted result: $value")
+                                continuation.resume(value.trim('"'))
+                            } else {
+                                println("Decryption failed: $value")
+                                continuation.resume(null)
+                            }
                         }
                     }
                 }
-            }
-            val embedUrl = "https://embedme.top/embed/$sourceType/$teamSlug/$streamNo"
-            println("Loading WebView with URL: $embedUrl")
-            webView.loadUrl(embedUrl)
+                val embedUrl = "https://embedme.top/embed/$sourceType/$teamSlug/$streamNo"
+                println("Loading WebView with URL: $embedUrl")
+                webView.loadUrl(embedUrl)
 
-            continuation.invokeOnCancellation {
-                webView.destroy()
+                continuation.invokeOnCancellation {
+                    webView.destroy()
+                }
             }
         }
     }
