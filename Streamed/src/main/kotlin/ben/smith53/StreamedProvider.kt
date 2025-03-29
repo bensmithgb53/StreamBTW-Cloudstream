@@ -175,7 +175,7 @@ class StreamedProvider : MainAPI() {
         }
         println("Selected stream: id=${stream.id}, streamNo=${stream.streamNo}, hd=${stream.hd}, source=${stream.source}")
 
-        val m3u8Url = fetchM3u8Url(sourceType, matchId, streamNo) ?: run {
+        val m3u8Url = fetchM3u8Url(sourceType, matchId, stream.streamNo) ?: run {
             println("Failed to fetch M3U8, using test stream")
             "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
         }
@@ -191,10 +191,10 @@ class StreamedProvider : MainAPI() {
     }
 
     private suspend fun fetchM3u8Url(sourceType: String, matchId: String, streamNo: Int): String? {
-        // Hardcode for dinaz-vyshgorod-vs-minaj stream 1 with fresh URL
-        if (matchId == "dinaz-vyshgorod-vs-minaj" && sourceType == "alpha" && streamNo == 1) {
+        // Hardcode for fulham-vs-crystal-palace-2229629 stream 1 with fresh URL
+        if (matchId == "fulham-vs-crystal-palace-2229629" && sourceType == "alpha" && streamNo == 1) {
             val hardcodedM3u8 = "https://rr.vipstreams.in/s/-pEzojihAMYQrgO_XDRB_P-qvGzgISQXJ6qrOCUCYgFviakkTfsUfUWOWk9_narA/hxXAfLKHZLqZWQsZix1EzeQkYoV-ZaDoYkAzEUePSxD411OYz4vWMg_sepBx5b8HTRX8MUe5z-Bb1xMKSEXcLQ/S2y3aSVq0SyJsqhbFW3SOa5c-lgTn0DhTvodoBvhLLiMZz4zx4QeaTOF_sHDieQT/strm.m3u8?md5=fPzGg-huwuRVEFbbBg-KZA&expiry=1743265441"
-            println("Using hardcoded M3U8 for dinaz-vyshgorod-vs-minaj: $hardcodedM3u8")
+            println("Using hardcoded M3U8 for fulham-vs-crystal-palace-2229629: $hardcodedM3u8")
             return hardcodedM3u8
         }
 
