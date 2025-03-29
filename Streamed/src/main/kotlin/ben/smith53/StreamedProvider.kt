@@ -4,19 +4,21 @@ import com.fasterxml.jackson.core.type.TypeReference
 import com.fasterxml.jackson.databind.DeserializationFeature
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.lagradost.cloudstream3.ErrorLoadingException
-import com.lagradost.cloudstream3.LiveStreamLoadResponse
+import com.lagradost.cloudstream3.HomePageList
+import com.lagradost.cloudstream3.HomePageResponse
+import com.lagradost.cloudstream3.LiveSearchResponse
 import com.lagradost.cloudstream3.MainAPI
+import com.lagradost.cloudstream3.TvType
 import com.lagradost.cloudstream3.app
+import com.lagradost.cloudstream3.newHomePageResponse
+import com.lagradost.cloudstream3.newLiveSearchResponse
 import com.lagradost.cloudstream3.newLiveStreamLoadResponse
-import com.lagradost.cloudstream3.utils.ExtractorLink
-import java.io.BufferedReader
-import java.io.InputStreamReader
 import java.util.zip.GZIPInputStream
 
 class StreamedProvider : MainAPI() {
     override var mainUrl = "https://streamed.su"
     override var name = "Streamed"
-    override val supportedTypes = setOf(TvType.Live)
+    override val supportedTypes = setOf(TvType.LIVE) // Fixed: Use TvType.LIVE
     override var lang = "en"
     override val hasMainPage = true
     override val hasDownloadSupport = false
@@ -60,8 +62,10 @@ class StreamedProvider : MainAPI() {
         } else {
             response.text
         }
-        val matches: List<APIMatch> = mapper.readValue(matchesText)
-        println("Fetched ${matches.size} matches from API")
+        println("Fetched matches from API: $matchesText")
+
+        val matches = mapper.readValue<List<APIMatch>>(matchesText) // Fixed: Specify type explicitly
+        println("Parsed ${matches.size} matches")
 
         val homePageList = matches.mapNotNull { match ->
             val teamSlug = match.teams?.let { teams ->
@@ -71,17 +75,17 @@ class StreamedProvider : MainAPI() {
             HomePageList(
                 match.title,
                 listOf(
-                    LiveSearchResponse(
-                        match.title,
-                        url,
-                        this.name,
-                        TvType.Live,
-                        posterUrl = null
-                    )
+                    newLiveSearchResponse(
+                        name = match.title,
+                        url = url,
+                        apiName = this.name
+                    ) {
+                        this.type = TvType.LIVE
+                    }
                 )
             )
         }
-        return HomePageResponse(homePageList)
+        return newHomePageResponse(homePageList) // Fixed: Use newHomePageResponse
     }
 
     private suspend fun fetchEncryptedData(sourceType: String, matchId: String, streamNo: String): String? {
@@ -108,7 +112,7 @@ class StreamedProvider : MainAPI() {
         }
     }
 
-    override suspend fun load(url: String): LoadResponse {
+    override suspend fun load(url: String): com.lagradost.cloudstream3.LoadResponse {
         println("Original URL received: $url")
         val correctedUrl = if (url.startsWith("$mainUrl/watch/")) {
             val parts = url.split("/")
@@ -133,7 +137,7 @@ class StreamedProvider : MainAPI() {
         } else {
             matchResponse.text
         }
-        val matches: List<APIMatch> = mapper.readValue(matchesText)
+        val matches = mapper.readValue<List<APIMatch>>(matchesText) // Fixed: Specify type explicitly
         val match = matches.find { it.id == matchId } ?: throw ErrorLoadingException("Match not found: $matchId")
         val teamSlug = match.teams?.let { teams ->
             "${teams.home?.name?.lowercase()?.replace(" ", "-")}-vs-${teams.away?.name?.lowercase()?.replace(" ", "-")}"
@@ -156,29 +160,24 @@ class StreamedProvider : MainAPI() {
         if (!response.isSuccessful || text.contains("Not Found")) {
             println("Stream not found for $streamUrl, status=${response.code}")
             return newLiveStreamLoadResponse(
-                "Stream Unavailable - $matchId",
-                correctedUrl,
-                "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
+                name = "Stream Unavailable - $matchId",
+                url = correctedUrl,
+                dataUrl = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
+                apiName = this.name
             ) {
-                this.apiName = this@StreamedProvider.name
                 this.plot = "The requested stream could not be found. Using a test stream instead."
             }
         }
 
-        val streams: List<Stream> = try {
-            mapper.readValue(text)
-        } catch (e: Exception) {
-            println("Failed to parse streams: ${e.message}")
-            emptyList()
-        }
+        val streams = mapper.readValue<List<Stream>>(text) // Fixed: Specify type explicitly
         if (streams.isEmpty()) {
             println("No streams available for $streamUrl")
             return newLiveStreamLoadResponse(
-                "No Streams Available - $matchId",
-                correctedUrl,
-                "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
+                name = "No Streams Available - $matchId",
+                url = correctedUrl,
+                dataUrl = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
+                apiName = this.name
             ) {
-                this.apiName = this@StreamedProvider.name
                 this.plot = "No streams were returned for this match. Using a test stream instead."
             }
         }
@@ -189,7 +188,7 @@ class StreamedProvider : MainAPI() {
             ?: throw ErrorLoadingException("Failed to fetch encrypted stream data")
         println("Encrypted stream data: $encrypted")
 
-        // Attempt static M3U8 fetch (will refine with Network data)
+        // Static M3U8 fetch (to be refined with Network data)
         val m3u8Url = try {
             val m3u8Response = app.get(
                 "https://rr.vipstreams.in/s/S5sTu7faadwl9LhcLRFyyPX7XEULMSD_PTPKC2cKyCPdatz8HTuQecYh3Et3g8OD/0vTGmyGsnDSU99wFeaGAR_X0irbFxOQ92t3IihtLAO8qttPQm1XhIlPPt-T54YNZi4o4abRCScehK5vrDFqKtPukx_ZBCKDbGSDfEnVU85I/8KsQiiYtSHdESxeBDxS05hnZEEpT8nyWTTW4fA68hVXIyNvjSKPwASFVCTp8aF1d/strm.m3u8",
@@ -210,18 +209,14 @@ class StreamedProvider : MainAPI() {
         println("Default M3U8 URL: $m3u8Url")
 
         return newLiveStreamLoadResponse(
-            "${firstStream.source} - ${if (firstStream.hd) "HD" else "SD"}",
-            correctedUrl,
-            m3u8Url
+            name = "${firstStream.source} - ${if (firstStream.hd) "HD" else "SD"}",
+            url = correctedUrl,
+            dataUrl = m3u8Url,
+            apiName = this.name
         ) {
-            this.apiName = this@StreamedProvider.name
             if (m3u8Url.contains("test-streams")) {
                 this.plot = "Failed to fetch live stream URL. Using a test stream instead."
             }
         }
-    }
-
-    override suspend fun extractorVerifierJob(extractorLink: ExtractorLink?) {
-        // No extraction needed for live streams
     }
 }
