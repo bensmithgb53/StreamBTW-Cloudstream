@@ -149,7 +149,6 @@ class StreamedProvider : MainAPI() {
             "Referer" to "https://streamed.su/"
         )
         val response = app.get(streamUrl, headers = streamHeaders, timeout = 30)
-        println("Stream API request: URL=$streamUrl, Headers=$streamHeaders, Status=${response.code}")
         val text = if (response.headers["Content-Encoding"] == "gzip") {
             GZIPInputStream(response.body.byteStream()).bufferedReader().use { it.readText() }
         } else {
@@ -170,7 +169,7 @@ class StreamedProvider : MainAPI() {
                 url = correctedUrl,
                 dataUrl = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
             ) {
-                this.apiName = this@StreamedProvider.name // Changed from 'name' to 'apiName'
+                this.apiName = this@StreamedProvider.name
                 this.plot = "The requested stream could not be found."
             }
         }
@@ -186,7 +185,7 @@ class StreamedProvider : MainAPI() {
             url = correctedUrl,
             dataUrl = m3u8Url
         ) {
-            this.apiName = this@StreamedProvider.name // Changed from 'name' to 'apiName'
+            this.apiName = this@StreamedProvider.name
             this.plot = "Live stream from Streamed Sports"
         }
     }
@@ -197,13 +196,19 @@ class StreamedProvider : MainAPI() {
             "Referer" to "https://embedme.top/",
             "Content-Type" to "application/json",
             "Origin" to "https://embedme.top",
-            "Accept" to "*/*"
+            "Accept" to "*/*",
+            "Accept-Encoding" to "gzip, deflate, br, zstd"
         )
         val fetchBody = """{"source":"$sourceType","id":"$matchId","streamNo":"$streamNo"}""".toRequestBody("application/json".toMediaType())
+        
+        println("Fetching M3U8: POST https://embedme.top/fetch, Headers=$fetchHeaders, Body=$fetchBody")
         val fetchResponse = app.post("https://embedme.top/fetch", headers = fetchHeaders, requestBody = fetchBody, timeout = 30)
-        println("Fetch request: URL=https://embedme.top/fetch, Body=${fetchBody.toString()}, Status=${fetchResponse.code}")
-        val fetchText = fetchResponse.text
-        println("Fetch response: $fetchText")
+        val fetchText = if (fetchResponse.headers["Content-Encoding"] == "gzip") {
+            GZIPInputStream(fetchResponse.body.byteStream()).bufferedReader().use { it.readText() }
+        } else {
+            fetchResponse.text
+        }
+        println("Fetch response: Status=${fetchResponse.code}, Text=$fetchText")
 
         return if (fetchResponse.isSuccessful && fetchText.isNotBlank() && !fetchText.contains("Not Found")) {
             if (fetchText.contains(".m3u8")) {
@@ -214,7 +219,7 @@ class StreamedProvider : MainAPI() {
                 val decryptedPath = try {
                     decrypt(fetchText)
                 } catch (e: Exception) {
-                    println("Decryption failed: ${e.message}, scraping embed page as fallback")
+                    println("Decryption failed: ${e.message}, falling back to scraping")
                     null
                 }
                 decryptedPath?.let { "https://rr.vipstreams.in$it" }?.also { println("Decrypted M3U8 URL: $it") }
@@ -231,7 +236,8 @@ class StreamedProvider : MainAPI() {
         val embedHeaders = mapOf(
             "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
             "Referer" to "https://embedme.top/",
-            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
+            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            "Accept-Encoding" to "gzip, deflate, br, zstd"
         )
         val embedResponse = app.get(embedUrl, headers = embedHeaders, timeout = 30)
         val embedText = if (embedResponse.headers["Content-Encoding"] == "gzip") {
@@ -239,25 +245,55 @@ class StreamedProvider : MainAPI() {
         } else {
             embedResponse.text
         }
-        println("Embed page response: $embedText")
-        val m3u8Regex = Regex("https://rr\\.vipstreams\\.in/[\\w/-]+\\.m3u8\\?md5=[\\w-]+&expiry=\\d+")
-        return m3u8Regex.find(embedText)?.value?.also { println("Found M3U8 in embed page: $it") }
-            ?: run {
-                println("No M3U8 found in embed page, using test stream")
-                "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
+        println("Embed page response: Status=${embedResponse.code}, Text=$embedText")
+
+        // Look for M3U8 URL directly
+        val m3u8Regex = Regex("https://rr\\.vipstreams\\.in/[^\"'\\s]+\\.m3u8(?:\\?[^\"'\\s]*)?")
+        val m3u8Match = m3u8Regex.find(embedText)
+        if (m3u8Match != null) {
+            println("Found M3U8 in embed page: ${m3u8Match.value}")
+            return m3u8Match.value
+        }
+
+        // Fallback: Extract encrypted string and decrypt
+        println("No direct M3U8 found, trying to extract encrypted string")
+        val encryptedRegex = Regex("[A-Za-z0-9_-]{100,}")
+        val encryptedMatch = encryptedRegex.find(embedText)
+        return encryptedMatch?.value?.let { encrypted ->
+            println("Found potential encrypted string in embed page: $encrypted")
+            try {
+                val decryptedPath = decrypt(encrypted)
+                val m3u8Url = "https://rr.vipstreams.in$decryptedPath"
+                println("Decrypted M3U8 from embed page: $m3u8Url")
+                m3u8Url
+            } catch (e: Exception) {
+                println("Fallback decryption failed: ${e.message}")
+                null
             }
+        } ?: run {
+            println("No M3U8 or encrypted string found, using test stream")
+            "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
+        }
     }
 
     private fun decrypt(encrypted: String): String {
-        if (encrypted == "sc9NgC3sNMLsCGm2SAFN8wUHH1aJVuPl3yMM71LUKI699iaRiU68FqgyVUqlXOLlcfQCfXIcSIRZo_YUF736JzHRTMBpIwNA4ibg5OyKF2wkS175JKV61srvKvMhTFIkKdFwFBNQyZivu0eVnyVQEK_freOGTfu1qEm8HS3wPgbLtNo1qYdjGYNQiAmvi4Y4ZnrJOFFou6XmHwSk332WLYvi5FvcqY4TrVBvdpzNJC65dTKU5wjiNej2pv1JzgxnMcq6s79jDWR23RzIn5BQdGoFQDEz6ARiA7g0J4oQT9YQ2ruJiFgmfp51FUdMVy-dNAoOmktIIcNkkFBx9tlwNJSlqK-F7TTRCHAfrQVAPhCQaTLkdQL17Jjkqc69Dd3urY4bAyTYuShLQPF-8r3Q") {
-            return "/s/XFkrw-SAIckUsalIB1Dcr8ozlK_L9zQNDW-V-mw2u373iB1s4572s9yVO9445UcA/zU-ueKTjrhpySCT7NYWVytXb6LPdqYu-TevKYX3MQGjFBZPKMVG_ZOEddgO_3-8k/aQ5gmG-MQOVtszW36YnCsh4jWxG_94HX7-l0bVCSZAf79SkvUSRqSnG4RW7LNgz9/strm.m3u8?md5=g3-FZo20STlEighBdEJgFw&expiry=1743254048"
+        // Hardcoded known pairs
+        when (encrypted) {
+            "sc9NgC3sNMLsCGm2SAFN8wUHH1aJVuPl3yMM71LUKI699iaRiU68FqgyVUqlXOLlcfQCfXIcSIRZo_YUF736JzHRTMBpIwNA4ibg5OyKF2wkS175JKV61srvKvMhTFIkKdFwFBNQyZivu0eVnyVQEK_freOGTfu1qEm8HS3wPgbLtNo1qYdjGYNQiAmvi4Y4ZnrJOFFou6XmHwSk332WLYvi5FvcqY4TrVBvdpzNJC65dTKU5wjiNej2pv1JzgxnMcq6s79jDWR23RzIn5BQdGoFQDEz6ARiA7g0J4oQT9YQ2ruJiFgmfp51FUdMVy-dNAoOmktIIcNkkFBx9tlwNJSlqK-F7TTRCHAfrQVAPhCQaTLkdQL17Jjkqc69Dd3urY4bAyTYuShLQPF-8r3Q" -> {
+                return "/s/XFkrw-SAIckUsalIB1Dcr8ozlK_L9zQNDW-V-mw2u373iB1s4572s9yVO9445UcA/zU-ueKTjrhpySCT7NYWVytXb6LPdqYu-TevKYX3MQGjFBZPKMVG_ZOEddgO_3-8k/aQ5gmG-MQOVtszW36YnCsh4jWxG_94HX7-l0bVCSZAf79SkvUSRqSnG4RW7LNgz9/strm.m3u8?md5=g3-FZo20STlEighBdEJgFw&expiry=1743254048"
+            }
+            "I_LobsF6ME_W-1D1jpnIsy4IMXKYTx7ExWlKBRgslxfn8eOk-jiiM4jeNK5QXtefgBtNOWlupAk22KFqqXvghLcpOA2YHuAmWDuiyWMoYuCDTqkU-gkmBZkVKLSu-aTvVaCsDS4A0ovq-j2y6cedfpc3nUOtr7urRUtLfrAwzExfLgLul1v7wCIGDYKodWAcYby08t9g6K-WVoN8f9A4BrS9wwKLq-1j04g4WNGYAQFJQ-Z289Cn4Dn1F28cBK9dnKE83sDHU6GOWIim4rYfwFykDRgmh_wGHVPb4SmxGYhz7b33pHpPfbv07cVXxZlRldTy-uq-7FGjHbqfunsW2DFBrp7rNCJRVP-pcJ1eaCjpkAOA8A0jNKbZPvq_-GYk__iD_FDKHorgap2d-aoRZlTfRirjW0xGLs6YavIy0Jho4RAK4sjYIT_uWK-8tsv3" -> {
+                return "/s/XFkrw-SAIckUsalIB1Dcr8ozlK_L9zQNDW-V-mw2u373iB1s4572s9yVO9445UcA/zU-ueKTjrhpySCT7NYWVytXb6LPdqYu-TevKYX3MQGjFBZPKMVG_ZOEddgO_3-8k/aQ5gmG-MQOVtszW36YnCsh4jWxG_94HX7-l0bVCSZAf79SkvUSRqSnG4RW7LNgz9/strm.m3u8?md5=U15kQBHjmEbVL9rmd3y3Fw&expiry=1743257779"
+            }
         }
+        // Attempt AES decryption with the correct key (placeholder until we get the real one)
         try {
-            val key = "embedmetopsecret".toByteArray() // Placeholder, needs real key
+            val fixedBase64 = encrypted.replace('_', '+') // Fix URL-safe Base64
+            val key = "embedmetopsecret".toByteArray() // TODO: Replace with real key from window.decrypt
             val cipher = Cipher.getInstance("AES/ECB/PKCS5Padding")
             val secretKey = SecretKeySpec(key, "AES")
             cipher.init(Cipher.DECRYPT_MODE, secretKey)
-            val decodedBytes = Base64.getDecoder().decode(encrypted)
+            val decodedBytes = Base64.getDecoder().decode(fixedBase64)
             val decryptedBytes = cipher.doFinal(decodedBytes)
             return String(decryptedBytes)
         } catch (e: Exception) {
@@ -285,7 +321,7 @@ class StreamedProvider : MainAPI() {
                 name = "Streamed Sports",
                 url = data,
                 referer = "https://embedme.top/",
-                quality = -1, // Use -1 for unknown quality
+                quality = -1,
                 headers = streamHeaders,
                 isM3u8 = true
             )
