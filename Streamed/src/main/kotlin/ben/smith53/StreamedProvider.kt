@@ -73,7 +73,6 @@ class StreamedProvider : MainAPI() {
         println("Matches API response: $text")
         val matches: List<APIMatch> = mapper.readValue(text)
         val currentTime = System.currentTimeMillis() / 1000
-        println("Current time: $currentTime, Filter threshold: ${currentTime - 24 * 60 * 60}")
         val liveMatches = matches.filter { it.date / 1000 >= (currentTime - 24 * 60 * 60) }
 
         if (liveMatches.isEmpty()) {
@@ -91,18 +90,22 @@ class StreamedProvider : MainAPI() {
             val eventList = categoryMatches.mapNotNull { match ->
                 val source = match.sources.firstOrNull() ?: return@mapNotNull null
                 println("Match: ${match.title}, Source: ${source.source}, ID: ${source.id}")
-                val posterUrl = match.poster?.let { 
-                    val cleanPoster = it.removeSuffix(".webp")
-                    if (cleanPoster.startsWith("/")) "$mainUrl/api/images/proxy$cleanPoster.webp" 
-                    else "$mainUrl/api/images/proxy/$cleanPoster.webp" 
-                } ?: match.teams?.let { teams ->
-                    teams.home?.badge?.let { homeBadge ->
-                        teams.away?.badge?.let { awayBadge ->
-                            "$posterBase/$homeBadge/$awayBadge.webp"
-                        }
+
+                // Improved poster URL construction
+                val posterUrl = when {
+                    match.poster != null -> {
+                        val cleanPoster = match.poster.removeSuffix(".webp").trim('/')
+                        if (cleanPoster.isNotEmpty()) "$mainUrl/api/images/proxy/$cleanPoster.webp" else null
                     }
+                    match.teams?.home?.badge != null && match.teams.away?.badge != null -> {
+                        val homeBadge = match.teams.home.badge
+                        val awayBadge = match.teams.away.badge
+                        "$posterBase/$homeBadge/$awayBadge.webp"
+                    }
+                    else -> null
                 }
                 val homeBadge = match.teams?.home?.badge?.let { "$badgeBase/$it.webp" }
+
                 newLiveSearchResponse(match.title, "${match.id}|${source.source}|${source.id}", TvType.Live) {
                     this.posterUrl = posterUrl ?: homeBadge
                 }
@@ -122,6 +125,7 @@ class StreamedProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
+        println("Starting load for URL: $url")
         val correctedUrl = if (url.startsWith("$mainUrl/watch/")) {
             val parts = url.split("/")
             val matchId = parts[parts.indexOf("watch") + 1].split("-").last()
@@ -136,7 +140,6 @@ class StreamedProvider : MainAPI() {
         val sourceType = if (parts.size > 1) parts[1] else "alpha"
         val sourceId = if (parts.size > 2) parts[2] else matchId
 
-        println("Loading stream with corrected URL: $correctedUrl")
         println("Parsed: matchId=$matchId, sourceType=$sourceType, sourceId=$sourceId")
 
         val streamUrl = "$mainUrl/api/stream/$sourceType/$sourceId"
@@ -145,23 +148,19 @@ class StreamedProvider : MainAPI() {
             "Referer" to "https://streamed.su/"
         )
         val response = app.get(streamUrl, headers = streamHeaders, timeout = 30)
-        println("Stream API request: URL=$streamUrl, Headers=$streamHeaders, Status=${response.code}")
+        println("Stream API request: URL=$streamUrl, Status=${response.code}")
         val text = if (response.headers["Content-Encoding"] == "gzip") {
             GZIPInputStream(response.body.byteStream()).bufferedReader().use { it.readText() }
         } else {
             response.text
         }
-        println("Stream API response for $streamUrl: $text")
+        println("Stream API response: $text")
 
         if (!response.isSuccessful || text.contains("Not Found")) {
-            println("Stream not found for $streamUrl, status=${response.code}, attempting fallback with matchId")
-            return newLiveStreamLoadResponse(
-                "Stream Unavailable - $matchId",
-                correctedUrl,
-                "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
-            ) {
+            println("Stream API failed, falling back to test stream")
+            return newLiveStreamLoadResponse("Stream Unavailable - $matchId", correctedUrl, "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8") {
                 this.apiName = this@StreamedProvider.name
-                this.plot = "The requested stream could not be found. Using a test stream instead."
+                this.plot = "The requested stream could not be found."
             }
         }
 
@@ -173,19 +172,14 @@ class StreamedProvider : MainAPI() {
         }
         val stream = streams.firstOrNull()
         if (stream == null) {
-            println("No streams available for $streamUrl")
-            return newLiveStreamLoadResponse(
-                "No Streams Available - $matchId",
-                correctedUrl,
-                "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
-            ) {
+            println("No streams available, falling back to test stream")
+            return newLiveStreamLoadResponse("No Streams Available - $matchId", correctedUrl, "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8") {
                 this.apiName = this@StreamedProvider.name
-                this.plot = "No streams were returned for this match. Using a test stream instead."
+                this.plot = "No streams were returned for this match."
             }
         }
         println("Selected stream: id=${stream.id}, streamNo=${stream.streamNo}, hd=${stream.hd}, source=${stream.source}")
 
-        // Fetch the embed page to extract the 'ut' parameter
         val embedUrl = "https://embedme.top/embed/$sourceType/$matchId/${stream.streamNo}"
         val embedHeaders = mapOf(
             "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
@@ -198,14 +192,15 @@ class StreamedProvider : MainAPI() {
         } else {
             embedResponse.text
         }
-        println("Embed page response for $embedUrl: $embedText")
+        println("Embed page response: $embedText")
 
-        // Extract 'ut' parameter from the embed URL or page
         val utRegex = Regex("ut=(\\d+)")
-        val ut = utRegex.find(embedText)?.groupValues?.get(1) ?: "0" // Default to 0 if not found
+        val ut = utRegex.find(embedText)?.groupValues?.get(1) ?: run {
+            println("UT not found in embed page, defaulting to current timestamp")
+            (System.currentTimeMillis() / 1000).toString()
+        }
         println("Extracted ut parameter: $ut")
 
-        // Use the 'ut' parameter in the fetch request
         val fetchHeaders = mapOf(
             "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
             "Referer" to "https://embedme.top/",
@@ -216,54 +211,33 @@ class StreamedProvider : MainAPI() {
         val fetchBody = """{"source":"$sourceType","id":"$matchId","streamNo":"${stream.streamNo}","ut":"$ut"}""".toRequestBody()
         val fetchResponse = app.post("https://embedme.top/fetch", headers = fetchHeaders, requestBody = fetchBody, timeout = 30)
         val fetchText = fetchResponse.text
-        println("Fetch response from https://embedme.top/fetch with ut=$ut: $fetchText")
+        println("Fetch response: $fetchText")
 
         val m3u8Url = if (fetchResponse.isSuccessful && fetchText.isNotBlank() && !fetchText.contains("Not Found")) {
             if (fetchText.contains(".m3u8")) {
                 println("Fetch returned direct M3U8 URL: $fetchText")
                 fetchText
             } else {
-                println("Fetch returned encrypted data: $fetchText, attempting decryption or scraping")
-                // Here you could add decryption logic if needed, but for now, we'll scrape the embed page again
+                println("Fetch returned encrypted data, scraping embed page as fallback")
                 val m3u8Regex = Regex("https://[\\w.-]+/[\\w/-]+\\.m3u8\\?md5=[\\w-]+&expiry=\\d+")
-                val foundUrl = m3u8Regex.find(embedText)?.value ?: run {
-                    val relativeM3u8Regex = Regex("/s/[\\w/-]+\\.m3u8\\?md5=[\\w-]+&expiry=\\d+")
-                    relativeM3u8Regex.find(embedText)?.value?.let { relativeUrl ->
-                        "https://rr.vipstreams.in$relativeUrl"
-                    }
-                }
-                foundUrl?.let { url ->
-                    println("Found M3U8 URL in embed page: $url")
-                    url
-                } ?: run {
-                    println("No M3U8 URL found in embed page, falling back to test stream")
+                val foundUrl = m3u8Regex.find(embedText)?.value
+                foundUrl ?: run {
+                    println("No M3U8 found in embed page, using test stream")
                     "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
                 }
             }
         } else {
-            println("Fetch failed or returned invalid data: status=${fetchResponse.code}, scraping embed page")
+            println("Fetch failed (status=${fetchResponse.code}), scraping embed page")
             val m3u8Regex = Regex("https://[\\w.-]+/[\\w/-]+\\.m3u8\\?md5=[\\w-]+&expiry=\\d+")
-            val foundUrl = m3u8Regex.find(embedText)?.value ?: run {
-                val relativeM3u8Regex = Regex("/s/[\\w/-]+\\.m3u8\\?md5=[\\w-]+&expiry=\\d+")
-                relativeM3u8Regex.find(embedText)?.value?.let { relativeUrl ->
-                    "https://rr.vipstreams.in$relativeUrl"
-                }
-            }
-            foundUrl?.let { url ->
-                println("Found M3U8 URL in embed page: $url")
-                url
-            } ?: run {
-                println("No M3U8 URL found, using test stream")
+            val foundUrl = m3u8Regex.find(embedText)?.value
+            foundUrl ?: run {
+                println("No M3U8 found in embed page, using test stream")
                 "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
             }
         }
-
         println("Final M3U8 URL: $m3u8Url")
-        return newLiveStreamLoadResponse(
-            "${stream.source} - ${if (stream.hd) "HD" else "SD"}",
-            m3u8Url,
-            m3u8Url
-        ) {
+
+        return newLiveStreamLoadResponse("${stream.source} - ${if (stream.hd) "HD" else "SD"}", m3u8Url, m3u8Url) {
             this.apiName = this@StreamedProvider.name
         }
     }
