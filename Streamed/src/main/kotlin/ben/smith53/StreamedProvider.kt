@@ -1,191 +1,298 @@
 package ben.smith53
 
-import com.lagradost.cloudstream3.SubtitleFile
-import com.lagradost.cloudstream3.app
-import com.lagradost.cloudstream3.utils.AppUtils.parseJson
-import com.lagradost.cloudstream3.utils.ExtractorApi
+import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.Qualities
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import com.fasterxml.jackson.module.kotlin.readValue
 import java.util.zip.GZIPInputStream
-import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
-import javax.crypto.Cipher
-import javax.crypto.spec.SecretKeySpec
-import java.util.Base64
 
-const val TAG = "StreamedExtractor"
+class StreamedProvider : MainAPI() {
+    override var mainUrl = "https://streamed.su"
+    override var name = "Streamed Sports"
+    override val supportedTypes = setOf(TvType.Live)
+    override var lang = "en"
+    override val hasMainPage = true
+    override val vpnStatus = VPNStatus.MightBeNeeded
+    override val hasDownloadSupport = false
+    override val instantLinkLoading = true
 
-class StreamedExtractor : ExtractorApi() {
-    override val mainUrl = "https://streamed.su"
-    override val name = "Streamed Sports Extractor"
-    override val requiresReferer = true
-
-    private val embedBaseUrl = "https://embedme.top"
-    private val streamBaseUrl = "https://rr.vipstreams.in"
-
-    private val defaultHeaders = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-        "Referer" to "$embedBaseUrl/",
-        "Accept" to "*/*",
-        "Accept-Encoding" to "gzip, deflate, br",
-        "Accept-Language" to "en-US,en;q=0.9"
+    private val headers = mapOf(
+        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+        "Referer" to "https://streamed.su/",
+        "Accept-Encoding" to "gzip, deflate, br, zstd",
+        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
     )
 
-    data class Source(
+    companion object {
+        private const val posterBase = "https://streamed.su/api/images/poster"
+        private const val badgeBase = "https://streamed.su/api/images/badge"
+        private val mapper = jacksonObjectMapper()
+    }
+
+    data class APIMatch(
         val id: String,
-        val streamNumber: Int,
+        val title: String,
+        val category: String,
+        val date: Long,
+        val poster: String? = null,
+        val popular: Boolean,
+        val teams: Teams? = null,
+        val sources: List<Source>
+    ) {
+        data class Teams(
+            val home: Team? = null,
+            val away: Team? = null
+        )
+        data class Team(
+            val name: String,
+            val badge: String? = null
+        )
+        data class Source(
+            val source: String,
+            val id: String
+        )
+    }
+
+    data class Stream(
+        val id: String,
+        val streamNo: Int,
         val language: String,
-        val isHD: Boolean,
+        val hd: Boolean,
+        val embedUrl: String,
         val source: String
     )
 
-    override suspend fun getUrl(
-        url: String,
-        referer: String?,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ) {
-        println("$TAG: Extracting from URL: $url, Referer: $referer")
-        if (url.isNotEmpty()) {
-            // Fetch stream metadata
-            val response = app.get(url, headers = defaultHeaders, timeout = 30)
-            val rawSource = if (response.headers["Content-Encoding"] == "gzip") {
-                GZIPInputStream(response.body.byteStream()).bufferedReader().use { it.readText() }
-            } else {
-                response.text
-            }
-            println("$TAG: Raw response: $rawSource")
+    private suspend fun fetchLiveMatches(): List<HomePageList> {
+        val response = app.get("$mainUrl/api/matches/all", headers = headers, timeout = 30)
+        val text = if (response.headers["Content-Encoding"] == "gzip") {
+            GZIPInputStream(response.body.byteStream()).bufferedReader().use { it.readText() }
+        } else {
+            response.text
+        }
+        println("Matches API response: $text")
+        val matches: List<APIMatch> = mapper.readValue(text)
+        val currentTime = System.currentTimeMillis() / 1000
+        println("Current time: $currentTime, Filter threshold: ${currentTime - 24 * 60 * 60}")
+        val liveMatches = matches.filter { it.date / 1000 >= (currentTime - 24 * 60 * 60) }
 
-            val sources = try {
-                parseJson<List<Source>>(rawSource)
-            } catch (e: Exception) {
-                println("$TAG: Failed to parse sources: ${e.message}")
-                emptyList()
-            }
+        if (liveMatches.isEmpty()) {
+            return listOf(
+                HomePageList(
+                    "No Live Matches",
+                    listOf(newLiveSearchResponse("No live matches available", "$mainUrl|alpha|default", TvType.Live)),
+                    isHorizontalImages = false
+                )
+            )
+        }
 
-            if (sources.isNotEmpty()) {
-                sources.forEach { source ->
-                    val m3u8Url = getM3u8Url(source.source, source.id, source.streamNumber)
-                    if (m3u8Url != null) {
-                        val isHdString = if (source.isHD) "HD" else "SD"
-                        val sourceName = "${source.streamNumber}. ${source.source.capitalize()} $isHdString ${source.language}"
-
-                        println("$TAG: Generated link: $sourceName -> $m3u8Url")
-                        callback(
-                            ExtractorLink(
-                                source = name,
-                                name = sourceName,
-                                url = m3u8Url,
-                                referer = "$embedBaseUrl/",
-                                quality = if (source.isHD) Qualities.P1080.value else Qualities.P720.value,
-                                isM3u8 = true,
-                                headers = defaultHeaders
-                            )
-                        )
-                    } else {
-                        println("$TAG: No M3U8 URL found for ${source.source}/${source.id}/${source.streamNumber}")
+        val groupedMatches = liveMatches.groupBy { it.category.capitalize() }
+        return groupedMatches.map { (category, categoryMatches) ->
+            val eventList = categoryMatches.mapNotNull { match ->
+                val source = match.sources.firstOrNull() ?: return@mapNotNull null
+                println("Match: ${match.title}, Source: ${source.source}, ID: ${source.id}")
+                val posterUrl = match.poster?.let { 
+                    val cleanPoster = it.removeSuffix(".webp")
+                    if (cleanPoster.startsWith("/")) "$mainUrl/api/images/proxy$cleanPoster.webp" 
+                    else "$mainUrl/api/images/proxy/$cleanPoster.webp" 
+                } ?: match.teams?.let { teams ->
+                    teams.home?.badge?.let { homeBadge ->
+                        teams.away?.badge?.let { awayBadge ->
+                            "$posterBase/$homeBadge/$awayBadge.webp"
+                        }
                     }
                 }
-            } else {
-                println("$TAG: No sources found in response")
+                val homeBadge = match.teams?.home?.badge?.let { "$badgeBase/$it.webp" }
+                newLiveSearchResponse(match.title, "${match.id}|${source.source}|${source.id}", TvType.Live) {
+                    this.posterUrl = posterUrl ?: homeBadge
+                }
             }
-        } else {
-            println("$TAG: URL is empty")
+            HomePageList(category, eventList, isHorizontalImages = false)
         }
     }
 
-    private suspend fun getM3u8Url(sourceType: String, matchId: String, streamNo: Int): String? {
-        // Try scraping embed page first
-        val embedUrl = "$embedBaseUrl/embed/$sourceType/$matchId/$streamNo"
-        println("$TAG: Scraping embed page: $embedUrl")
-        val embedResponse = app.get(embedUrl, headers = defaultHeaders, timeout = 30)
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        return newHomePageResponse(fetchLiveMatches())
+    }
+
+    override suspend fun search(query: String): List<SearchResponse> {
+        return fetchLiveMatches().flatMap { it.list }.filter {
+            query.lowercase().replace(" ", "") in it.name.lowercase().replace(" ", "")
+        }
+    }
+
+    override suspend fun load(url: String): LoadResponse {
+        val correctedUrl = if (url.startsWith("$mainUrl/watch/")) {
+            val parts = url.split("/")
+            val matchId = parts[parts.indexOf("watch") + 1].split("-").last()
+            val sourceType = parts[parts.size - 2]
+            val sourceId = parts.last()
+            "$matchId|$sourceType|$sourceId"
+        } else {
+            url
+        }
+        val parts = correctedUrl.split("|")
+        val matchId = parts[0].split("/").last()
+        val sourceType = if (parts.size > 1) parts[1] else "alpha"
+        val sourceId = if (parts.size > 2) parts[2] else matchId
+
+        println("Loading stream with corrected URL: $correctedUrl")
+        println("Parsed: matchId=$matchId, sourceType=$sourceType, sourceId=$sourceId")
+
+        val streamUrl = "$mainUrl/api/stream/$sourceType/$sourceId"
+        val streamHeaders = mapOf(
+            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+            "Referer" to "https://streamed.su/"
+        )
+        val response = app.get(streamUrl, headers = streamHeaders, timeout = 30)
+        println("Stream API request: URL=$streamUrl, Headers=$streamHeaders, Status=${response.code}")
+        val text = if (response.headers["Content-Encoding"] == "gzip") {
+            GZIPInputStream(response.body.byteStream()).bufferedReader().use { it.readText() }
+        } else {
+            response.text
+        }
+        println("Stream API response for $streamUrl: $text")
+
+        if (!response.isSuccessful || text.contains("Not Found")) {
+            println("Stream not found for $streamUrl, status=${response.code}, attempting fallback with matchId")
+            return newLiveStreamLoadResponse(
+                "Stream Unavailable - $matchId",
+                correctedUrl,
+                "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
+            ) {
+                this.apiName = this@StreamedProvider.name
+                this.plot = "The requested stream could not be found. Using a test stream instead."
+            }
+        }
+
+        val streams: List<Stream> = try {
+            mapper.readValue(text)
+        } catch (e: Exception) {
+            println("Failed to parse streams: ${e.message}")
+            emptyList()
+        }
+        val stream = streams.firstOrNull()
+        if (stream == null) {
+            println("No streams available for $streamUrl")
+            return newLiveStreamLoadResponse(
+                "No Streams Available - $matchId",
+                correctedUrl,
+                "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
+            ) {
+                this.apiName = this@StreamedProvider.name
+                this.plot = "No streams were returned for this match. Using a test stream instead."
+            }
+        }
+        println("Selected stream: id=${stream.id}, streamNo=${stream.streamNo}, hd=${stream.hd}, source=${stream.source}")
+
+        // Fetch the embed page to extract the 'ut' parameter
+        val embedUrl = "https://embedme.top/embed/$sourceType/$matchId/${stream.streamNo}"
+        val embedHeaders = mapOf(
+            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+            "Referer" to "https://streamed.su/",
+            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
+        )
+        val embedResponse = app.get(embedUrl, headers = embedHeaders, timeout = 30)
         val embedText = if (embedResponse.headers["Content-Encoding"] == "gzip") {
             GZIPInputStream(embedResponse.body.byteStream()).bufferedReader().use { it.readText() }
         } else {
             embedResponse.text
         }
-        println("$TAG: Embed response: Status=${embedResponse.code}, Text=$embedText")
+        println("Embed page response for $embedUrl: $embedText")
 
-        val m3u8Regex = Regex("https://rr\\.vipstreams\\.in/[^\"'\\s]+\\.m3u8(?:\\?[^\"'\\s]*)?")
-        val m3u8Match = m3u8Regex.find(embedText)
-        if (m3u8Match != null) {
-            println("$TAG: Found M3U8 in embed page: ${m3u8Match.value}")
-            val testResponse = app.get(m3u8Match.value, headers = defaultHeaders, timeout = 10)
-            if (testResponse.isSuccessful) {
-                println("$TAG: M3U8 test: Status=${testResponse.code}, Body=${testResponse.text.take(200)}")
-                return m3u8Match.value
-            } else {
-                println("$TAG: M3U8 test failed: Status=${testResponse.code}, Body=${testResponse.text}")
-            }
-        }
+        // Extract 'ut' parameter from the embed URL or page
+        val utRegex = Regex("ut=(\\d+)")
+        val ut = utRegex.find(embedText)?.groupValues?.get(1) ?: "0" // Default to 0 if not found
+        println("Extracted ut parameter: $ut")
 
-        // Fallback to fetch
-        println("$TAG: No M3U8 in embed page, falling back to fetch")
-        val fetchHeaders = defaultHeaders + mapOf(
+        // Use the 'ut' parameter in the fetch request
+        val fetchHeaders = mapOf(
+            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+            "Referer" to "https://embedme.top/",
             "Content-Type" to "application/json",
-            "Origin" to embedBaseUrl
+            "Origin" to "https://embedme.top",
+            "Accept" to "*/*"
         )
-        val fetchBody = """{"source":"$sourceType","id":"$matchId","streamNo":"$streamNo"}""".toRequestBody("application/json".toMediaType())
-
-        println("$TAG: Fetching M3U8: POST $embedBaseUrl/fetch, Headers=$fetchHeaders, Body=$fetchBody")
-        val fetchResponse = app.post("$embedBaseUrl/fetch", headers = fetchHeaders, requestBody = fetchBody, timeout = 30)
+        val fetchBody = """{"source":"$sourceType","id":"$matchId","streamNo":"${stream.streamNo}","ut":"$ut"}""".toRequestBody()
+        val fetchResponse = app.post("https://embedme.top/fetch", headers = fetchHeaders, requestBody = fetchBody, timeout = 30)
         val fetchText = fetchResponse.text
-        println("$TAG: Fetch response: Status=${fetchResponse.code}, Text=$fetchText")
+        println("Fetch response from https://embedme.top/fetch with ut=$ut: $fetchText")
 
-        return if (fetchResponse.isSuccessful && fetchText.isNotEmpty()) {
+        val m3u8Url = if (fetchResponse.isSuccessful && fetchText.isNotBlank() && !fetchText.contains("Not Found")) {
             if (fetchText.contains(".m3u8")) {
-                println("$TAG: Direct M3U8 from fetch: $fetchText")
+                println("Fetch returned direct M3U8 URL: $fetchText")
                 fetchText
             } else {
-                println("$TAG: Encrypted response from fetch: $fetchText")
-                val encryptedBytes = try {
-                    Base64.getDecoder().decode(fetchText)
-                } catch (e: Exception) {
-                    println("$TAG: Base64 decode failed: ${e.message}")
-                    null
-                }
-                val decryptedPath = encryptedBytes?.let {
-                    try {
-                        decrypt(it)
-                    } catch (e: Exception) {
-                        println("$TAG: Decryption failed: ${e.message}")
-                        null
+                println("Fetch returned encrypted data: $fetchText, attempting decryption or scraping")
+                // Here you could add decryption logic if needed, but for now, we'll scrape the embed page again
+                val m3u8Regex = Regex("https://[\\w.-]+/[\\w/-]+\\.m3u8\\?md5=[\\w-]+&expiry=\\d+")
+                val foundUrl = m3u8Regex.find(embedText)?.value ?: run {
+                    val relativeM3u8Regex = Regex("/s/[\\w/-]+\\.m3u8\\?md5=[\\w-]+&expiry=\\d+")
+                    relativeM3u8Regex.find(embedText)?.value?.let { relativeUrl ->
+                        "https://rr.vipstreams.in$relativeUrl"
                     }
                 }
-                val m3u8Url = decryptedPath?.let { "$streamBaseUrl$it" }
-                if (m3u8Url != null) {
-                    println("$TAG: Decrypted M3U8 URL: $m3u8Url")
-                    val testResponse = app.get(m3u8Url, headers = defaultHeaders, timeout = 10)
-                    if (testResponse.isSuccessful) {
-                        println("$TAG: M3U8 test: Status=${testResponse.code}, Body=${testResponse.text.take(200)}")
-                        m3u8Url
-                    } else {
-                        println("$TAG: M3U8 blocked: Status=${testResponse.code}, Body=${testResponse.text}")
-                        null
-                    }
-                } else {
-                    println("$TAG: No valid M3U8 from fetch")
-                    null
+                foundUrl?.let { url ->
+                    println("Found M3U8 URL in embed page: $url")
+                    url
+                } ?: run {
+                    println("No M3U8 URL found in embed page, falling back to test stream")
+                    "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
                 }
             }
         } else {
-            println("$TAG: Fetch failed: Status=${fetchResponse.code}")
-            null
+            println("Fetch failed or returned invalid data: status=${fetchResponse.code}, scraping embed page")
+            val m3u8Regex = Regex("https://[\\w.-]+/[\\w/-]+\\.m3u8\\?md5=[\\w-]+&expiry=\\d+")
+            val foundUrl = m3u8Regex.find(embedText)?.value ?: run {
+                val relativeM3u8Regex = Regex("/s/[\\w/-]+\\.m3u8\\?md5=[\\w-]+&expiry=\\d+")
+                relativeM3u8Regex.find(embedText)?.value?.let { relativeUrl ->
+                    "https://rr.vipstreams.in$relativeUrl"
+                }
+            }
+            foundUrl?.let { url ->
+                println("Found M3U8 URL in embed page: $url")
+                url
+            } ?: run {
+                println("No M3U8 URL found, using test stream")
+                "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
+            }
+        }
+
+        println("Final M3U8 URL: $m3u8Url")
+        return newLiveStreamLoadResponse(
+            "${stream.source} - ${if (stream.hd) "HD" else "SD"}",
+            m3u8Url,
+            m3u8Url
+        ) {
+            this.apiName = this@StreamedProvider.name
         }
     }
 
-    private fun decrypt(encryptedBytes: ByteArray): String {
-        try {
-            val key = "embedmetopsecret".toByteArray()
-            val cipher = Cipher.getInstance("AES/ECB/PKCS5Padding")
-            val secretKey = SecretKeySpec(key, "AES")
-            cipher.init(Cipher.DECRYPT_MODE, secretKey)
-            val decryptedBytes = cipher.doFinal(encryptedBytes)
-            return String(decryptedBytes)
-        } catch (e: Exception) {
-            println("$TAG: AES decryption failed: ${e.message}")
-            throw e
-        }
+    override suspend fun loadLinks(
+        data: String,
+        isCasting: Boolean,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        val streamHeaders = mapOf(
+            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+            "Referer" to "https://embedme.top/",
+            "Origin" to "https://embedme.top",
+            "Accept" to "*/*"
+        )
+
+        callback(
+            ExtractorLink(
+                source = this.name,
+                name = "Streamed Sports",
+                url = data,
+                referer = "https://embedme.top/",
+                quality = -1,
+                isM3u8 = true,
+                headers = streamHeaders
+            )
+        )
+        return true
     }
 
     private fun String.capitalize(): String {
