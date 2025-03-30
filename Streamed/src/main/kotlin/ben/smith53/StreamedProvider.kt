@@ -29,6 +29,7 @@ class StreamedProvider : MainAPI() {
         private const val TAG = "StreamedProvider"
         private const val posterBase = "https://streamed.su/api/images/poster"
         private const val badgeBase = "https://streamed.su/api/images/badge"
+        private const val proxyBase = "https://streamed.su/api/images/proxy"
         private const val fallbackPoster = "https://streamed.su/api/images/poster/fallback.webp"
         private val mapper = jacksonObjectMapper()
     }
@@ -84,7 +85,7 @@ class StreamedProvider : MainAPI() {
                 return listOf(
                     HomePageList(
                         "No Live Matches",
-                        listOf(newLiveSearchResponse("No live matches available", "$mainUrl|alpha|default", TvType.Live)),
+                        listOf(newLiveSearchResponse("No live matches available", "$mainUrl/no-matches", TvType.Live)),
                         isHorizontalImages = false
                     )
                 )
@@ -102,7 +103,7 @@ class StreamedProvider : MainAPI() {
                     val posterUrl = when {
                         match.poster?.isNotBlank() == true -> {
                             val cleanPoster = match.poster.trim('/').removeSuffix(".webp")
-                            "$mainUrl/api/images/proxy/$cleanPoster.webp"
+                            "$proxyBase/$cleanPoster.webp"
                         }
                         match.teams?.home?.badge?.isNotBlank() == true && match.teams.away?.badge?.isNotBlank() == true -> {
                             "$posterBase/${match.teams.home.badge}/${match.teams.away.badge}.webp"
@@ -125,7 +126,7 @@ class StreamedProvider : MainAPI() {
             return listOf(
                 HomePageList(
                     "Error",
-                    listOf(newLiveSearchResponse("Failed to load matches", "$mainUrl|alpha|default", TvType.Live)),
+                    listOf(newLiveSearchResponse("Failed to load matches", "$mainUrl/error", TvType.Live)),
                     isHorizontalImages = false
                 )
             )
@@ -145,20 +146,17 @@ class StreamedProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse {
         Log.d(TAG, "Starting load for URL: $url")
         try {
-            val correctedUrl = if (url.startsWith("$mainUrl/watch/")) {
-                val parts = url.split("/")
-                val matchId = parts[parts.indexOf("watch") + 1].split("-").last()
-                val sourceType = parts[parts.size - 2]
-                val sourceId = parts.last()
-                "$matchId|$sourceType|$sourceId"
-            } else {
-                url
+            val parts = url.split("|")
+            if (parts.size < 3) {
+                Log.w(TAG, "Invalid URL format: $url, expected matchId|sourceType|sourceId")
+                return newLiveStreamLoadResponse("Invalid URL", url, "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8") {
+                    this.apiName = this@StreamedProvider.name
+                    this.plot = "Invalid stream URL format."
+                }
             }
-            val parts = correctedUrl.split("|")
             val matchId = parts[0].split("/").last()
-            val sourceType = if (parts.size > 1) parts[1] else "alpha"
-            val sourceId = if (parts.size > 2) parts[2] else matchId
-
+            val sourceType = parts[1]
+            val sourceId = parts[2]
             Log.d(TAG, "Parsed: matchId=$matchId, sourceType=$sourceType, sourceId=$sourceId")
 
             val streamUrl = "$mainUrl/api/stream/$sourceType/$sourceId"
@@ -177,7 +175,7 @@ class StreamedProvider : MainAPI() {
 
             if (!response.isSuccessful || text.contains("Not Found")) {
                 Log.w(TAG, "Stream API failed, falling back to test stream")
-                return newLiveStreamLoadResponse("Stream Unavailable - $matchId", correctedUrl, "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8") {
+                return newLiveStreamLoadResponse("Stream Unavailable - $matchId", url, "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8") {
                     this.apiName = this@StreamedProvider.name
                     this.plot = "The requested stream could not be found."
                 }
@@ -192,7 +190,7 @@ class StreamedProvider : MainAPI() {
             val stream = streams.firstOrNull()
             if (stream == null) {
                 Log.w(TAG, "No streams available, falling back to test stream")
-                return newLiveStreamLoadResponse("No Streams Available - $matchId", correctedUrl, "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8") {
+                return newLiveStreamLoadResponse("No Streams Available - $matchId", url, "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8") {
                     this.apiName = this@StreamedProvider.name
                     this.plot = "No streams were returned for this match."
                 }
