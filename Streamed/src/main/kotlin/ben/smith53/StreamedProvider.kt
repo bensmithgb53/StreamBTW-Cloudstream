@@ -1,8 +1,8 @@
-package ben.smith53 // Assuming this is your package name as per your request
+package ben.smith53
 
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.Qualities
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
 import java.util.zip.GZIPInputStream
@@ -28,10 +28,11 @@ class StreamedProvider : MainAPI() {
 
     companion object {
         private const val TAG = "StreamedProvider"
-        private const val posterBase = "$mainUrl/api/images/poster"
-        private const val badgeBase = "$mainUrl/api/images/badge"
-        private const val proxyBase = "$mainUrl/api/images/proxy"
-        private const val fallbackPoster = "$mainUrl/api/images/poster/fallback.webp"
+        private const val MAIN_URL = "https://streamed.su" // Static base URL for constants
+        private const val posterBase = "$MAIN_URL/api/images/poster"
+        private const val badgeBase = "$MAIN_URL/api/images/badge"
+        private const val proxyBase = "$MAIN_URL/api/images/proxy"
+        private const val fallbackPoster = "$MAIN_URL/api/images/poster/fallback.webp"
         private val mapper = jacksonObjectMapper()
     }
 
@@ -151,7 +152,6 @@ class StreamedProvider : MainAPI() {
             val sourceId = parts[2]
             Log.d(TAG, "Parsed: matchId=$matchId, sourceType=$sourceType, sourceId=$sourceId")
 
-            // Fetch stream metadata
             val streamUrl = "$mainUrl/api/stream/$sourceType/$sourceId"
             val streamHeaders = headers + mapOf("Referer" to "$mainUrl/")
             val streamResponse = app.get(streamUrl, headers = streamHeaders, timeout = 30)
@@ -167,7 +167,6 @@ class StreamedProvider : MainAPI() {
             val streams: List<Stream> = mapper.readValue(streamText)
             val stream = streams.firstOrNull() ?: throw Exception("No streams available")
 
-            // Fetch embed page
             val embedUrl = "https://embedme.top/embed/$sourceType/$matchId/${stream.streamNo}"
             val embedHeaders = headers + mapOf("Referer" to "https://embedme.top/")
             val embedResponse = app.get(embedUrl, headers = embedHeaders, timeout = 30)
@@ -180,12 +179,10 @@ class StreamedProvider : MainAPI() {
             }
             Log.d(TAG, "Embed page snippet: ${embedText.take(500)}")
 
-            // Extract 'ut' parameter
             val utRegex = Regex("ut=(\\d+)")
             val ut = utRegex.find(embedText)?.groupValues?.get(1) ?: (System.currentTimeMillis() / 1000).toString()
             Log.d(TAG, "UT: $ut")
 
-            // Fetch M3U8 URL
             val fetchHeaders = mapOf(
                 "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
                 "Referer" to "https://embedme.top/",
@@ -198,7 +195,6 @@ class StreamedProvider : MainAPI() {
             var m3u8Url = fetchResponse.text.trim()
             Log.d(TAG, "Fetch response: $m3u8Url")
 
-            // Handle potential encrypted response (WASM hint)
             if (!m3u8Url.contains(".m3u8") && m3u8Url.isNotBlank()) {
                 Log.w(TAG, "Fetch returned non-M3U8 data, falling back to embed page scraping")
                 val m3u8Regex = Regex("https://[\\w.-]+/[\\w/-]+\\.m3u8\\?md5=[\\w-]+&expiry=\\d+")
