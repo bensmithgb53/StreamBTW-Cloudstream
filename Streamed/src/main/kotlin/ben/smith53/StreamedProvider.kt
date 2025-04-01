@@ -1,15 +1,12 @@
 package ben.smith53
 
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.loadExtractor
 import org.json.JSONObject
-import java.net.URL
 
-class MyStreamProvider : MainAPI() {
-    override var mainUrl = "https://raw.githubusercontent.com/bensmithgb53/streamed-links/refs/heads/main"
-    override var name = "MyStreamProvider"
+class StreamedProvider : MainAPI() {
+    override var mainUrl = "https://raw.githubusercontent.com/bredi.net/https://raw.githubusercontent.com/bensmithgb53/streamed-links/refs/heads/main"
+    override var name = "Streamed Links"
     override val supportedTypes = setOf(TvType.Live)
     override val hasMainPage = true
     override val hasSearch = false
@@ -17,13 +14,16 @@ class MyStreamProvider : MainAPI() {
     private val jsonUrl = "$mainUrl/streams.json"
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        // Fetch the JSON file from GitHub
         val jsonText = app.get(jsonUrl).text
         val json = JSONObject(jsonText)
 
+        // Extract global headers
         val userAgent = json.getString("user_agent")
         val referer = json.getString("referer")
         val streamsArray = json.getJSONArray("streams")
 
+        // Build homepage with stream categories
         val streamList = mutableListOf<HomePageList>()
 
         for (i in 0 until streamsArray.length()) {
@@ -63,13 +63,16 @@ class MyStreamProvider : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse {
         val (id, sourceName, streamNo, userAgent, referer) = url.split("|", limit = 5)
+
+        // Re-fetch JSON to ensure we have the latest data
         val jsonText = app.get(jsonUrl).text
         val json = JSONObject(jsonText)
-
         val streamsArray = json.getJSONArray("streams")
+
         var title = id
         var m3u8Url = url // Default to the passed URL
 
+        // Find the matching stream
         for (i in 0 until streamsArray.length()) {
             val stream = streamsArray.getJSONObject(i)
             if (stream.getString("id") == id) {
@@ -104,7 +107,7 @@ class MyStreamProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val (id, sourceName, streamNo, userAgent, referer) = data.split("|", limit = 5)
-        val m3u8Url = data.split("|")[0] // The URL is the first part before custom data
+        val m3u8Url = data.split("|")[0] // The URL is the first part
 
         callback.invoke(
             ExtractorLink(
@@ -118,12 +121,5 @@ class MyStreamProvider : MainAPI() {
             )
         )
         return true
-    }
-}
-
-@CloudstreamPlugin
-class MyStreamPlugin : Plugin() {
-    override fun load() {
-        registerMainAPI(MyStreamProvider())
     }
 }
