@@ -2,7 +2,8 @@ package ben.smith53
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
-import org.json.JSONObject
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import com.fasterxml.jackson.module.kotlin.readValue
 
 class StreamedProvider : MainAPI() {
     override var mainUrl = "https://raw.githubusercontent.com/bensmithgb53/streamed-links/refs/heads/main"
@@ -11,45 +12,47 @@ class StreamedProvider : MainAPI() {
     override val hasMainPage = true
 
     private val jsonUrl = "$mainUrl/streams.json"
+    private val mapper = jacksonObjectMapper()
+
+    // Data classes to match streams.json structure
+    data class StreamData(
+        val user_agent: String,
+        val referer: String,
+        val streams: List<Stream>
+    )
+
+    data class Stream(
+        val id: String,
+        val title: String,
+        val sources: List<Source>
+    )
+
+    data class Source(
+        val source: String,
+        val m3u8: List<String>
+    )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val jsonText = app.get(jsonUrl).text
-        val json = JSONObject(jsonText)
-
-        val userAgent = json.getString("user_agent")
-        val referer = json.getString("referer")
-        val streamsArray = json.getJSONArray("streams")
+        val streamData = mapper.readValue<StreamData>(jsonText)
 
         val streamList = mutableListOf<HomePageList>()
 
-        for (i in 0 until streamsArray.length()) {
-            val stream = streamsArray.getJSONObject(i)
-            val id = stream.getString("id")
-            val title = stream.getString("title")
-            val sources = stream.getJSONArray("sources")
-
+        streamData.streams.forEach { stream ->
             val streamItems = mutableListOf<SearchResponse>()
-            for (j in 0 until sources.length()) {
-                val source = sources.getJSONObject(j)
-                val sourceName = source.getString("source")
-                val m3u8Array = source.getJSONArray("m3u8")
-
-                for (k in 0 until m3u8Array.length()) {
-                    val m3u8Url = m3u8Array.getString(k)
+            stream.sources.forEachIndexed { j, source ->
+                source.m3u8.forEachIndexed { k, m3u8Url ->
                     streamItems.add(
                         newLiveSearchResponse(
-                            name = "$title - $sourceName #$k",
-                            url = m3u8Url,
-                            apiName = this.name,
+                            name = "${stream.title} - ${source.source} #$k",
+                            url = "${stream.id}|${source.source}|$k|${streamData.user_agent}|${streamData.referer}",
                             type = TvType.Live
-                        ) {
-                            this.data = "$id|$sourceName|$k|$userAgent|$referer"
-                        }
+                        )
                     )
                 }
             }
             if (streamItems.isNotEmpty()) {
-                streamList.add(HomePageList(title, streamItems))
+                streamList.add(HomePageList(stream.title, streamItems))
             }
         }
 
@@ -59,38 +62,17 @@ class StreamedProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse {
         val (id, sourceName, streamNo, userAgent, referer) = url.split("|", limit = 5)
         val jsonText = app.get(jsonUrl).text
-        val json = JSONObject(jsonText)
-        val streamsArray = json.getJSONArray("streams")
+        val streamData = mapper.readValue<StreamData>(jsonText)
 
-        var title = id
-        var m3u8Url = url
-
-        for (i in 0 until streamsArray.length()) {
-            val stream = streamsArray.getJSONObject(i)
-            if (stream.getString("id") == id) {
-                title = stream.getString("title")
-                val sources = stream.getJSONArray("sources")
-                for (j in 0 until sources.length()) {
-                    val source = sources.getJSONObject(j)
-                    if (source.getString("source") == sourceName) {
-                        val m3u8Array = source.getJSONArray("m3u8")
-                        m3u8Url = m3u8Array.getString(streamNo.toInt())
-                        break
-                    }
-                }
-                break
-            }
-        }
+        val stream = streamData.streams.find { it.id == id } ?: throw ErrorLoadingException("Stream not found")
+        val source = stream.sources.find { it.source == sourceName } ?: throw ErrorLoadingException("Source not found")
+        val m3u8Url = source.m3u8[streamNo.toInt()]
 
         return newLiveStreamLoadResponse(
-            name = "$title - $sourceName #$streamNo",
-            url = m3u8Url,
-            apiName = this.name,
-            dataUrl = m3u8Url
-        ) {
-            this.addHeader("User-Agent", userAgent)
-            this.addHeader("Referer", referer)
-        }
+            name = "${stream.title} - $sourceName #$streamNo",
+            dataUrl = "$m3u8Url|$userAgent|$referer",
+            url = m3u8Url
+        )
     }
 
     override suspend fun loadLinks(
@@ -99,16 +81,15 @@ class StreamedProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val (id, sourceName, streamNo, userAgent, referer) = data.split("|", limit = 5)
-        val m3u8Url = data.split("|")[0]
+        val (m3u8Url, userAgent, referer) = data.split("|", limit = 3)
 
         callback.invoke(
             ExtractorLink(
                 source = this.name,
-                name = "$sourceName #$streamNo",
+                name = this.name,
                 url = m3u8Url,
                 referer = referer,
-                quality = -1, // Use -1 for unknown quality since Qualities enum is unresolved
+                quality = -1,
                 isM3u8 = true,
                 headers = mapOf("User-Agent" to userAgent)
             )
