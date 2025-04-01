@@ -5,25 +5,21 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import org.json.JSONObject
 
 class StreamedProvider : MainAPI() {
-    override var mainUrl = "https://raw.githubusercontent.com/bredi.net/https://raw.githubusercontent.com/bensmithgb53/streamed-links/refs/heads/main"
+    override var mainUrl = "https://raw.githubusercontent.com/bensmithgb53/streamed-links/refs/heads/main"
     override var name = "Streamed Links"
     override val supportedTypes = setOf(TvType.Live)
     override val hasMainPage = true
-    override val hasSearch = false
 
     private val jsonUrl = "$mainUrl/streams.json"
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        // Fetch the JSON file from GitHub
         val jsonText = app.get(jsonUrl).text
         val json = JSONObject(jsonText)
 
-        // Extract global headers
         val userAgent = json.getString("user_agent")
         val referer = json.getString("referer")
         val streamsArray = json.getJSONArray("streams")
 
-        // Build homepage with stream categories
         val streamList = mutableListOf<HomePageList>()
 
         for (i in 0 until streamsArray.length()) {
@@ -41,15 +37,14 @@ class StreamedProvider : MainAPI() {
                 for (k in 0 until m3u8Array.length()) {
                     val m3u8Url = m3u8Array.getString(k)
                     streamItems.add(
-                        LiveSearchResponse(
+                        newLiveSearchResponse(
                             name = "$title - $sourceName #$k",
                             url = m3u8Url,
                             apiName = this.name,
-                            type = TvType.Live,
-                            posterUrl = null,
-                            quality = null,
-                            data = "$id|$sourceName|$k|$userAgent|$referer"
-                        )
+                            type = TvType.Live
+                        ) {
+                            this.data = "$id|$sourceName|$k|$userAgent|$referer"
+                        }
                     )
                 }
             }
@@ -58,21 +53,18 @@ class StreamedProvider : MainAPI() {
             }
         }
 
-        return HomePageResponse(streamList)
+        return newHomePageResponse(streamList)
     }
 
     override suspend fun load(url: String): LoadResponse {
         val (id, sourceName, streamNo, userAgent, referer) = url.split("|", limit = 5)
-
-        // Re-fetch JSON to ensure we have the latest data
         val jsonText = app.get(jsonUrl).text
         val json = JSONObject(jsonText)
         val streamsArray = json.getJSONArray("streams")
 
         var title = id
-        var m3u8Url = url // Default to the passed URL
+        var m3u8Url = url
 
-        // Find the matching stream
         for (i in 0 until streamsArray.length()) {
             val stream = streamsArray.getJSONObject(i)
             if (stream.getString("id") == id) {
@@ -90,14 +82,15 @@ class StreamedProvider : MainAPI() {
             }
         }
 
-        return LiveStreamLoadResponse(
+        return newLiveStreamLoadResponse(
             name = "$title - $sourceName #$streamNo",
             url = m3u8Url,
             apiName = this.name,
-            dataUrl = m3u8Url,
-            referer = referer,
-            headers = mapOf("User-Agent" to userAgent)
-        )
+            dataUrl = m3u8Url
+        ) {
+            this.addHeader("User-Agent", userAgent)
+            this.addHeader("Referer", referer)
+        }
     }
 
     override suspend fun loadLinks(
@@ -107,7 +100,7 @@ class StreamedProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val (id, sourceName, streamNo, userAgent, referer) = data.split("|", limit = 5)
-        val m3u8Url = data.split("|")[0] // The URL is the first part
+        val m3u8Url = data.split("|")[0]
 
         callback.invoke(
             ExtractorLink(
@@ -115,7 +108,7 @@ class StreamedProvider : MainAPI() {
                 name = "$sourceName #$streamNo",
                 url = m3u8Url,
                 referer = referer,
-                quality = Qualities.Unknown.value,
+                quality = -1, // Use -1 for unknown quality since Qualities enum is unresolved
                 isM3u8 = true,
                 headers = mapOf("User-Agent" to userAgent)
             )
