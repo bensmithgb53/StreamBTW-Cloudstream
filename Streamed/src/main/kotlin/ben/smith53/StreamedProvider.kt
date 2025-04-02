@@ -1,110 +1,116 @@
-package ben.smith53
+package com.example.cloudstream3.providers
 
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
-import com.fasterxml.jackson.module.kotlin.readValue
+import com.lagradost.cloudstream3.utils.loadExtractor
+import org.json.JSONArray
 
-class StreamedProvider : MainAPI() {
-    override var mainUrl = "https://raw.githubusercontent.com/bensmithgb53/streamed-links/refs/heads/main"
-    override var name = "Streamed Links"
-    override val supportedTypes = setOf(TvType.Live)
+class StreamedSuProvider : MainAPI() {
+    override var mainUrl = "https://streamed.su"
+    override var name = "StreamedSU"
     override val hasMainPage = true
+    override val hasSearch = false
+    override val supportedTypes = setOf(TvType.Live)
 
-    private val jsonUrl = "$mainUrl/streams.json"
-    private val mapper = jacksonObjectMapper()
-
-    // Data classes to match streams.json structure
-    data class StreamData(
-        val user_agent: String,
-        val referer: String,
-        val streams: List<Stream>
+    private val cloudflareKiller = CloudflareKiller()
+    private val headers = mapOf(
+        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+        "Referer" to "$mainUrl/",
+        "Origin" to mainUrl
     )
 
-    data class Stream(
-        val id: String,
-        val title: String,
-        val sources: List<Source>
-    )
-
-    data class Source(
-        val source: String,
-        val m3u8: List<String>
-    )
-
+    // Fetch teams/matches from the API and display on the main page
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val jsonText = app.get(jsonUrl).text
-        val streamData = mapper.readValue<StreamData>(jsonText)
+        val apiUrl = "$mainUrl/api/matches/all"
+        val response = app.get(apiUrl, headers = headers, interceptor = cloudflareKiller)
+        val jsonArray = JSONArray(response.text)
 
-        val streamList = mutableListOf<HomePageList>()
+        val teams = (0 until jsonArray.length()).flatMap { i ->
+            val game = jsonArray.getJSONObject(i)
+            val gameId = game.getString("id")
+            val gameTitle = game.getString("title")
+            val sources = game.getJSONArray("sources")
 
-        streamData.streams.forEach { stream ->
-            val streamItems = mutableListOf<SearchResponse>()
-            stream.sources.forEachIndexed { j, source ->
-                source.m3u8.forEachIndexed { k, m3u8Url ->
-                    streamItems.add(
-                        newLiveSearchResponse(
-                            name = "${stream.title} - ${source.source} #$k",
-                            url = "${stream.id}|${source.source}|$k|${streamData.user_agent}|${streamData.referer}",
-                            type = TvType.Live
-                        )
-                    )
-                }
-            }
-            if (streamItems.isNotEmpty()) {
-                streamList.add(HomePageList(stream.title, streamItems))
+            (0 until sources.length()).map { j ->
+                val sourceObj = sources.getJSONObject(j)
+                val source = sourceObj.getString("source")
+                val streamUrl = "$mainUrl/watch/$gameId/$source/1" // StreamNo fixed to 1 as in original
+
+                SearchResponse(
+                    name = "$gameTitle ($source)",
+                    url = streamUrl,
+                    apiName = this.name,
+                    type = TvType.Live
+                )
             }
         }
 
-        return newHomePageResponse(streamList)
+        return HomePageResponse(listOf(HomePageList("Live Matches", teams)))
     }
 
+    // Load the stream details when a team/source is clicked
     override suspend fun load(url: String): LoadResponse {
-        // Remove mainUrl prefix if present and split the remaining parts
-        val cleanUrl = url.replace(mainUrl, "").trimStart('/')
-        val parts = cleanUrl.split("|", limit = 5)
-        if (parts.size < 5) throw ErrorLoadingException("Invalid URL format: $url")
-        val (id, sourceName, streamNo, userAgent, referer) = parts
-
-        // Fetch and parse JSON
-        val jsonText = app.get(jsonUrl).text
-        println("DEBUG: Fetched JSON: $jsonText")
-        println("DEBUG: Original URL: $url")
-        println("DEBUG: Cleaned URL: $cleanUrl")
-        println("DEBUG: Looking for ID: $id")
-        val streamData = mapper.readValue<StreamData>(jsonText)
-
-        // Find the stream and source
-        val stream = streamData.streams.find { it.id == id } ?: throw ErrorLoadingException("Stream not found: $id")
-        val source = stream.sources.find { it.source == sourceName } ?: throw ErrorLoadingException("Source not found: $sourceName")
-        val m3u8Url = source.m3u8.getOrNull(streamNo.toInt()) ?: throw ErrorLoadingException("Invalid stream number: $streamNo")
-
-        return newLiveStreamLoadResponse(
-            name = "${stream.title} - $sourceName #$streamNo",
-            dataUrl = "$m3u8Url|$userAgent|$referer",
-            url = m3u8Url
+        val doc = app.get(url, headers = headers, interceptor = cloudflareKiller).document
+        val title = doc.select("title").text().ifEmpty { url.split("/")[4] } // Fallback to ID from URL
+        return StreamResponse(
+            name = title,
+            url = url,
+            apiName = this.name,
+            type = TvType.Live,
+            sources = emptyList() // Sources fetched in loadLinks
         )
     }
 
+    // Extract m3u8 URLs from the stream page or fallback embed
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val (m3u8Url, userAgent, referer) = data.split("|", limit = 3)
+        val doc = app.get(data, headers = headers, interceptor = cloudflareKiller).document
+        var m3u8Url: String? = null
 
-        callback.invoke(
-            ExtractorLink(
-                source = this.name,
-                name = this.name,
-                url = m3u8Url,
-                referer = referer,
-                quality = -1,
-                isM3u8 = true,
-                headers = mapOf("User-Agent" to userAgent)
+        // Try to find m3u8 in the initial page
+        val embedUrl = doc.select("iframe").attr("src")
+        if (embedUrl.isNotEmpty()) {
+            val embedResponse = app.get(embedUrl, headers = headers, interceptor = cloudflareKiller).text
+            m3u8Url = Regex("https?://[^\"']+\\.m3u8").find(embedResponse)?.value
+        }
+
+        // Fallback to embedstreams.top if no m3u8 found
+        if (m3u8Url == null) {
+            val parts = data.split("/")
+            val id = parts[4]
+            val source = parts[5]
+            val streamNo = parts[6]
+            val fallbackUrl = "https://embedstreams.top/embed/$source/$id/$streamNo"
+            val fallbackResponse = app.get(fallbackUrl, headers = headers, interceptor = cloudflareKiller).text
+            m3u8Url = Regex("https?://[^\"']+\\.m3u8").find(fallbackResponse)?.value
+        }
+
+        // If m3u8 is found, add it as a source
+        if (m3u8Url != null) {
+            callback.invoke(
+                ExtractorLink(
+                    source = this.name,
+                    name = "Live Stream",
+                    url = m3u8Url,
+                    referer = mainUrl,
+                    quality = Qualities.Unknown.value,
+                    isM3u8 = true,
+                    headers = mapOf(
+                        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
+                        "Referer" to "https://embedme.top/"
+                    )
+                )
             )
-        )
+            return true
+        }
+
+        // Fallback to CloudStream's extractor if manual extraction fails
+        embedUrl?.let { loadExtractor(it, mainUrl, callback) }
         return true
     }
 }
