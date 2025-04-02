@@ -36,27 +36,23 @@ class StreamedProvider : MainAPI() {
         val jsonText = app.get(jsonUrl).text
         val streamData = mapper.readValue<StreamData>(jsonText)
 
-        // Group streams by title to eliminate duplicates
-        val groupedStreams = streamData.streams.groupBy { it.title.trim().lowercase() } // Normalize title
         val streamList = mutableListOf<HomePageList>()
 
-        groupedStreams.forEach { (title, streams) ->
+        streamData.streams.forEach { stream ->
             val streamItems = mutableListOf<SearchResponse>()
-            streams.forEach { stream ->
-                stream.sources.forEachIndexed { j, source ->
-                    source.m3u8.forEachIndexed { k, m3u8Url ->
-                        streamItems.add(
-                            newLiveSearchResponse(
-                                name = "${stream.title} - ${source.source} #$k",
-                                url = "${stream.id}|${source.source}|$k|${streamData.user_agent}|${streamData.referer}",
-                                type = TvType.Live
-                            )
+            stream.sources.forEachIndexed { j, source ->
+                source.m3u8.forEachIndexed { k, m3u8Url ->
+                    streamItems.add(
+                        newLiveSearchResponse(
+                            name = "${stream.title} - ${source.source} #$k",
+                            url = "${stream.id}|${source.source}|$k|${streamData.user_agent}|${streamData.referer}",
+                            type = TvType.Live
                         )
-                    }
+                    )
                 }
             }
             if (streamItems.isNotEmpty()) {
-                streamList.add(HomePageList(title, streamItems))
+                streamList.add(HomePageList(stream.title, streamItems))
             }
         }
 
@@ -64,6 +60,7 @@ class StreamedProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
+        // Remove mainUrl prefix if present and split the remaining parts
         val cleanUrl = url.replace(mainUrl, "").trimStart('/')
         val parts = cleanUrl.split("|", limit = 5)
         if (parts.size < 5) throw ErrorLoadingException("Invalid URL format: $url")
@@ -82,13 +79,10 @@ class StreamedProvider : MainAPI() {
         val source = stream.sources.find { it.source == sourceName } ?: throw ErrorLoadingException("Source not found: $sourceName")
         val m3u8Url = source.m3u8.getOrNull(streamNo.toInt()) ?: throw ErrorLoadingException("Invalid stream number: $streamNo")
 
-        // Pack all M3U8 URLs for the source
-        val allM3u8Urls = source.m3u8.joinToString(";") { "$it|$userAgent|$referer" }
-
         return newLiveStreamLoadResponse(
             name = "${stream.title} - $sourceName #$streamNo",
-            dataUrl = allM3u8Urls, // All URLs for source switching
-            url = m3u8Url // Selected URL for initial playback
+            dataUrl = "$m3u8Url|$userAgent|$referer",
+            url = m3u8Url
         )
     }
 
@@ -98,21 +92,19 @@ class StreamedProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val m3u8Entries = data.split(";")
-        m3u8Entries.forEachIndexed { index, entry ->
-            val (m3u8Url, userAgent, referer) = entry.split("|", limit = 3)
-            callback.invoke(
-                ExtractorLink(
-                    source = this.name,
-                    name = "$name - Source #$index",
-                    url = m3u8Url,
-                    referer = referer,
-                    quality = -1,
-                    isM3u8 = true,
-                    headers = mapOf("User-Agent" to userAgent)
-                )
+        val (m3u8Url, userAgent, referer) = data.split("|", limit = 3)
+
+        callback.invoke(
+            ExtractorLink(
+                source = this.name,
+                name = this.name,
+                url = m3u8Url,
+                referer = referer,
+                quality = -1,
+                isM3u8 = true,
+                headers = mapOf("User-Agent" to userAgent)
             )
-        }
+        )
         return true
     }
 }
