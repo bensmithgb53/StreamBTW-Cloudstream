@@ -60,13 +60,24 @@ class StreamedProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val (id, sourceName, streamNo, userAgent, referer) = url.split("|", limit = 5)
+        // Remove mainUrl prefix if present and split the remaining parts
+        val cleanUrl = url.replace(mainUrl, "").trimStart('/')
+        val parts = cleanUrl.split("|", limit = 5)
+        if (parts.size < 5) throw ErrorLoadingException("Invalid URL format: $url")
+        val (id, sourceName, streamNo, userAgent, referer) = parts
+
+        // Fetch and parse JSON
         val jsonText = app.get(jsonUrl).text
+        println("DEBUG: Fetched JSON: $jsonText")
+        println("DEBUG: Original URL: $url")
+        println("DEBUG: Cleaned URL: $cleanUrl")
+        println("DEBUG: Looking for ID: $id")
         val streamData = mapper.readValue<StreamData>(jsonText)
 
-        val stream = streamData.streams.find { it.id == id } ?: throw ErrorLoadingException("Stream not found")
-        val source = stream.sources.find { it.source == sourceName } ?: throw ErrorLoadingException("Source not found")
-        val m3u8Url = source.m3u8[streamNo.toInt()]
+        // Find the stream and source
+        val stream = streamData.streams.find { it.id == id } ?: throw ErrorLoadingException("Stream not found: $id")
+        val source = stream.sources.find { it.source == sourceName } ?: throw ErrorLoadingException("Source not found: $sourceName")
+        val m3u8Url = source.m3u8.getOrNull(streamNo.toInt()) ?: throw ErrorLoadingException("Invalid stream number: $streamNo")
 
         return newLiveStreamLoadResponse(
             name = "${stream.title} - $sourceName #$streamNo",
