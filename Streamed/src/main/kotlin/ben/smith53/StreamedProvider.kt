@@ -36,27 +36,28 @@ class StreamedProvider : MainAPI() {
         val jsonText = app.get(jsonUrl).text
         val streamData = mapper.readValue<StreamData>(jsonText)
 
-        // Group streams by title to avoid duplicates
-        val groupedStreams = streamData.streams.groupBy { it.title }
+        // Use a Set to track unique titles and avoid duplicates
+        val seenTitles = mutableSetOf<String>()
         val streamList = mutableListOf<HomePageList>()
 
-        groupedStreams.forEach { (title, streams) ->
-            val streamItems = mutableListOf<SearchResponse>()
-            streams.forEach { stream ->
+        streamData.streams.forEach { stream ->
+            val normalizedTitle = stream.title.trim() // Normalize to avoid sneaky duplicates
+            if (seenTitles.add(normalizedTitle)) { // Only add if we haven’t seen this title
+                val streamItems = mutableListOf<SearchResponse>()
                 stream.sources.forEachIndexed { j, source ->
                     source.m3u8.forEachIndexed { k, m3u8Url ->
                         streamItems.add(
                             newLiveSearchResponse(
-                                name = "$title - ${source.source} #$k",
+                                name = "${stream.title} - ${source.source} #$k",
                                 url = "${stream.id}|${source.source}|$k|${streamData.user_agent}|${streamData.referer}",
                                 type = TvType.Live
                             )
                         )
                     }
                 }
-            }
-            if (streamItems.isNotEmpty()) {
-                streamList.add(HomePageList(title, streamItems))
+                if (streamItems.isNotEmpty()) {
+                    streamList.add(HomePageList(normalizedTitle, streamItems))
+                }
             }
         }
 
@@ -71,20 +72,24 @@ class StreamedProvider : MainAPI() {
 
         // Fetch and parse JSON
         val jsonText = app.get(jsonUrl).text
+        println("DEBUG: Fetched JSON: $jsonText")
+        println("DEBUG: Original URL: $url")
+        println("DEBUG: Cleaned URL: $cleanUrl")
+        println("DEBUG: Looking for ID: $id")
         val streamData = mapper.readValue<StreamData>(jsonText)
 
         // Find the stream and source
         val stream = streamData.streams.find { it.id == id } ?: throw ErrorLoadingException("Stream not found: $id")
         val source = stream.sources.find { it.source == sourceName } ?: throw ErrorLoadingException("Source not found: $sourceName")
-        val selectedM3u8 = source.m3u8.getOrNull(streamNo.toInt()) ?: throw ErrorLoadingException("Invalid stream number: $streamNo")
+        val m3u8Url = source.m3u8.getOrNull(streamNo.toInt()) ?: throw ErrorLoadingException("Invalid stream number: $streamNo")
 
-        // Pack all M3U8 URLs for the source into dataUrl
-        val allM3u8Urls = source.m3u8.joinToString(separator = ";") { "$it|$userAgent|$referer" }
+        // Pass all M3U8 URLs for the source as a semicolon-separated string
+        val allM3u8Urls = source.m3u8.joinToString(";") { "$it|$userAgent|$referer" }
 
         return newLiveStreamLoadResponse(
             name = "${stream.title} - $sourceName #$streamNo",
-            dataUrl = allM3u8Urls,
-            url = selectedM3u8
+            dataUrl = allM3u8Urls, // Carry all URLs for loadLinks
+            url = m3u8Url // Original URL for reference
         )
     }
 
@@ -100,7 +105,7 @@ class StreamedProvider : MainAPI() {
             callback.invoke(
                 ExtractorLink(
                     source = this.name,
-                    name = "$name - ${m3u8Entries.size} Source${if (m3u8Entries.size > 1) " #$index" else ""}",
+                    name = "$name - Source #$index",
                     url = m3u8Url,
                     referer = referer,
                     quality = -1,
