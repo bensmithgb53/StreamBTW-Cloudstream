@@ -36,14 +36,13 @@ class StreamedProvider : MainAPI() {
         val jsonText = app.get(jsonUrl).text
         val streamData = mapper.readValue<StreamData>(jsonText)
 
-        // Use a Set to track unique titles and avoid duplicates
-        val seenTitles = mutableSetOf<String>()
+        // Group streams by title to eliminate duplicates
+        val groupedStreams = streamData.streams.groupBy { it.title.trim().lowercase() } // Normalize title
         val streamList = mutableListOf<HomePageList>()
 
-        streamData.streams.forEach { stream ->
-            val normalizedTitle = stream.title.trim() // Normalize to avoid sneaky duplicates
-            if (seenTitles.add(normalizedTitle)) { // Only add if we haven’t seen this title
-                val streamItems = mutableListOf<SearchResponse>()
+        groupedStreams.forEach { (title, streams) ->
+            val streamItems = mutableListOf<SearchResponse>()
+            streams.forEach { stream ->
                 stream.sources.forEachIndexed { j, source ->
                     source.m3u8.forEachIndexed { k, m3u8Url ->
                         streamItems.add(
@@ -55,9 +54,9 @@ class StreamedProvider : MainAPI() {
                         )
                     }
                 }
-                if (streamItems.isNotEmpty()) {
-                    streamList.add(HomePageList(normalizedTitle, streamItems))
-                }
+            }
+            if (streamItems.isNotEmpty()) {
+                streamList.add(HomePageList(title, streamItems))
             }
         }
 
@@ -83,13 +82,13 @@ class StreamedProvider : MainAPI() {
         val source = stream.sources.find { it.source == sourceName } ?: throw ErrorLoadingException("Source not found: $sourceName")
         val m3u8Url = source.m3u8.getOrNull(streamNo.toInt()) ?: throw ErrorLoadingException("Invalid stream number: $streamNo")
 
-        // Pass all M3U8 URLs for the source as a semicolon-separated string
+        // Pack all M3U8 URLs for the source
         val allM3u8Urls = source.m3u8.joinToString(";") { "$it|$userAgent|$referer" }
 
         return newLiveStreamLoadResponse(
             name = "${stream.title} - $sourceName #$streamNo",
-            dataUrl = allM3u8Urls, // Carry all URLs for loadLinks
-            url = m3u8Url // Original URL for reference
+            dataUrl = allM3u8Urls, // All URLs for source switching
+            url = m3u8Url // Selected URL for initial playback
         )
     }
 
