@@ -64,24 +64,29 @@ class StreamedProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val doc = app.get(data, headers = headers, interceptor = cloudflareKiller).document
+        val embedUrl = doc.select("iframe").attr("src")
         var m3u8Url: String? = null
 
-        val embedUrl = doc.select("iframe").attr("src")
+        // Try extracting from iframe
         if (embedUrl.isNotEmpty()) {
             val embedResponse = app.get(embedUrl, headers = headers, interceptor = cloudflareKiller).text
-            m3u8Url = Regex("https?://[^\"']+\\.m3u8").find(embedResponse)?.value
+            m3u8Url = Regex("https?://[\\S]+\\.m3u8(?:\\?[^\"']*)?").find(embedResponse)?.value
         }
 
+        // Fallback to constructed URL if iframe fails
         if (m3u8Url == null) {
             val parts = data.split("/")
-            val id = parts[4]
-            val source = parts[5]
-            val streamNo = parts[6]
-            val fallbackUrl = "https://embedstreams.top/embed/$source/$id/$streamNo"
-            val fallbackResponse = app.get(fallbackUrl, headers = headers, interceptor = cloudflareKiller).text
-            m3u8Url = Regex("https?://[^\"']+\\.m3u8").find(fallbackResponse)?.value
+            if (parts.size >= 7) { // Ensure parts exist to avoid IndexOutOfBounds
+                val id = parts[4]
+                val source = parts[5]
+                val streamNo = parts[6]
+                val fallbackUrl = "https://embedstreams.top/embed/$source/$id/$streamNo"
+                val fallbackResponse = app.get(fallbackUrl, headers = headers, interceptor = cloudflareKiller).text
+                m3u8Url = Regex("https?://[\\S]+\\.m3u8(?:\\?[^\"']*)?").find(fallbackResponse)?.value
+            }
         }
 
+        // If an m3u8 URL is found, invoke the callback
         if (m3u8Url != null) {
             callback(
                 ExtractorLink(
@@ -100,7 +105,11 @@ class StreamedProvider : MainAPI() {
             return true
         }
 
-        embedUrl?.let { loadExtractor(it, mainUrl, subtitleCallback, callback) }
-        return true
+        // Final fallback to loadExtractor if embedUrl exists
+        if (embedUrl.isNotEmpty()) {
+            return loadExtractor(embedUrl, mainUrl, subtitleCallback, callback)
+        }
+
+        return false // No links found
     }
 }
