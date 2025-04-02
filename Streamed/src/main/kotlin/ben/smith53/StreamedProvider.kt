@@ -1,8 +1,9 @@
-package ben.smith53 // Adjust package to match your structure
+package ben.smith53
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.loadExtractor
 import org.json.JSONArray
 
@@ -35,13 +36,11 @@ class StreamedProvider : MainAPI() {
                 val source = sourceObj.getString("source")
                 val streamUrl = "$mainUrl/watch/$gameId/$source/1"
 
-                newSearchResponse(
+                newLiveSearchResponse(
                     name = "$gameTitle ($source)",
                     url = streamUrl,
                     type = TvType.Live
-                ) {
-                    this.apiName = this@StreamedProvider.name
-                }
+                )
             }
         }
 
@@ -54,8 +53,7 @@ class StreamedProvider : MainAPI() {
         return newLiveStreamLoadResponse(
             name = title,
             url = url,
-            dataUrl = url,
-            apiName = this.name
+            dataUrl = url
         )
     }
 
@@ -91,7 +89,7 @@ class StreamedProvider : MainAPI() {
                     name = "Live Stream",
                     url = m3u8Url,
                     referer = mainUrl,
-                    quality = Quality.Unknown.value, // Use Quality instead of Qualities
+                    quality = Qualities.Unknown.value,
                     isM3u8 = true,
                     headers = mapOf(
                         "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
