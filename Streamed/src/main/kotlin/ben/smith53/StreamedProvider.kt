@@ -6,6 +6,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.loadExtractor
 import org.json.JSONArray
+import android.util.Log
 
 class StreamedProvider : MainAPI() {
     override var mainUrl = "https://streamed.su"
@@ -63,35 +64,37 @@ class StreamedProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        Log.d("StreamedSU", "Starting loadLinks for: $data")
         val response = app.get(data, headers = headers, interceptor = cloudflareKiller)
         val doc = response.document
         val text = response.text
 
-        // Look for script tags or external JS files
+        // Log full response for inspection
+        Log.d("StreamedSU", "Page response length: ${text.length}")
+
+        // Search inline scripts
         val scriptContent = doc.select("script").map { it.html() }.joinToString("\n")
         val externalScripts = doc.select("script[src]").map { it.attr("src") }
+        Log.d("StreamedSU", "Inline script content length: ${scriptContent.length}")
+        Log.d("StreamedSU", "External scripts: $externalScripts")
 
         var m3u8Url: String? = null
         var key: String? = null
         var iv: String? = null
 
-        // Step 1: Search inline scripts for m3u8 or key/IV
+        // Search for m3u8, key, and IV in inline scripts
         val m3u8Regex = Regex("https?://[\\S]+\\.m3u8(?:\\?[^\"']*)?")
-        m3u8Url = m3u8Regex.find(scriptContent)?.value
-        if (m3u8Url == null) {
-            m3u8Url = m3u8Regex.find(text)?.value // Fallback to full page text
-        }
-
-        // Look for encryption key/IV (common patterns)
+        m3u8Url = m3u8Regex.find(scriptContent)?.value ?: m3u8Regex.find(text)?.value
         val keyRegex = Regex("key\\s*[:=]\\s*['\"]([a-fA-F0-9]+)['\"]")
         val ivRegex = Regex("iv\\s*[:=]\\s*['\"]([a-fA-F0-9]+)['\"]")
-        key = keyRegex.find(scriptContent)?.groupValues?.get(1)
-        iv = ivRegex.find(scriptContent)?.groupValues?.get(1)
+        key = keyRegex.find(scriptContent)?.groupValues?.get(1) ?: keyRegex.find(text)?.groupValues?.get(1)
+        iv = ivRegex.find(scriptContent)?.groupValues?.get(1) ?: ivRegex.find(text)?.groupValues?.get(1)
 
-        // Step 2: Check external scripts if no m3u8 found
+        // Check external scripts
         if (m3u8Url == null && externalScripts.isNotEmpty()) {
             for (scriptSrc in externalScripts) {
                 val fullScriptUrl = if (scriptSrc.startsWith("http")) scriptSrc else "$mainUrl$scriptSrc"
+                Log.d("StreamedSU", "Fetching external script: $fullScriptUrl")
                 val scriptResponse = app.get(fullScriptUrl, headers = headers, interceptor = cloudflareKiller).text
                 m3u8Url = m3u8Regex.find(scriptResponse)?.value
                 if (m3u8Url != null) {
@@ -102,9 +105,10 @@ class StreamedProvider : MainAPI() {
             }
         }
 
-        // Step 3: Fallback to iframe or constructed URL
+        // Fallback to iframe or constructed URL
         if (m3u8Url == null) {
             val embedUrl = doc.select("iframe").attr("src")
+            Log.d("StreamedSU", "Iframe URL: $embedUrl")
             if (embedUrl.isNotEmpty()) {
                 val embedResponse = app.get(embedUrl, headers = headers, interceptor = cloudflareKiller).text
                 m3u8Url = m3u8Regex.find(embedResponse)?.value
@@ -117,6 +121,7 @@ class StreamedProvider : MainAPI() {
                 val source = parts[5]
                 val streamNo = parts[6]
                 val fallbackUrl = "https://embedstreams.top/embed/$source/$id/$streamNo"
+                Log.d("StreamedSU", "Trying fallback URL: $fallbackUrl")
                 val fallbackResponse = app.get(fallbackUrl, headers = headers, interceptor = cloudflareKiller).text
                 m3u8Url = m3u8Regex.find(fallbackResponse)?.value
                 key = keyRegex.find(fallbackResponse)?.groupValues?.get(1)
@@ -124,7 +129,10 @@ class StreamedProvider : MainAPI() {
             }
         }
 
-        // Step 4: If m3u8 URL is found, build ExtractorLink
+        // Log findings
+        Log.d("StreamedSU", "m3u8Url: $m3u8Url, key: $key, iv: $iv")
+
+        // If m3u8 URL is found, create ExtractorLink
         if (m3u8Url != null) {
             val extractorLink = ExtractorLink(
                 source = this.name,
@@ -138,17 +146,19 @@ class StreamedProvider : MainAPI() {
                     "Referer" to "https://embedme.top/"
                 )
             )
-            // TODO: Add key/IV support if Cloudstream supports it (currently not directly supported)
             callback(extractorLink)
+            Log.d("StreamedSU", "Link extracted successfully: $m3u8Url")
             return true
         }
 
-        // Step 5: Final fallback to loadExtractor
+        // Final fallback to loadExtractor
         val embedUrl = doc.select("iframe").attr("src")
         if (embedUrl.isNotEmpty()) {
+            Log.d("StreamedSU", "Falling back to loadExtractor with: $embedUrl")
             return loadExtractor(embedUrl, mainUrl, subtitleCallback, callback)
         }
 
-        return false // No links found
+        Log.d("StreamedSU", "No links found")
+        return false
     }
 }
