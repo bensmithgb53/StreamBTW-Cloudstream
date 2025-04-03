@@ -1,7 +1,6 @@
 package ben.smith53
 
 import android.content.Context
-import android.widget.Toast
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
@@ -10,26 +9,29 @@ import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
-import kotlinx.coroutines.runBlocking
-import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import org.jsoup.nodes.Document
 import java.text.SimpleDateFormat
 import java.util.*
 
-class Streamed : MainAPI() {
+class StreamedProvider : MainAPI() {
     override var mainUrl = MAIN_URL
     override var name = NAME
     override var supportedTypes = setOf(TvType.Live)
     override var lang = "uni"
     override val hasMainPage = true
     override val hasDownloadSupport = false
-    private val sharedPref = activity?.getSharedPreferences("Streamed", Context.MODE_PRIVATE)
+
+    // Use lazy initialization to get the context safely
+    private val sharedPref by lazy {
+        activity?.getSharedPreferences("Streamed", Context.MODE_PRIVATE)
+            ?: throw IllegalStateException("Activity context is null")
+    }
     private val cloudflareKiller = CloudflareKiller()
 
     init {
-        val editor = sharedPref?.edit()
-        editor?.clear()
-        editor?.apply()
+        val editor = sharedPref.edit()
+        editor.clear()
+        editor.apply()
     }
 
     companion object {
@@ -72,12 +74,13 @@ class Streamed : MainAPI() {
                 url = "$mainUrl/api/stream/$sourceName/$id"
             }
             url += "/${match.id}"
-            LiveSearchResponse(
+            newLiveSearchResponse(
                 name = match.title,
                 url = url,
-                apiName = this@Streamed.name,
-                posterUrl = "$mainUrl${match.posterPath ?: "/api/images/poster/fallback.webp"}"
-            )
+                apiName = this@StreamedProvider.name
+            ) {
+                this.posterUrl = "$mainUrl${match.posterPath ?: "/api/images/poster/fallback.webp"}"
+            }
         }.filter { it.url.count { char -> char == '/' } > 1 }
     }
 
@@ -85,9 +88,9 @@ class Streamed : MainAPI() {
         val rawList = app.get(request.data).text
         val listJson = parseJson<List<Match>>(rawList)
         listJson.amap {
-            with(sharedPref?.edit()) {
-                this?.putString("${it.id}", it.toJson())
-                this?.apply()
+            with(sharedPref.edit()) {
+                putString(it.id ?: return@amap, it.toJson())
+                apply()
             }
         }
 
@@ -96,21 +99,17 @@ class Streamed : MainAPI() {
         }
 
         return newHomePageResponse(
-            HomePageList(
-                name = request.name,
-                list = list,
-                isHorizontalImages = true
-            ), false
+            listOf(HomePageList(request.name, list, isHorizontalImages = true)),
+            hasNext = false
         )
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
         val allMatches = app.get("$mainUrl/api/matches/all").body.string()
         val allMatchesJson = parseJson<List<Match>>(allMatches)
-        val searchResults = searchResponseBuilder(allMatchesJson) { match ->
-            match.matchSources.isNotEmpty() && match.title.contains(query, true)
+        return searchResponseBuilder(allMatchesJson) { match ->
+            match.matchSources.isNotEmpty() && match.title.contains(query, ignoreCase = true)
         }
-        return searchResults
     }
 
     private suspend fun Source.getMatch(id: String): Match? {
@@ -133,13 +132,13 @@ class Streamed : MainAPI() {
             throw ErrorLoadingException("The stream is not available")
         }
 
-        val match = sharedPref?.getString(matchId, null)?.let { parseJson<Match>(it) }
+        val match = sharedPref.getString(matchId, null)?.let { parseJson<Match>(it) }
             ?: throw ErrorLoadingException("Error loading match from cache")
 
         val elementName = match.title
         val elementPlot = match.title
         val elementPoster = "$mainUrl${match.posterPath ?: "/api/images/poster/fallback.webp"}"
-        val elementTags = arrayListOf(match.category.capitalize())
+        val elementTags = arrayListOf(match.category.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.getDefault()) else it.toString() })
 
         try {
             val response = app.get(trueUrl)
@@ -168,21 +167,19 @@ class Streamed : MainAPI() {
             val date = formatter.format(Date(it))
             elementTags.add(date)
         }
-        val teams = match.teams?.values?.mapNotNull { it!!.name!! }
-        if (teams != null) {
-            elementTags.addAll(teams)
-        }
+        match.teams?.values?.mapNotNull { it?.name }?.let { elementTags.addAll(it) }
 
-        return LiveStreamLoadResponse(
+        return newLiveStreamLoadResponse(
             name = elementName,
             url = trueUrl,
             apiName = this.name,
-            dataUrl = trueUrl,
-            plot = elementPlot,
-            posterUrl = elementPoster,
-            tags = elementTags,
-            comingSoon = comingSoon
-        )
+            dataUrl = trueUrl
+        ) {
+            this.plot = elementPlot
+            this.posterUrl = elementPoster
+            this.tags = elementTags
+            this.comingSoon = comingSoon
+        }
     }
 
     override suspend fun loadLinks(
@@ -280,7 +277,7 @@ class Streamed : MainAPI() {
 
     fun showToastOnce(message: String) {
         if (canShowToast) {
-            showToast(message, Toast.LENGTH_LONG)
+            activity?.showToast(message, Toast.LENGTH_LONG)
             canShowToast = false
         }
     }
