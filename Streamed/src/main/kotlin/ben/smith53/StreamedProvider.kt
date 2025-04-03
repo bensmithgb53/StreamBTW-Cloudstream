@@ -4,24 +4,73 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
-import com.lagradost.cloudstream3.utils.loadExtractor
-import org.json.JSONArray
+import org.jsoup.nodes.Document
 import android.util.Log
 
-class StreamedProvider : MainAPI() {
-    override var mainUrl = "https://streamed.su"
-    override var name = "StreamedSU"
+class StreamProvider : MainAPI() {
+    override val name = "StreamedSU"
+    override val mainUrl = "https://streamed.su" // Adjust if different
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.Live)
-
-    private val cloudflareKiller = CloudflareKiller()
     private val headers = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
-        "Referer" to "$mainUrl/",
-        "Origin" to mainUrl
+        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36"
     )
+    private val cloudflareKiller = CloudflareKiller()
 
-    // ... (getMainPage and load functions remain unchanged) ...
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        Log.d("StreamProvider", "Fetching main page: $mainUrl")
+        val doc = app.get(mainUrl, headers = headers, interceptor = cloudflareKiller).document
+
+        // Scrape categories and teams
+        val categories = doc.select("div.category, section.category") // Adjust selector based on site structure
+            .mapNotNull { category ->
+                val catName = category.selectFirst("h2, .category-title")?.text() ?: return@mapNotNull null
+                val streams = category.select("a.stream-link, div.stream-item") // Adjust selector
+                    .mapNotNull { stream ->
+                        val title = stream.selectFirst(".stream-title, h3")?.text() ?: return@mapNotNull null
+                        val url = stream.attr("href")?.let { if (it.startsWith("/")) "$mainUrl$it" else it } ?: return@mapNotNull null
+                        LiveSearchResponse(
+                            name = title,
+                            url = url,
+                            apiName = this.name,
+                            type = TvType.Live
+                        )
+                    }
+                HomePageList(catName, streams, isHorizontalImages = false)
+            }
+
+        if (categories.isEmpty()) {
+            Log.w("StreamProvider", "No categories found, falling back to flat list")
+            val streams = doc.select("a.stream-link, div.stream-item")
+                .mapNotNull { stream ->
+                    val title = stream.selectFirst(".stream-title, h3")?.text() ?: return@mapNotNull null
+                    val url = stream.attr("href")?.let { if (it.startsWith("/")) "$mainUrl$it" else it } ?: return@mapNotNull null
+                    LiveSearchResponse(
+                        name = title,
+                        url = url,
+                        apiName = this.name,
+                        type = TvType.Live
+                    )
+                }
+            return HomePageResponse(listOf(HomePageList("Live Streams", streams, isHorizontalImages = false)))
+        }
+
+        Log.d("StreamProvider", "Found ${categories.size} categories")
+        return HomePageResponse(categories)
+    }
+
+    override suspend fun load(url: String): LoadResponse {
+        Log.d("StreamProvider", "Loading stream: $url")
+        val doc = app.get(url, headers = headers, interceptor = cloudflareKiller).document
+        val title = doc.selectFirst("h1, .stream-title")?.text() ?: url.split("/").last().replace("-", " ").capitalize()
+        return LiveStreamLoadResponse(
+            name = title,
+            url = url,
+            apiName = this.name,
+            dataUrl = url,
+            isM3u8 = true
+        )
+    }
 
     override suspend fun loadLinks(
         data: String,
@@ -29,126 +78,80 @@ class StreamedProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        Log.d("StreamedSU", "Starting loadLinks for: $data")
-        
-        // Initial request with Cloudflare bypass
-        val response = try {
-            app.get(data, headers = headers, interceptor = cloudflareKiller, timeout = 30)
-        } catch (e: Exception) {
-            Log.e("StreamedSU", "Failed to fetch page: ${e.message}")
+        Log.d("StreamProvider", "Starting loadLinks for: $data")
+
+        // Step 1: Fetch stream page and extract iframe
+        val doc = app.get(data, headers = headers, interceptor = cloudflareKiller).document
+        val iframeUrl = doc.selectFirst("iframe[src]")?.attr("src") ?: run {
+            Log.e("StreamProvider", "No iframe found on $data")
             return false
         }
-        val doc = response.document
-        val text = response.text
-        Log.d("StreamedSU", "Page response length: ${text.length}")
-        Log.d("StreamedSU", "Page response preview: ${text.take(500)}")
+        Log.d("StreamProvider", "Iframe URL: $iframeUrl")
 
-        // Extract inline and external scripts
-        val scriptContent = doc.select("script").map { it.html() }.joinToString("\n")
-        val externalScripts = doc.select("script[src]").map { it.attr("src") }
-        Log.d("StreamedSU", "Inline script content length: ${scriptContent.length}")
-        Log.d("StreamedSU", "External scripts: $externalScripts")
-
-        var m3u8Url: String? = null
-        var key: String? = null
-        var iv: String? = null
-
-        // Regex patterns for m3u8, key, and IV
-        val m3u8Regex = Regex("https?://[\\S]+\\.m3u8(?:\\?[^\"']*)?")
-        val keyRegex = Regex("key\\s*[:=]\\s*['\"]([a-fA-F0-9]+)['\"]")
-        val ivRegex = Regex("iv\\s*[:=]\\s*['\"]([a-fA-F0-9]+)['\"]")
-
-        // Step 1: Search inline scripts and page content
-        m3u8Url = m3u8Regex.find(scriptContent)?.value ?: m3u8Regex.find(text)?.value
-        key = keyRegex.find(scriptContent)?.groupValues?.get(1) ?: keyRegex.find(text)?.groupValues?.get(1)
-        iv = ivRegex.find(scriptContent)?.groupValues?.get(1) ?: ivRegex.find(text)?.groupValues?.get(1)
-
-        // Step 2: Check external scripts if no m3u8 found
-        if (m3u8Url == null && externalScripts.isNotEmpty()) {
-            for (scriptSrc in externalScripts) {
-                val fullScriptUrl = if (scriptSrc.startsWith("http")) scriptSrc else "$mainUrl$scriptSrc"
-                Log.d("StreamedSU", "Fetching external script: $fullScriptUrl")
-                try {
-                    val scriptResponse = app.get(fullScriptUrl, headers = headers, interceptor = cloudflareKiller, timeout = 15).text
-                    Log.d("StreamedSU", "External script preview: ${scriptResponse.take(500)}")
-                    m3u8Url = m3u8Regex.find(scriptResponse)?.value
-                    if (m3u8Url != null) {
-                        key = keyRegex.find(scriptResponse)?.groupValues?.get(1)
-                        iv = ivRegex.find(scriptResponse)?.groupValues?.get(1)
-                        break
-                    }
-                } catch (e: Exception) {
-                    Log.e("StreamedSU", "Failed to fetch script $fullScriptUrl: ${e.message}")
-                }
-            }
+        // Step 2: Fetch iframe content and extract variables
+        val iframeResponse = app.get(iframeUrl, headers = headers, interceptor = cloudflareKiller).text
+        val varPairs = Regex("""(\w+)\s*=\s*["']([^"']+)["']""").findAll(iframeResponse)
+            .associate { it.groupValues[1] to it.groupValues[2] }
+        val k = varPairs["k"] ?: run {
+            Log.e("StreamProvider", "Variable 'k' not found in iframe")
+            return false
         }
-
-        // Step 3: Check iframe if still no m3u8
-        if (m3u8Url == null) {
-            val embedUrl = doc.select("iframe").attr("src")
-            Log.d("StreamedSU", "Iframe URL: $embedUrl")
-            if (embedUrl.isNotEmpty()) {
-                try {
-                    val embedResponse = app.get(embedUrl, headers = headers, interceptor = cloudflareKiller, timeout = 15).text
-                    Log.d("StreamedSU", "Iframe response preview: ${embedResponse.take(500)}")
-                    m3u8Url = m3u8Regex.find(embedResponse)?.value
-                    key = keyRegex.find(embedResponse)?.groupValues?.get(1)
-                    iv = ivRegex.find(embedResponse)?.groupValues?.get(1)
-                } catch (e: Exception) {
-                    Log.e("StreamedSU", "Failed to fetch iframe $embedUrl: ${e.message}")
-                }
-            }
+        val i = varPairs["i"] ?: run {
+            Log.e("StreamProvider", "Variable 'i' not found in iframe")
+            return false
         }
-
-        // Step 4: Fallback URL construction
-        if (m3u8Url == null && data.split("/").size >= 7) {
-            val parts = data.split("/")
-            val id = parts[4]
-            val source = parts[5]
-            val streamNo = parts[6]
-            val fallbackUrl = "https://embedstreams.top/embed/$source/$id/$streamNo"
-            Log.d("StreamedSU", "Trying fallback URL: $fallbackUrl")
-            try {
-                val fallbackResponse = app.get(fallbackUrl, headers = headers, interceptor = cloudflareKiller, timeout = 15).text
-                Log.d("StreamedSU", "Fallback response preview: ${fallbackResponse.take(500)}")
-                m3u8Url = m3u8Regex.find(fallbackResponse)?.value
-                key = keyRegex.find(fallbackResponse)?.groupValues?.get(1)
-                iv = ivRegex.find(fallbackResponse)?.groupValues?.get(1)
-            } catch (e: Exception) {
-                Log.e("StreamedSU", "Failed to fetch fallback $fallbackUrl: ${e.message}")
-            }
+        val s = varPairs["s"] ?: run {
+            Log.e("StreamProvider", "Variable 's' not found in iframe")
+            return false
         }
+        Log.d("StreamProvider", "Variables: k=$k, i=$i, s=$s")
 
-        // Log results
-        Log.d("StreamedSU", "m3u8Url: $m3u8Url, key: $key, iv: $iv")
+        // Step 3: Fetch encrypted string from /fetch
+        val fetchUrl = "https://embedstreams.top/fetch" // Adjust if hosted on streamed.su
+        val postData = mapOf("source" to k, "id" to i, "streamNo" to s)
+        val fetchHeaders = headers + mapOf(
+            "Content-Type" to "application/json",
+            "Referer" to iframeUrl
+        )
+        val encryptedResponse = app.post(fetchUrl, headers = fetchHeaders, json = postData, interceptor = cloudflareKiller).text
+        Log.d("StreamProvider", "Encrypted response: $encryptedResponse")
 
-        // Step 5: Create ExtractorLink if m3u8 found
-        if (m3u8Url != null) {
-            val extractorLink = ExtractorLink(
-                source = this.name,
-                name = "Live Stream",
-                url = m3u8Url,
-                referer = mainUrl,
-                quality = Qualities.Unknown.value,
-                isM3u8 = true,
-                headers = mapOf(
-                    "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
-                    "Referer" to "https://embedme.top/"
+        // Step 4: Decrypt using Deno Deploy endpoint
+        val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
+        val decryptPostData = mapOf("encrypted" to encryptedResponse)
+        val decryptResponse = app.post(decryptUrl, json = decryptPostData, headers = mapOf("Content-Type" to "application/json"))
+            .parsedSafe<Map<String, String>>()
+        val decryptedPath = decryptResponse?.get("decrypted") ?: run {
+            Log.e("StreamProvider", "Failed to decrypt: $decryptResponse")
+            return false
+        }
+        Log.d("StreamProvider", "Decrypted path: $decryptedPath")
+
+        // Step 5: Construct and add M3U8 URL
+        val m3u8Url = "https://rr.buytommy.top$decryptedPath"
+        try {
+            val testResponse = app.get(m3u8Url, headers = headers + mapOf("Referer" to iframeUrl), interceptor = cloudflareKiller)
+            if (testResponse.code == 200) {
+                callback(
+                    ExtractorLink(
+                        source = this.name,
+                        name = "Live Stream",
+                        url = m3u8Url,
+                        referer = iframeUrl,
+                        quality = Qualities.Unknown.value,
+                        isM3u8 = true,
+                        headers = headers
+                    )
                 )
-            )
-            callback(extractorLink)
-            Log.d("StreamedSU", "Link extracted successfully: $m3u8Url")
-            return true
+                Log.d("StreamProvider", "M3U8 URL added: $m3u8Url")
+                return true
+            } else {
+                Log.e("StreamProvider", "M3U8 test failed with code: ${testResponse.code}")
+                return false
+            }
+        } catch (e: Exception) {
+            Log.e("StreamProvider", "M3U8 test failed: ${e.message}")
+            return false
         }
-
-        // Step 6: Final fallback to loadExtractor
-        val embedUrl = doc.select("iframe").attr("src")
-        if (embedUrl.isNotEmpty()) {
-            Log.d("StreamedSU", "Falling back to loadExtractor with: $embedUrl")
-            return loadExtractor(embedUrl, mainUrl, subtitleCallback, callback)
-        }
-
-        Log.d("StreamedSU", "No links found")
-        return false
     }
 }
