@@ -66,8 +66,8 @@ class StreamedProvider : MainAPI() {
                 },
                 isHorizontalImages = false
             )
-        }).also { lists ->
-            Log.d("StreamedProvider", "Found ${lists.size} categories with ${matches.size} total matches")
+        }).also {
+            Log.d("StreamedProvider", "Found ${it.size()} categories with ${matches.size} total matches")
         }
     }
 
