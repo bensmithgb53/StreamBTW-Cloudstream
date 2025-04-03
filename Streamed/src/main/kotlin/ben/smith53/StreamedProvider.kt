@@ -1,4 +1,4 @@
-package Ben.smith53
+package ben.smith53
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
@@ -49,13 +49,16 @@ class StreamedProvider : MainAPI() {
             newLiveSearchResponse(
                 name = match.title,
                 url = url,
-                apiName = this@StreamedProvider.name
+                type = TvType.Live
             ) {
                 this.posterUrl = "$mainUrl${match.posterPath ?: "/api/images/poster/fallback.webp"}"
             }
         }.filter { it.url.count { char -> char == '/' } > 1 }
 
-        return newHomePageResponse(request.name, list, isHorizontalImages = true)
+        return newHomePageResponse(
+            list = listOf(HomePageList(request.name, list, isHorizontalImages = true)),
+            hasNext = false
+        )
     }
 
     override suspend fun loadLinks(
