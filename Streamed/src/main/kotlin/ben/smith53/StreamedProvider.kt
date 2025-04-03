@@ -8,8 +8,8 @@ import org.jsoup.nodes.Document
 import android.util.Log
 
 class StreamedProvider : MainAPI() {
-    override var name = "StreamedSU" // Set once, no reassignment
-    override var mainUrl = "https://streamed.su" // Set once, no reassignment
+    override var name = "StreamedSU"
+    override var mainUrl = "https://streamed.su"
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.Live)
     private val headers = mapOf(
@@ -28,31 +28,33 @@ class StreamedProvider : MainAPI() {
                     .mapNotNull { stream ->
                         val title = stream.selectFirst(".title, h3, span")?.text() ?: return@mapNotNull null
                         val url = stream.attr("href").let { if (it.startsWith("/")) "$mainUrl$it" else it }
-                        newLiveSearchResponse(
+                        LiveSearchResponse(
                             name = title,
                             url = url,
+                            apiName = this.name,
                             type = TvType.Live
-                        ) { this.apiName = this@StreamedProvider.name }
+                        )
                     }
                 HomePageList(catName, streams, isHorizontalImages = false)
             }
 
         return if (categories.isNotEmpty()) {
             Log.d("StreamedProvider", "Found ${categories.size} categories")
-            newHomePageResponse(categories)
+            HomePageResponse(categories)
         } else {
             Log.w("StreamedProvider", "No categories found, using flat list")
             val streams = doc.select("a[href*='/category/'], div.match-card, li.stream-item")
                 .mapNotNull { stream ->
                     val title = stream.selectFirst(".title, h3, span")?.text() ?: return@mapNotNull null
                     val url = stream.attr("href").let { if (it.startsWith("/")) "$mainUrl$it" else it }
-                    newLiveSearchResponse(
+                    LiveSearchResponse(
                         name = title,
                         url = url,
+                        apiName = this.name,
                         type = TvType.Live
-                    ) { this.apiName = this@StreamedProvider.name }
+                    )
                 }
-            newHomePageResponse(listOf(HomePageList("Live Streams", streams)))
+            HomePageResponse(listOf(HomePageList("Live Streams", streams)))
         }
     }
 
@@ -60,11 +62,12 @@ class StreamedProvider : MainAPI() {
         Log.d("StreamedProvider", "Loading stream: $url")
         val doc = app.get(url, headers = headers, interceptor = cloudflareKiller).document
         val title = doc.selectFirst("h1, .stream-title, title")?.text() ?: url.split("/").last().replace("-", " ").capitalize()
-        return newLiveStreamLoadResponse(
+        return LiveStreamLoadResponse(
             name = title,
             url = url,
+            apiName = this.name,
             dataUrl = url
-        ) { this.apiName = this@StreamedProvider.name }
+        )
     }
 
     override suspend fun loadLinks(
