@@ -89,7 +89,7 @@ class StreamedProvider : MainAPI() {
         var success = false
         streamList.forEach { stream ->
             Log.d("StreamedProvider", "Processing stream: ${stream.embedUrl}")
-            if (extractor.getUrl(stream, subtitleCallback, callback)) {
+            if (extractor.getUrl(stream.embedUrl, stream.hd, stream.streamNo, stream.source, stream.id, subtitleCallback, callback)) {
                 success = true
             }
         }
@@ -128,23 +128,27 @@ class StreamedExtractor {
     private val cloudflareKiller = CloudflareKiller()
 
     suspend fun getUrl(
-        stream: StreamOption,
+        embedUrl: String,
+        isHd: Boolean,
+        streamNo: Int,
+        source: String,
+        id: String,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        Log.d("StreamedExtractor", "Starting extraction for: ${stream.embedUrl}")
+        Log.d("StreamedExtractor", "Starting extraction for: $embedUrl")
 
         // Use StreamOption data directly
-        val k = stream.source // e.g., "alpha"
-        val i = stream.id    // e.g., "mlb-2025-season-live"
-        val s = stream.streamNo.toString() // e.g., "1"
+        val k = source // e.g., "alpha"
+        val i = id    // e.g., "mlb-2025-season-live"
+        val s = streamNo.toString() // e.g., "1"
 
         Log.d("StreamedExtractor", "Using variables: k=$k, i=$i, s=$s")
 
         // Fetch encrypted string
         val fetchUrl = "$mainUrl/fetch"
         val postData = mapOf("source" to k, "id" to i, "streamNo" to s)
-        val fetchHeaders = headers + mapOf("Content-Type" to "application/json", "Referer" to stream.embedUrl)
+        val fetchHeaders = headers + mapOf("Content-Type" to "application/json", "Referer" to embedUrl)
         val encryptedResponse = try {
             app.post(fetchUrl, headers = fetchHeaders, json = postData, interceptor = cloudflareKiller, timeout = 15).text
         } catch (e: Exception) {
@@ -164,15 +168,15 @@ class StreamedExtractor {
         // Construct and verify M3U8 URL
         val m3u8Url = "https://rr.buytommy.top$decryptedPath"
         try {
-            val testResponse = app.get(m3u8Url, headers = headers + mapOf("Referer" to stream.embedUrl), interceptor = cloudflareKiller, timeout = 15)
+            val testResponse = app.get(m3u8Url, headers = headers + mapOf("Referer" to embedUrl), interceptor = cloudflareKiller, timeout = 15)
             if (testResponse.code == 200) {
                 callback(
                     ExtractorLink(
                         source = "Streamed",
-                        name = "Stream ${stream.streamNo} (${if (stream.hd) "HD" else "SD"})",
+                        name = "Stream $streamNo (${if (isHd) "HD" else "SD"})",
                         url = m3u8Url,
-                        referer = stream.embedUrl,
-                        quality = if (stream.hd) Qualities.P1080.value else Qualities.Unknown.value,
+                        referer = embedUrl,
+                        quality = if (isHd) Qualities.P1080.value else Qualities.Unknown.value,
                         isM3u8 = true,
                         headers = headers
                     )
