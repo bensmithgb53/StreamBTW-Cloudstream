@@ -66,7 +66,7 @@ class StreamedProvider : MainAPI() {
         
         Log.d("StreamedProvider", "DEBUG: Response received")
         
-        // Initialize matchGroups directly without reassignment
+        // Use a single expression to avoid reassignment
         val matchGroups = response.parsedSafe<List<APIMatch>>()?.let { matches ->
             matches.groupBy { it.category }.map { entry ->
                 HomePageList(
@@ -84,9 +84,8 @@ class StreamedProvider : MainAPI() {
                     isHorizontalImages = false
                 )
             }
-        } ?: run {
+        } ?: emptyList<HomePageList>().also {
             Log.w("StreamedProvider", "No matches found from API")
-            emptyList()
         }
         
         return newHomePageResponse(matchGroups).also {
