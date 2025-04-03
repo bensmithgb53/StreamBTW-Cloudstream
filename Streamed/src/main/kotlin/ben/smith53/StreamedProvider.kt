@@ -1,4 +1,4 @@
-.package ben.smith53
+package ben.smith53
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.network.CloudflareKiller
