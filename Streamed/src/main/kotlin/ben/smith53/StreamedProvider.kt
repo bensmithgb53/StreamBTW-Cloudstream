@@ -76,7 +76,7 @@ class StreamedProvider : MainAPI() {
             Log.w("StreamedProvider", "No matches found from API")
             emptyList()
         }).also {
-            Log.d("StreamedProvider", "Found ${it.size()} categories with ${response.parsedSafe<List<APIMatch>>()?.size ?: 0} total matches")
+            Log.d("StreamedProvider", "Found ${it.size} categories with ${response.parsedSafe<List<APIMatch>>()?.size ?: 0} total matches")
         }
     }
 
