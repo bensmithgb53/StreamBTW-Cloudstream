@@ -39,7 +39,8 @@ class StreamedProvider : MainAPI() {
         val listJson = parseJson<List<Match>>(rawList)
         
         val list = listJson.filter { match -> match.matchSources.isNotEmpty() && match.popular }.map { match ->
-            val url = "$mainUrl/watch/${match.id}"
+            val source = match.matchSources.firstOrNull() ?: return@map null
+            val url = "$mainUrl/api/stream/${source.sourceName}/${match.id}"
             newLiveSearchResponse(
                 name = match.title,
                 url = url,
@@ -47,7 +48,7 @@ class StreamedProvider : MainAPI() {
             ) {
                 this.posterUrl = "$mainUrl${match.posterPath ?: "/api/images/poster/fallback.webp"}"
             }
-        }.filter { it.url.isNotEmpty() }
+        }.filterNotNull()
 
         return newHomePageResponse(
             list = listOf(HomePageList(request.name, list, isHorizontalImages = true)),
@@ -73,7 +74,20 @@ class StreamedProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val extractor = StreamedExtractor()
-        return extractor.getUrl(data, subtitleCallback, callback)
+        val streamList = app.get(data).parsedSafe<List<StreamOption>>()
+        if (streamList.isNullOrEmpty()) {
+            Log.e("StreamedExtractor", "No stream options found at $data")
+            return false
+        }
+
+        var success = false
+        streamList.forEach { stream ->
+            Log.d("StreamedExtractor", "Processing stream: ${stream.embedUrl}")
+            if (extractor.getUrl(stream.embedUrl, subtitleCallback, callback)) {
+                success = true
+            }
+        }
+        return success
     }
 
     data class Match(
@@ -88,12 +102,22 @@ class StreamedProvider : MainAPI() {
         @JsonProperty("source") val sourceName: String,
         @JsonProperty("id") val id: String
     )
+
+    data class StreamOption(
+        @JsonProperty("id") val id: String,
+        @JsonProperty("streamNo") val streamNo: Int,
+        @JsonProperty("language") val language: String,
+        @JsonProperty("hd") val hd: Boolean,
+        @JsonProperty("embedUrl") val embedUrl: String,
+        @JsonProperty("source") val source: String
+    )
 }
 
 class StreamedExtractor {
     private val mainUrl = "https://embedstreams.top"
     private val headers = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36"
+        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+        "Referer" to "https://streamed.su/"
     )
     private val cloudflareKiller = CloudflareKiller()
 
@@ -104,50 +128,41 @@ class StreamedExtractor {
     ): Boolean {
         Log.d("StreamedExtractor", "Starting extraction for: $url")
 
-        // Step 1: Fetch page and extract iframe
-        val response = app.get(url, headers = headers, interceptor = cloudflareKiller, timeout = 30)
-        val doc: Document = response.document
-        val iframeUrl = doc.selectFirst("iframe[src]")?.attr("src") ?: return false
-        Log.d("StreamedExtractor", "Iframe URL: $iframeUrl")
-
-        // Step 2: Fetch iframe content and extract variables
-        val iframeResponse = app.get(iframeUrl, headers = headers, interceptor = cloudflareKiller, timeout = 15).text
+        // Step 1: Fetch iframe content and extract variables
+        val iframeResponse = app.get(url, headers = headers, interceptor = cloudflareKiller, timeout = 15).text
         val varPairs = Regex("""(\w+)\s*=\s*["']([^"']+)["']""").findAll(iframeResponse)
             .associate { it.groupValues[1] to it.groupValues[2] }
-        val k = varPairs["k"] ?: return false
-        val i = varPairs["i"] ?: return false
-        val s = varPairs["s"] ?: return false
+        val k = varPairs["k"] ?: return false.also { Log.e("StreamedExtractor", "Variable 'k' not found") }
+        val i = varPairs["i"] ?: return false.also { Log.e("StreamedExtractor", "Variable 'i' not found") }
+        val s = varPairs["s"] ?: return false.also { Log.e("StreamedExtractor", "Variable 's' not found") }
         Log.d("StreamedExtractor", "Variables: k=$k, i=$i, s=$s")
 
-        // Step 3: Fetch encrypted string
+        // Step 2: Fetch encrypted string
         val fetchUrl = "$mainUrl/fetch"
         val postData = mapOf("source" to k, "id" to i, "streamNo" to s)
-        val fetchHeaders = headers + mapOf(
-            "Content-Type" to "application/json",
-            "Referer" to iframeUrl
-        )
+        val fetchHeaders = headers + mapOf("Content-Type" to "application/json")
         val encryptedResponse = app.post(fetchUrl, headers = fetchHeaders, json = postData, interceptor = cloudflareKiller, timeout = 15).text
         Log.d("StreamedExtractor", "Encrypted response: $encryptedResponse")
 
-        // Step 4: Decrypt using Deno
+        // Step 3: Decrypt using Deno
         val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
         val decryptPostData = mapOf("encrypted" to encryptedResponse)
         val decryptResponse = app.post(decryptUrl, json = decryptPostData, headers = mapOf("Content-Type" to "application/json"))
             .parsedSafe<Map<String, String>>()
-        val decryptedPath = decryptResponse?.get("decrypted") ?: return false
+        val decryptedPath = decryptResponse?.get("decrypted") ?: return false.also { Log.e("StreamedExtractor", "Decryption failed") }
         Log.d("StreamedExtractor", "Decrypted path: $decryptedPath")
 
-        // Step 5: Construct and verify M3U8 URL
+        // Step 4: Construct and verify M3U8 URL
         val m3u8Url = "https://rr.buytommy.top$decryptedPath"
         try {
-            val testResponse = app.get(m3u8Url, headers = headers + mapOf("Referer" to iframeUrl), interceptor = cloudflareKiller, timeout = 15)
+            val testResponse = app.get(m3u8Url, headers = headers + mapOf("Referer" to url), interceptor = cloudflareKiller, timeout = 15)
             if (testResponse.code == 200) {
                 callback(
                     ExtractorLink(
                         source = "Streamed",
-                        name = "Live Stream",
+                        name = "Stream ${varPairs["s"]} (${if (iframeResponse.contains("hd")) "HD" else "SD"})",
                         url = m3u8Url,
-                        referer = iframeUrl,
+                        referer = url,
                         quality = Qualities.Unknown.value,
                         isM3u8 = true,
                         headers = headers
@@ -155,6 +170,8 @@ class StreamedExtractor {
                 )
                 Log.d("StreamedExtractor", "M3U8 URL added: $m3u8Url")
                 return true
+            } else {
+                Log.e("StreamedExtractor", "M3U8 test failed with code: ${testResponse.code}")
             }
         } catch (e: Exception) {
             Log.e("StreamedExtractor", "M3U8 test failed: ${e.message}")
