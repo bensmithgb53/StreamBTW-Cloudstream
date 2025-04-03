@@ -2,18 +2,19 @@ package ben.smith53
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
 import android.util.Log
-import org.jsoup.nodes.Document
 
 class StreamedProvider : MainAPI() {
     override var mainUrl = "https://streamed.su"
     override var name = "Streamed"
     override var supportedTypes = setOf(TvType.Live)
     override val hasMainPage = true
+
+    private val sources = listOf("admin", "alpha", "bravo", "charlie", "delta")
+    private val maxStreams = 3 // Adjust based on how many streams per source (e.g., /1, /2, /3)
 
     override val mainPage = mainPageOf(
         "$mainUrl/api/matches/live/popular" to "Popular",
@@ -57,7 +58,7 @@ class StreamedProvider : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse {
         val matchId = url.substringAfterLast("/")
-        val title = matchId.replace("-", " ").capitalize().replace(Regex("-\\d+$"), "") // Remove numeric suffix
+        val title = matchId.replace("-", " ").capitalize().replace(Regex("-\\d+$"), "")
         val posterUrl = "$mainUrl/api/images/poster/$matchId.webp"
         return newLiveStreamLoadResponse(
             name = title,
@@ -74,14 +75,21 @@ class StreamedProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val response = app.get(data).document
-        val iframeUrl = response.selectFirst("iframe[src]")?.attr("src")
-            ?: return false.also { Log.e("StreamedProvider", "No iframe found in $data") }
-        Log.d("StreamedProvider", "Iframe URL: $iframeUrl")
-
-        val extractor = StreamedExtractor()
         val matchId = data.substringAfterLast("/")
-        return extractor.getUrl(iframeUrl, matchId, subtitleCallback, callback)
+        val extractor = StreamedExtractor()
+        var success = false
+
+        // Generate stream URLs for each source and stream number
+        sources.forEach { source ->
+            for (streamNo in 1..maxStreams) {
+                val streamUrl = "$data/$source/$streamNo"
+                Log.d("StreamedProvider", "Processing stream URL: $streamUrl")
+                if (extractor.getUrl(streamUrl, matchId, source, streamNo, subtitleCallback, callback)) {
+                    success = true
+                }
+            }
+        }
+        return success
     }
 
     data class Match(
@@ -104,42 +112,39 @@ class StreamedExtractor {
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
         "Content-Type" to "application/json"
     )
-    private val cloudflareKiller = CloudflareKiller()
 
     suspend fun getUrl(
-        embedUrl: String,
+        streamUrl: String,
         matchId: String,
+        source: String,
+        streamNo: Int,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        Log.d("StreamedExtractor", "Starting extraction for: $embedUrl")
+        Log.d("StreamedExtractor", "Starting extraction for: $streamUrl")
 
-        // Fetch iframe to get cookies or context
-        val iframeResponse = try {
-            app.get(embedUrl, headers = baseHeaders, timeout = 15)
+        // Fetch stream page to get cookies or context
+        val streamResponse = try {
+            app.get(streamUrl, headers = baseHeaders, timeout = 15)
         } catch (e: Exception) {
-            Log.e("StreamedExtractor", "Iframe fetch failed: ${e.message}")
+            Log.e("StreamedExtractor", "Stream page fetch failed: ${e.message}")
             return false
         }
-        val cookies = iframeResponse.cookies
-        Log.d("StreamedExtractor", "Iframe cookies: $cookies")
+        val cookies = streamResponse.cookies
+        Log.d("StreamedExtractor", "Stream cookies: $cookies")
 
-        // Extract source and streamNo from embedUrl
-        val urlParts = embedUrl.split("/")
-        val source = urlParts[3] // e.g., "alpha"
-        val streamNo = urlParts.last() // e.g., "1"
+        // POST to fetch encrypted string
         val postData = mapOf(
-            "source" to source,
-            "id" to matchId,
-            "streamNo" to streamNo
+            "source" to source,    // e.g., "alpha"
+            "id" to matchId,       // e.g., "chelsea-vs-tottenham-2070133"
+            "streamNo" to streamNo.toString() // e.g., "1"
         )
         val fetchHeaders = baseHeaders + mapOf(
-            "Referer" to embedUrl,
+            "Referer" to streamUrl,
             "Cookie" to cookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
         )
         Log.d("StreamedExtractor", "Fetching with data: $postData and headers: $fetchHeaders")
 
-        // Fetch encrypted string
         val encryptedResponse = try {
             val response = app.post(fetchUrl, headers = fetchHeaders, json = postData, timeout = 15)
             Log.d("StreamedExtractor", "Fetch response code: ${response.code}")
@@ -166,14 +171,14 @@ class StreamedExtractor {
         // Construct and verify M3U8 URL
         val m3u8Url = "https://rr.buytommy.top$decryptedPath"
         try {
-            val testResponse = app.get(m3u8Url, headers = baseHeaders + mapOf("Referer" to embedUrl), timeout = 15)
+            val testResponse = app.get(m3u8Url, headers = baseHeaders + mapOf("Referer" to streamUrl), timeout = 15)
             if (testResponse.code == 200) {
                 callback(
                     ExtractorLink(
                         source = "Streamed",
-                        name = "Stream $streamNo",
+                        name = "$source Stream $streamNo",
                         url = m3u8Url,
-                        referer = embedUrl,
+                        referer = streamUrl,
                         quality = Qualities.Unknown.value,
                         isM3u8 = true,
                         headers = baseHeaders
