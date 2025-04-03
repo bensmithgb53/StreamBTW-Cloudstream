@@ -31,7 +31,7 @@ class StreamedProvider : MainAPI() {
         "$mainUrl/api/matches/afl" to "AFL",
         "$mainUrl/api/matches/darts" to "Darts",
         "$mainUrl/api/matches/cricket" to "Cricket",
-        "$mainUrl/watch/other" to "Other"
+        "$mainUrl/api/matches/other" to "Other"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -39,7 +39,7 @@ class StreamedProvider : MainAPI() {
         val listJson = parseJson<List<Match>>(rawList)
         
         val list = listJson.filter { match -> match.matchSources.isNotEmpty() && match.popular }.map { match ->
-            val url = "$mainUrl/watch/${match.id}"  // Use /watch/ instead of /api/stream/
+            val url = "$mainUrl/watch/${match.id}"
             newLiveSearchResponse(
                 name = match.title,
                 url = url,
@@ -60,8 +60,7 @@ class StreamedProvider : MainAPI() {
         return newLiveStreamLoadResponse(
             name = title,
             url = url,
-            dataUrl = url,
-            type = TvType.Live
+            dataUrl = url
         ) {
             this.posterUrl = "$mainUrl/api/images/poster/fallback.webp"
         }
