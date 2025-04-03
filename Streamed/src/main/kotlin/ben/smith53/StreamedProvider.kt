@@ -17,7 +17,6 @@ class StreamedProvider : MainAPI() {
     )
     private val cloudflareKiller = CloudflareKiller()
 
-    // Data classes for API responses
     data class APIMatch(
         @JsonProperty("id") val id: String,
         @JsonProperty("title") val title: String,
@@ -51,13 +50,13 @@ class StreamedProvider : MainAPI() {
 
         if (matches.isNullOrEmpty()) {
             Log.w("StreamedProvider", "No matches found from API")
-            return newHomePageResponse(emptyList()) // Updated to new API
+            return newHomePageResponse(emptyList())
         }
 
         val categories = matches.groupBy { it.category }.map { (category, matchList) ->
-            val streams = matchList.map { match ->
+            val streams = matchList.map { match -> // Line ~65 in this version
                 val title = match.teams?.let { "${it.home?.name ?: ""} vs ${it.away?.name ?: ""}" } ?: match.title
-                newLiveSearchResponse( // Updated to new API
+                newLiveSearchResponse(
                     name = title,
                     url = "$mainUrl/match/${match.id}",
                     type = TvType.Live
@@ -70,7 +69,7 @@ class StreamedProvider : MainAPI() {
         }
 
         Log.d("StreamedProvider", "Found ${categories.size} categories with ${matches.size} total matches")
-        return newHomePageResponse(categories) // Updated to new API
+        return newHomePageResponse(categories)
     }
 
     override suspend fun load(url: String): LoadResponse {
@@ -82,7 +81,7 @@ class StreamedProvider : MainAPI() {
         val match = matches?.find { it.id == matchId } ?: throw ErrorLoadingException("Match not found")
 
         val title = match.teams?.let { "${it.home?.name ?: ""} vs ${it.away?.name ?: ""}" } ?: match.title
-        return newLiveStreamLoadResponse( // Updated to new API
+        return newLiveStreamLoadResponse(
             name = title,
             url = url,
             dataUrl = url
