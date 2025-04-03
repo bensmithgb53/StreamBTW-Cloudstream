@@ -39,7 +39,7 @@ class StreamedProvider : MainAPI() {
         val listJson = parseJson<List<Match>>(rawList)
         
         val list = listJson.filter { match -> match.matchSources.isNotEmpty() }.map { match ->
-            val url = "$mainUrl/match/${match.id}"
+            val url = "$mainUrl/watch/${match.id}"
             newLiveSearchResponse(
                 name = match.title,
                 url = url,
@@ -57,8 +57,8 @@ class StreamedProvider : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse {
         val matchId = url.substringAfterLast("/")
-        val title = matchId.replace("-", " ").capitalize()
-        val posterUrl = "$mainUrl/api/images/poster/$matchId.webp" // Fallback if unavailable
+        val title = matchId.replace("-", " ").capitalize().replace(Regex("-\\d+$"), "") // Remove numeric suffix
+        val posterUrl = "$mainUrl/api/images/poster/$matchId.webp"
         return newLiveStreamLoadResponse(
             name = title,
             url = url,
@@ -100,7 +100,7 @@ class StreamedProvider : MainAPI() {
 
 class StreamedExtractor {
     private val fetchUrl = "https://embedstreams.top/fetch"
-    private val headers = mapOf(
+    private val baseHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
         "Content-Type" to "application/json"
     )
@@ -114,20 +114,34 @@ class StreamedExtractor {
     ): Boolean {
         Log.d("StreamedExtractor", "Starting extraction for: $embedUrl")
 
-        // Extract source from embedUrl (assuming format like /embed/alpha/...)
-        val source = embedUrl.split("/")[3] // e.g., "alpha"
-        val streamNo = embedUrl.split("/").last() // e.g., "1" from URL end
+        // Fetch iframe to get cookies or context
+        val iframeResponse = try {
+            app.get(embedUrl, headers = baseHeaders, timeout = 15)
+        } catch (e: Exception) {
+            Log.e("StreamedExtractor", "Iframe fetch failed: ${e.message}")
+            return false
+        }
+        val cookies = iframeResponse.cookies
+        Log.d("StreamedExtractor", "Iframe cookies: $cookies")
+
+        // Extract source and streamNo from embedUrl
+        val urlParts = embedUrl.split("/")
+        val source = urlParts[3] // e.g., "alpha"
+        val streamNo = urlParts.last() // e.g., "1"
         val postData = mapOf(
             "source" to source,
-            "id" to matchId, // Use match ID from /match/{id}
+            "id" to matchId,
             "streamNo" to streamNo
         )
-        val fetchHeaders = headers + mapOf("Referer" to embedUrl)
+        val fetchHeaders = baseHeaders + mapOf(
+            "Referer" to embedUrl,
+            "Cookie" to cookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
+        )
         Log.d("StreamedExtractor", "Fetching with data: $postData and headers: $fetchHeaders")
 
         // Fetch encrypted string
         val encryptedResponse = try {
-            val response = app.post(fetchUrl, headers = fetchHeaders, json = postData, interceptor = cloudflareKiller, timeout = 15)
+            val response = app.post(fetchUrl, headers = fetchHeaders, json = postData, timeout = 15)
             Log.d("StreamedExtractor", "Fetch response code: ${response.code}")
             response.text
         } catch (e: Exception) {
@@ -152,7 +166,7 @@ class StreamedExtractor {
         // Construct and verify M3U8 URL
         val m3u8Url = "https://rr.buytommy.top$decryptedPath"
         try {
-            val testResponse = app.get(m3u8Url, headers = headers + mapOf("Referer" to embedUrl), interceptor = cloudflareKiller, timeout = 15)
+            val testResponse = app.get(m3u8Url, headers = baseHeaders + mapOf("Referer" to embedUrl), timeout = 15)
             if (testResponse.code == 200) {
                 callback(
                     ExtractorLink(
@@ -160,9 +174,9 @@ class StreamedExtractor {
                         name = "Stream $streamNo",
                         url = m3u8Url,
                         referer = embedUrl,
-                        quality = Qualities.Unknown.value, // Adjust if HD info available
+                        quality = Qualities.Unknown.value,
                         isM3u8 = true,
-                        headers = headers
+                        headers = baseHeaders
                     )
                 )
                 Log.d("StreamedExtractor", "M3U8 URL added: $m3u8Url")
