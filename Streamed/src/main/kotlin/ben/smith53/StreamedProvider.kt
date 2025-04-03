@@ -21,7 +21,6 @@ class StreamedProvider : MainAPI() {
         Log.d("StreamedProvider", "Fetching main page: $mainUrl")
         val doc = app.get(mainUrl, headers = headers, interceptor = cloudflareKiller).document
 
-        // Scrape categories and streams
         val categories = doc.select("div.category, section.category, div#categories > div")
             .mapNotNull { category ->
                 val catName = category.selectFirst("h2, .category-title, span")?.text() ?: return@mapNotNull null
@@ -75,7 +74,6 @@ class StreamedProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         Log.d("StreamedProvider", "Starting loadLinks for: $data")
-
         val doc = app.get(data, headers = headers, interceptor = cloudflareKiller).document
         val iframeUrl = doc.selectFirst("iframe[src*='embedstreams.top']")?.attr("src") ?: run {
             Log.e("StreamedProvider", "No iframe found on $data")
