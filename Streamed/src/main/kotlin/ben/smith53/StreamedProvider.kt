@@ -46,12 +46,7 @@ class StreamedProvider : MainAPI() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         Log.d("StreamedProvider", "Fetching main page via API: $mainUrl/api/matches/live")
         val response = app.get("$mainUrl/api/matches/live", headers = headers, interceptor = cloudflareKiller)
-        val matches = response.parsedSafe<List<APIMatch>>() ?: run {
-            Log.w("StreamedProvider", "No matches found from API")
-            return newHomePageResponse(emptyList())
-        }
-
-        return newHomePageResponse(matches.groupBy { it.category }.map { entry ->
+        return newHomePageResponse(response.parsedSafe<List<APIMatch>>()?.groupBy { it.category }?.map { entry ->
             HomePageList(
                 name = entry.key,
                 list = entry.value.map { match ->
@@ -66,8 +61,11 @@ class StreamedProvider : MainAPI() {
                 },
                 isHorizontalImages = false
             )
+        } ?: run {
+            Log.w("StreamedProvider", "No matches found from API")
+            emptyList()
         }).also {
-            Log.d("StreamedProvider", "Found ${it.size()} categories with ${matches.size} total matches")
+            Log.d("StreamedProvider", "Found ${it.size()} categories with ${response.parsedSafe<List<APIMatch>>()?.size ?: 0} total matches")
         }
     }
 
