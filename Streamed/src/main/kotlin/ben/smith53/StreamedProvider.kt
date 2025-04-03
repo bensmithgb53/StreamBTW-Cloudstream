@@ -7,7 +7,6 @@ import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
 import android.util.Log
-import org.jsoup.nodes.Document
 
 class StreamedProvider : MainAPI() {
     override var mainUrl = "https://streamed.su"
@@ -38,7 +37,7 @@ class StreamedProvider : MainAPI() {
         val rawList = app.get(request.data).text
         val listJson = parseJson<List<Match>>(rawList)
         
-        val list = listJson.filter { match -> match.matchSources.isNotEmpty() && match.popular }.map { match ->
+        val list = listJson.filter { match -> match.matchSources.isNotEmpty() }.map { match ->
             val source = match.matchSources.firstOrNull() ?: return@map null
             val url = "$mainUrl/api/stream/${source.sourceName}/${match.id}"
             newLiveSearchResponse(
@@ -58,12 +57,19 @@ class StreamedProvider : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse {
         val title = url.substringAfterLast("/").replace("-", " ").capitalize()
+        val streamList = app.get(url).parsedSafe<List<StreamOption>>()
+        val posterUrl = if (streamList.isNullOrEmpty()) {
+            "$mainUrl/api/images/poster/fallback.webp"
+        } else {
+            "$mainUrl/api/images/poster/${streamList[0].id}.webp" // Assuming poster based on ID
+        }
+
         return newLiveStreamLoadResponse(
             name = title,
             url = url,
             dataUrl = url
         ) {
-            this.posterUrl = "$mainUrl/api/images/poster/fallback.webp"
+            this.posterUrl = posterUrl
         }
     }
 
@@ -73,17 +79,17 @@ class StreamedProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val extractor = StreamedExtractor()
         val streamList = app.get(data).parsedSafe<List<StreamOption>>()
         if (streamList.isNullOrEmpty()) {
-            Log.e("StreamedExtractor", "No stream options found at $data")
+            Log.e("StreamedProvider", "No stream options found at $data")
             return false
         }
 
+        val extractor = StreamedExtractor()
         var success = false
         streamList.forEach { stream ->
-            Log.d("StreamedExtractor", "Processing stream: ${stream.embedUrl}")
-            if (extractor.getUrl(stream.embedUrl, subtitleCallback, callback)) {
+            Log.d("StreamedProvider", "Processing stream: ${stream.embedUrl}")
+            if (extractor.getUrl(stream.embedUrl, stream.hd, stream.streamNo, subtitleCallback, callback)) {
                 success = true
             }
         }
@@ -123,6 +129,8 @@ class StreamedExtractor {
 
     suspend fun getUrl(
         url: String,
+        isHd: Boolean,
+        streamNo: Int,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
@@ -160,10 +168,10 @@ class StreamedExtractor {
                 callback(
                     ExtractorLink(
                         source = "Streamed",
-                        name = "Stream ${varPairs["s"]} (${if (iframeResponse.contains("hd")) "HD" else "SD"})",
+                        name = "Stream $streamNo (${if (isHd) "HD" else "SD"})",
                         url = m3u8Url,
                         referer = url,
-                        quality = Qualities.Unknown.value,
+                        quality = if (isHd) Qualities.P1080.value else Qualities.Unknown.value,
                         isM3u8 = true,
                         headers = headers
                     )
