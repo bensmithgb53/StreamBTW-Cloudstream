@@ -46,6 +46,7 @@ class StreamedProvider : MainAPI() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         Log.d("StreamedProvider", "Fetching main page via API: $mainUrl/api/matches/live")
         val response = app.get("$mainUrl/api/matches/live", headers = headers, interceptor = cloudflareKiller)
+        Log.d("StreamedProvider", "DEBUG: Using inlined matches version - April 03, 2025")
         return newHomePageResponse(response.parsedSafe<List<APIMatch>>()?.groupBy { it.category }?.map { entry ->
             HomePageList(
                 name = entry.key,
