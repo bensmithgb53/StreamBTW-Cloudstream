@@ -31,7 +31,7 @@ class StreamedProvider : MainAPI() {
         "$mainUrl/api/matches/afl" to "AFL",
         "$mainUrl/api/matches/darts" to "Darts",
         "$mainUrl/api/matches/cricket" to "Cricket",
-        "$mainUrl/api/matches/other" to "Other"
+        "$mainUrl/watch/other" to "Other"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -39,13 +39,7 @@ class StreamedProvider : MainAPI() {
         val listJson = parseJson<List<Match>>(rawList)
         
         val list = listJson.filter { match -> match.matchSources.isNotEmpty() && match.popular }.map { match ->
-            var url = ""
-            if (match.matchSources.isNotEmpty()) {
-                val sourceName = match.matchSources[0].sourceName
-                val id = match.matchSources[0].id
-                url = "$mainUrl/api/stream/$sourceName/$id"
-            }
-            url += "/${match.id}"
+            val url = "$mainUrl/watch/${match.id}"  // Use /watch/ instead of /api/stream/
             newLiveSearchResponse(
                 name = match.title,
                 url = url,
@@ -53,12 +47,24 @@ class StreamedProvider : MainAPI() {
             ) {
                 this.posterUrl = "$mainUrl${match.posterPath ?: "/api/images/poster/fallback.webp"}"
             }
-        }.filter { it.url.count { char -> char == '/' } > 1 }
+        }.filter { it.url.isNotEmpty() }
 
         return newHomePageResponse(
             list = listOf(HomePageList(request.name, list, isHorizontalImages = true)),
             hasNext = false
         )
+    }
+
+    override suspend fun load(url: String): LoadResponse {
+        val title = url.substringAfterLast("/").replace("-", " ").capitalize()
+        return newLiveStreamLoadResponse(
+            name = title,
+            url = url,
+            dataUrl = url,
+            type = TvType.Live
+        ) {
+            this.posterUrl = "$mainUrl/api/images/poster/fallback.webp"
+        }
     }
 
     override suspend fun loadLinks(
