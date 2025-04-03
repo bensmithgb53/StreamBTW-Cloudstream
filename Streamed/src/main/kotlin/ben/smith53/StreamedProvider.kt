@@ -51,23 +51,23 @@ class StreamedProvider : MainAPI() {
             return newHomePageResponse(emptyList())
         }
 
-        // Flattened logic to avoid nested val declarations
         val categoryMap = matches.groupBy { it.category }
         val homePageLists = categoryMap.map { entry ->
-            val category = entry.key
-            val matchList = entry.value
-            val streamList = matchList.map { match ->
-                val title = match.teams?.let { "${it.home?.name ?: ""} vs ${it.away?.name ?: ""}" } ?: match.title
-                newLiveSearchResponse(
-                    name = title,
-                    url = "$mainUrl/match/${match.id}",
-                    type = TvType.Live
-                ) {
-                    this.apiName = this@StreamedProvider.name
-                    this.posterUrl = match.poster?.let { "$mainUrl$it" }
-                }
-            }
-            HomePageList(category, streamList, isHorizontalImages = false)
+            HomePageList(
+                name = entry.key,
+                list = entry.value.map { match ->
+                    val title = match.teams?.let { "${it.home?.name ?: ""} vs ${it.away?.name ?: ""}" } ?: match.title
+                    newLiveSearchResponse(
+                        name = title,
+                        url = "$mainUrl/match/${match.id}",
+                        type = TvType.Live
+                    ) {
+                        this.apiName = this@StreamedProvider.name
+                        this.posterUrl = match.poster?.let { "$mainUrl$it" }
+                    }
+                },
+                isHorizontalImages = false
+            )
         }
 
         Log.d("StreamedProvider", "Found ${homePageLists.size} categories with ${matches.size} total matches")
