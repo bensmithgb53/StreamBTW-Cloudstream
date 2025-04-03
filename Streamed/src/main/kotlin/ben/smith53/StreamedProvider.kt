@@ -7,6 +7,7 @@ import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
 import android.util.Log
+import org.jsoup.nodes.Document
 
 class StreamedProvider : MainAPI() {
     override var mainUrl = "https://streamed.su"
@@ -38,8 +39,7 @@ class StreamedProvider : MainAPI() {
         val listJson = parseJson<List<Match>>(rawList)
         
         val list = listJson.filter { match -> match.matchSources.isNotEmpty() }.map { match ->
-            val source = match.matchSources.firstOrNull() ?: return@map null
-            val url = "$mainUrl/api/stream/${source.sourceName}/${match.id}"
+            val url = "$mainUrl/match/${match.id}"
             newLiveSearchResponse(
                 name = match.title,
                 url = url,
@@ -56,14 +56,9 @@ class StreamedProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val title = url.substringAfterLast("/").replace("-", " ").capitalize()
-        val streamList = app.get(url).parsedSafe<List<StreamOption>>()
-        val posterUrl = if (streamList.isNullOrEmpty()) {
-            "$mainUrl/api/images/poster/fallback.webp"
-        } else {
-            "$mainUrl/api/images/poster/${streamList[0].id}.webp"
-        }
-
+        val matchId = url.substringAfterLast("/")
+        val title = matchId.replace("-", " ").capitalize()
+        val posterUrl = "$mainUrl/api/images/poster/$matchId.webp" // Fallback if unavailable
         return newLiveStreamLoadResponse(
             name = title,
             url = url,
@@ -79,21 +74,14 @@ class StreamedProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val streamList = app.get(data).parsedSafe<List<StreamOption>>()
-        if (streamList.isNullOrEmpty()) {
-            Log.e("StreamedProvider", "No stream options found at $data")
-            return false
-        }
+        val response = app.get(data).document
+        val iframeUrl = response.selectFirst("iframe[src]")?.attr("src")
+            ?: return false.also { Log.e("StreamedProvider", "No iframe found in $data") }
+        Log.d("StreamedProvider", "Iframe URL: $iframeUrl")
 
         val extractor = StreamedExtractor()
-        var success = false
-        streamList.forEach { stream ->
-            Log.d("StreamedProvider", "Processing stream: ${stream.embedUrl}")
-            if (extractor.getUrl(stream.embedUrl, stream.hd, stream.streamNo, stream.source, stream.id, subtitleCallback, callback)) {
-                success = true
-            }
-        }
-        return success
+        val matchId = data.substringAfterLast("/")
+        return extractor.getUrl(iframeUrl, matchId, subtitleCallback, callback)
     }
 
     data class Match(
@@ -108,50 +96,36 @@ class StreamedProvider : MainAPI() {
         @JsonProperty("source") val sourceName: String,
         @JsonProperty("id") val id: String
     )
-
-    data class StreamOption(
-        @JsonProperty("id") val id: String,
-        @JsonProperty("streamNo") val streamNo: Int,
-        @JsonProperty("language") val language: String,
-        @JsonProperty("hd") val hd: Boolean,
-        @JsonProperty("embedUrl") val embedUrl: String,
-        @JsonProperty("source") val source: String
-    )
 }
 
 class StreamedExtractor {
-    private val mainUrl = "https://embedstreams.top"
+    private val fetchUrl = "https://embedstreams.top/fetch"
     private val headers = mapOf(
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
-        "Referer" to "https://streamed.su/" // Base referer, overridden in fetch
+        "Content-Type" to "application/json"
     )
     private val cloudflareKiller = CloudflareKiller()
 
     suspend fun getUrl(
         embedUrl: String,
-        isHd: Boolean,
-        streamNo: Int,
-        source: String,
-        id: String,
+        matchId: String,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         Log.d("StreamedExtractor", "Starting extraction for: $embedUrl")
 
-        // Use StreamOption data directly
-        val k = source // e.g., "alpha"
-        val i = id    // e.g., "mlb-2025-season-live"
-        val s = streamNo.toString() // e.g., "1"
-
-        Log.d("StreamedExtractor", "Using variables: k=$k, i=$i, s=$s")
-
-        // Fetch encrypted string with embedUrl as referer
-        val fetchUrl = "$mainUrl/fetch"
-        val postData = mapOf("source" to k, "id" to i, "streamNo" to s)
-        val fetchHeaders = headers + mapOf(
-            "Content-Type" to "application/json",
-            "Referer" to embedUrl // Match the iframe URL
+        // Extract source from embedUrl (assuming format like /embed/alpha/...)
+        val source = embedUrl.split("/")[3] // e.g., "alpha"
+        val streamNo = embedUrl.split("/").last() // e.g., "1" from URL end
+        val postData = mapOf(
+            "source" to source,
+            "id" to matchId, // Use match ID from /match/{id}
+            "streamNo" to streamNo
         )
+        val fetchHeaders = headers + mapOf("Referer" to embedUrl)
+        Log.d("StreamedExtractor", "Fetching with data: $postData and headers: $fetchHeaders")
+
+        // Fetch encrypted string
         val encryptedResponse = try {
             val response = app.post(fetchUrl, headers = fetchHeaders, json = postData, interceptor = cloudflareKiller, timeout = 15)
             Log.d("StreamedExtractor", "Fetch response code: ${response.code}")
@@ -183,10 +157,10 @@ class StreamedExtractor {
                 callback(
                     ExtractorLink(
                         source = "Streamed",
-                        name = "Stream $streamNo (${if (isHd) "HD" else "SD"})",
+                        name = "Stream $streamNo",
                         url = m3u8Url,
                         referer = embedUrl,
-                        quality = if (isHd) Qualities.P1080.value else Qualities.Unknown.value,
+                        quality = Qualities.Unknown.value, // Adjust if HD info available
                         isM3u8 = true,
                         headers = headers
                     )
