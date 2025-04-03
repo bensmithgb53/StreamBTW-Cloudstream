@@ -46,15 +46,17 @@ class StreamedProvider : MainAPI() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         Log.d("StreamedProvider", "Fetching main page via API: $mainUrl/api/matches/live")
         val response = app.get("$mainUrl/api/matches/live", headers = headers, interceptor = cloudflareKiller)
-        val matches = response.parsedSafe<List<APIMatch>>()
-
-        if (matches.isNullOrEmpty()) {
+        val matches = response.parsedSafe<List<APIMatch>>() ?: run {
             Log.w("StreamedProvider", "No matches found from API")
             return newHomePageResponse(emptyList())
         }
 
-        val categories = matches.groupBy { it.category }.map { (category, matchList) -> // Line 64
-            val streams = matchList.map { match -> // Line 65
+        // Flattened logic to avoid nested val declarations
+        val categoryMap = matches.groupBy { it.category }
+        val homePageLists = categoryMap.map { entry ->
+            val category = entry.key
+            val matchList = entry.value
+            val streamList = matchList.map { match ->
                 val title = match.teams?.let { "${it.home?.name ?: ""} vs ${it.away?.name ?: ""}" } ?: match.title
                 newLiveSearchResponse(
                     name = title,
@@ -65,11 +67,11 @@ class StreamedProvider : MainAPI() {
                     this.posterUrl = match.poster?.let { "$mainUrl$it" }
                 }
             }
-            HomePageList(category, streams, isHorizontalImages = false)
+            HomePageList(category, streamList, isHorizontalImages = false)
         }
 
-        Log.d("StreamedProvider", "Found ${categories.size} categories with ${matches.size} total matches")
-        return newHomePageResponse(categories)
+        Log.d("StreamedProvider", "Found ${homePageLists.size} categories with ${matches.size} total matches")
+        return newHomePageResponse(homePageLists)
     }
 
     override suspend fun load(url: String): LoadResponse {
