@@ -66,21 +66,24 @@ class StreamedProvider : MainAPI() {
         
         Log.d("StreamedProvider", "DEBUG: Response received")
         
-        val matchGroups = response.parsedSafe<List<APIMatch>>()?.groupBy { it.category }?.map { entry ->
-            HomePageList(
-                name = entry.key,
-                list = entry.value.map { match ->
-                    newLiveSearchResponse(
-                        name = match.teams?.let { "${it.home?.name ?: ""} vs ${it.away?.name ?: ""}" } ?: match.title,
-                        url = "$mainUrl/match/${match.id}",
-                        type = TvType.Live
-                    ) {
-                        this.apiName = this@StreamedProvider.name
-                        this.posterUrl = match.poster?.let { "$mainUrl$it" }
-                    }
-                },
-                isHorizontalImages = false
-            )
+        // Initialize matchGroups directly without reassignment
+        val matchGroups = response.parsedSafe<List<APIMatch>>()?.let { matches ->
+            matches.groupBy { it.category }.map { entry ->
+                HomePageList(
+                    name = entry.key,
+                    list = entry.value.map { match ->
+                        newLiveSearchResponse(
+                            name = match.teams?.let { "${it.home?.name ?: ""} vs ${it.away?.name ?: ""}" } ?: match.title,
+                            url = "$mainUrl/match/${match.id}",
+                            type = TvType.Live
+                        ) {
+                            this.apiName = this@StreamedProvider.name
+                            this.posterUrl = match.poster?.let { "$mainUrl$it" }
+                        }
+                    },
+                    isHorizontalImages = false
+                )
+            }
         } ?: run {
             Log.w("StreamedProvider", "No matches found from API")
             emptyList()
