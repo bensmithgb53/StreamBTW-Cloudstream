@@ -53,8 +53,8 @@ class StreamedProvider : MainAPI() {
             return newHomePageResponse(emptyList())
         }
 
-        val categories = matches.groupBy { it.category }.map { (category, matchList) ->
-            val streams = matchList.map { match -> // Line ~65 in this version
+        val categories = matches.groupBy { it.category }.map { (category, matchList) -> // Line ~64
+            val streams = matchList.map { match -> // Line ~65
                 val title = match.teams?.let { "${it.home?.name ?: ""} vs ${it.away?.name ?: ""}" } ?: match.title
                 newLiveSearchResponse(
                     name = title,
