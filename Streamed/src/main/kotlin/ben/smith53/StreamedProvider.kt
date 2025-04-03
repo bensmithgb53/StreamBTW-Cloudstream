@@ -5,34 +5,37 @@ import android.widget.Toast
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.CommonActivity.showToast
+import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
-import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.mainPageOf
-import com.lagradost.cloudstream3.newHomePageResponse
+import com.lagradost.cloudstream3.utils.Qualities
+import kotlinx.coroutines.runBlocking
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import org.jsoup.nodes.Document
 import java.text.SimpleDateFormat
-import java.util.Calendar
-import java.util.Date
-import java.util.Locale
+import java.util.*
 
 class Streamed : MainAPI() {
     override var mainUrl = MAIN_URL
     override var name = NAME
-    override val supportedTypes = setOf(TvType.Live)
+    override var supportedTypes = setOf(TvType.Live)
     override var lang = "uni"
     override val hasMainPage = true
     override val hasDownloadSupport = false
-    private val sharedPref by lazy { activity?.getSharedPreferences("Streamed", Context.MODE_PRIVATE) }
+    private val sharedPref = activity?.getSharedPreferences("Streamed", Context.MODE_PRIVATE)
+    private val cloudflareKiller = CloudflareKiller()
 
     init {
-        sharedPref?.edit()?.clear()?.apply()
+        val editor = sharedPref?.edit()
+        editor?.clear()
+        editor?.apply()
     }
 
     companion object {
         var canShowToast = true
         const val MAIN_URL = "https://streamed.su"
+        const val EMBED_URL = "https://embedstreams.top"
         const val NAME = "Streamed"
     }
 
@@ -52,7 +55,7 @@ class Streamed : MainAPI() {
         "$mainUrl/api/matches/afl" to "AFL",
         "$mainUrl/api/matches/darts" to "Darts",
         "$mainUrl/api/matches/cricket" to "Cricket",
-        "$mainUrl/api/matches/other" to "Other"
+        "$mainUrl/api/matches/other" to "Other",
     )
 
     override val mainPage = sectionNamesList
@@ -62,100 +65,124 @@ class Streamed : MainAPI() {
         filter: (Match) -> Boolean
     ): List<LiveSearchResponse> {
         return listJson.filter(filter).amap { match ->
-            val url = if (match.matchSources.isNotEmpty()) {
+            var url = ""
+            if (match.matchSources.isNotEmpty()) {
                 val sourceName = match.matchSources[0].sourceName
                 val id = match.matchSources[0].id
-                "$mainUrl/api/stream/$sourceName/$id/${match.id}"
-            } else ""
-            newLiveSearchResponse(
+                url = "$mainUrl/api/stream/$sourceName/$id"
+            }
+            url += "/${match.id}"
+            LiveSearchResponse(
                 name = match.title,
                 url = url,
-                type = TvType.Live
-            ) {
-                this.apiName = this@Streamed.name
-                this.posterUrl = "$mainUrl${match.posterPath ?: "/api/images/poster/fallback.webp"}"
-            }
+                apiName = this@Streamed.name,
+                posterUrl = "$mainUrl${match.posterPath ?: "/api/images/poster/fallback.webp"}"
+            )
         }.filter { it.url.count { char -> char == '/' } > 1 }
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val rawList = app.get(request.data).text
         val listJson = parseJson<List<Match>>(rawList)
-        listJson.forEach { match ->
-            sharedPref?.edit()?.putString(match.id ?: "", match.toJson())?.apply()
+        listJson.amap {
+            with(sharedPref?.edit()) {
+                this?.putString("${it.id}", it.toJson())
+                this?.apply()
+            }
         }
 
-        val filteredList = searchResponseBuilder(listJson) { match ->
-            match.matchSources.isNotEmpty() && (match.popular || request.data.contains("popular"))
+        val list = searchResponseBuilder(listJson) { match ->
+            match.matchSources.isNotEmpty() && match.popular
         }
 
         return newHomePageResponse(
-            listOf(HomePageList(
+            HomePageList(
                 name = request.name,
-                list = filteredList,
+                list = list,
                 isHorizontalImages = true
-            )), false
+            ), false
         )
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val allMatches = app.get("$mainUrl/api/matches/all").text
+        val allMatches = app.get("$mainUrl/api/matches/all").body.string()
         val allMatchesJson = parseJson<List<Match>>(allMatches)
-        return searchResponseBuilder(allMatchesJson) { match ->
-            match.matchSources.isNotEmpty() && match.title.contains(query, ignoreCase = true)
+        val searchResults = searchResponseBuilder(allMatchesJson) { match ->
+            match.matchSources.isNotEmpty() && match.title.contains(query, true)
         }
+        return searchResults
     }
 
     private suspend fun Source.getMatch(id: String): Match? {
-        val allMatches = app.get("$mainUrl/api/matches/all").text
+        val allMatches = app.get("$mainUrl/api/matches/all").body.string()
         val allMatchesJson = parseJson<List<Match>>(allMatches)
-        return allMatchesJson.find { match ->
-            match.matchSources.any { it.id == id && it.sourceName == this.source }
+        val matchesList = allMatchesJson.filter { match ->
+            match.matchSources.isNotEmpty() &&
+                    match.matchSources.any { it.id == id && it.sourceName == this.source }
         }
+        return if (matchesList.isEmpty()) null else matchesList[0]
     }
 
     override suspend fun load(url: String): LoadResponse {
         val matchId = url.substringAfterLast('/')
         val trueUrl = url.substringBeforeLast('/')
 
-        if (trueUrl.toHttpUrlOrNull() == null) throw ErrorLoadingException("The stream is not available")
+        var comingSoon = true
+
+        if (trueUrl.toHttpUrlOrNull() == null) {
+            throw ErrorLoadingException("The stream is not available")
+        }
 
         val match = sharedPref?.getString(matchId, null)?.let { parseJson<Match>(it) }
             ?: throw ErrorLoadingException("Error loading match from cache")
 
+        val elementName = match.title
+        val elementPlot = match.title
+        val elementPoster = "$mainUrl${match.posterPath ?: "/api/images/poster/fallback.webp"}"
         val elementTags = arrayListOf(match.category.capitalize())
-        match.isoDateTime?.let {
-            val formatter = SimpleDateFormat("dd MMM yyyy 'at' HH:mm", Locale.getDefault())
-            elementTags.add(formatter.format(Date(it)))
-        }
-        match.teams?.values?.mapNotNull { it?.name }?.let { elementTags.addAll(it) }
 
-        var comingSoon = true
         try {
             val response = app.get(trueUrl)
-            val data = parseJson<List<Source>>(response.text)
+            val rawJson = response.body.string()
+            val data = parseJson<List<Source>>(rawJson)
+
             match.isoDateTime?.let {
-                val calendar = Calendar.getInstance().apply {
-                    time = Date(it)
-                    add(Calendar.MINUTE, -15)
+                val calendar = Calendar.getInstance()
+                calendar.time = Date(it)
+                calendar.add(Calendar.MINUTE, -15)
+                val matchTimeMinus15 = calendar.time.time
+
+                if (matchTimeMinus15 <= Date().time && data.isNotEmpty()) {
+                    comingSoon = false
                 }
-                if (calendar.time.time <= Date().time && data.isNotEmpty()) comingSoon = false
-            } ?: if (data.isNotEmpty()) comingSoon = false
+            }
+            if (match.isoDateTime == null && data.isNotEmpty()) {
+                comingSoon = false
+            }
         } catch (e: Exception) {
-            Log.e("Streamed", "Failed to load sources: $e")
+            Log.e("STREAMED:Item", "Failed to load sources: $e")
         }
 
-        return newLiveStreamLoadResponse(
-            name = match.title,
-            url = trueUrl,
-            dataUrl = trueUrl
-        ) {
-            this.apiName = this@Streamed.name
-            this.posterUrl = "$mainUrl${match.posterPath ?: "/api/images/poster/fallback.webp"}"
-            this.plot = match.title
-            this.tags = elementTags
-            this.comingSoon = comingSoon
+        match.isoDateTime?.let {
+            val formatter = SimpleDateFormat("dd MMM yyyy 'at' HH:mm", Locale.getDefault())
+            val date = formatter.format(Date(it))
+            elementTags.add(date)
         }
+        val teams = match.teams?.values?.mapNotNull { it!!.name!! }
+        if (teams != null) {
+            elementTags.addAll(teams)
+        }
+
+        return LiveStreamLoadResponse(
+            name = elementName,
+            url = trueUrl,
+            apiName = this.name,
+            dataUrl = trueUrl,
+            plot = elementPlot,
+            posterUrl = elementPoster,
+            tags = elementTags,
+            comingSoon = comingSoon
+        )
     }
 
     override suspend fun loadLinks(
@@ -164,24 +191,104 @@ class Streamed : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val rawJson = app.get(data).text
-        val source = parseJson<List<Source>>(rawJson).firstOrNull() ?: return false
+        val rawJson = app.get(data).body.string()
+        val source = parseJson<List<Source>>(rawJson)[0]
+        val sourceUrlID = data.substringAfterLast("/")
+        val match = source.getMatch(sourceUrlID)
 
-        val matchId = data.substringAfterLast("/")
-        val match = source.getMatch(matchId) ?: return false
-
-        match.matchSources.forEach { matchSource ->
+        var success = false
+        match?.matchSources?.forEach { matchSource ->
             val url = "$mainUrl/api/stream/${matchSource.sourceName}/${matchSource.id}"
-            // Assuming StreamedExtractor is from it.dogior.hadEnough
-            StreamedExtractor().getUrl(
-                url = url,
-                referer = "https://embedme.top/",
-                subtitleCallback = subtitleCallback,
-                callback = callback
-            )
+            if (extractStreamedSU(url, subtitleCallback, callback)) {
+                success = true
+            }
         }
-        return true
+        return success
     }
+
+    private suspend fun extractStreamedSU(
+        data: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        val headers = mapOf(
+            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36"
+        )
+
+        Log.d("StreamedSU", "Starting loadLinks for: $data")
+
+        // Step 1: Fetch the page and extract iframe URL
+        val response = app.get(data, headers = headers, interceptor = cloudflareKiller, timeout = 30)
+        val doc: Document = response.document
+        val iframeUrl = doc.selectFirst("iframe[src]")?.attr("src") ?: return false
+        Log.d("StreamedSU", "Iframe URL: $iframeUrl")
+
+        // Step 2: Fetch iframe content and extract variables
+        val iframeResponse = app.get(iframeUrl, headers = headers, interceptor = cloudflareKiller, timeout = 15).text
+        val varPairs = Regex("""(\w+)\s*=\s*["']([^"']+)["']""").findAll(iframeResponse)
+            .associate { it.groupValues[1] to it.groupValues[2] }
+        val k = varPairs["k"] ?: return false
+        val i = varPairs["i"] ?: return false
+        val s = varPairs["s"] ?: return false
+        Log.d("StreamedSU", "Variables: k=$k, i=$i, s=$s")
+
+        // Step 3: Fetch encrypted string from /fetch
+        val fetchUrl = "$EMBED_URL/fetch"
+        val postData = mapOf("source" to k, "id" to i, "streamNo" to s)
+        val fetchHeaders = headers + mapOf(
+            "Content-Type" to "application/json",
+            "Referer" to iframeUrl
+        )
+        val encryptedResponse = app.post(fetchUrl, headers = fetchHeaders, json = postData, interceptor = cloudflareKiller, timeout = 15).text
+        Log.d("StreamedSU", "Encrypted response: $encryptedResponse")
+
+        // Step 4: Decrypt using Deno Deploy endpoint
+        val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
+        val decryptPostData = mapOf("encrypted" to encryptedResponse)
+        val decryptResponse = app.post(decryptUrl, json = decryptPostData, headers = mapOf("Content-Type" to "application/json"))
+            .parsedSafe<Map<String, String>>()
+        val decryptedPath = decryptResponse?.get("decrypted") ?: return false
+        Log.d("StreamedSU", "Decrypted path: $decryptedPath")
+
+        // Step 5: Construct and test the M3U8 URL
+        val m3u8Url = "https://rr.buytommy.top$decryptedPath"
+        try {
+            val testResponse = app.get(m3u8Url, headers = headers + mapOf("Referer" to iframeUrl), interceptor = cloudflareKiller, timeout = 15)
+            if (testResponse.code == 200) {
+                callback(
+                    ExtractorLink(
+                        source = this.name,
+                        name = "Live Stream",
+                        url = m3u8Url,
+                        referer = iframeUrl,
+                        quality = Qualities.Unknown.value,
+                        isM3u8 = true,
+                        headers = headers
+                    )
+                )
+                Log.d("StreamedSU", "M3U8 URL added: $m3u8Url")
+                return true
+            } else {
+                Log.e("StreamedSU", "M3U8 test failed with code: ${testResponse.code}")
+                return false
+            }
+        } catch (e: Exception) {
+            Log.e("StreamedSU", "M3U8 test failed: ${e.message}")
+            return false
+        }
+    }
+
+    fun showToastOnce(message: String) {
+        if (canShowToast) {
+            showToast(message, Toast.LENGTH_LONG)
+            canShowToast = false
+        }
+    }
+
+    data class SecurityResponse(
+        @JsonProperty("expiry") val expiry: Long,
+        @JsonProperty("id") val id: String
+    )
 
     data class Match(
         @JsonProperty("id") val id: String? = null,
@@ -191,12 +298,12 @@ class Streamed : MainAPI() {
         @JsonProperty("poster") val posterPath: String? = null,
         @JsonProperty("popular") val popular: Boolean = false,
         @JsonProperty("teams") val teams: LinkedHashMap<String, Team?>? = null,
-        @JsonProperty("sources") val matchSources: ArrayList<MatchSource> = arrayListOf()
+        @JsonProperty("sources") val matchSources: ArrayList<MatchSource> = arrayListOf(),
     )
 
     data class Team(
         @JsonProperty("name") val name: String? = null,
-        @JsonProperty("badge") val badge: String? = null
+        @JsonProperty("badge") val badge: String? = null,
     )
 
     data class MatchSource(
