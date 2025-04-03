@@ -51,14 +51,12 @@ class StreamedProvider : MainAPI() {
             return newHomePageResponse(emptyList())
         }
 
-        val categoryMap = matches.groupBy { it.category }
-        val homePageLists = categoryMap.map { entry ->
+        return newHomePageResponse(matches.groupBy { it.category }.map { entry ->
             HomePageList(
                 name = entry.key,
                 list = entry.value.map { match ->
-                    val title = match.teams?.let { "${it.home?.name ?: ""} vs ${it.away?.name ?: ""}" } ?: match.title
                     newLiveSearchResponse(
-                        name = title,
+                        name = match.teams?.let { "${it.home?.name ?: ""} vs ${it.away?.name ?: ""}" } ?: match.title,
                         url = "$mainUrl/match/${match.id}",
                         type = TvType.Live
                     ) {
@@ -68,10 +66,9 @@ class StreamedProvider : MainAPI() {
                 },
                 isHorizontalImages = false
             )
+        }).also { lists ->
+            Log.d("StreamedProvider", "Found ${lists.size} categories with ${matches.size} total matches")
         }
-
-        Log.d("StreamedProvider", "Found ${homePageLists.size} categories with ${matches.size} total matches")
-        return newHomePageResponse(homePageLists)
     }
 
     override suspend fun load(url: String): LoadResponse {
