@@ -3,12 +3,13 @@ package Ben.smith53
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.network.CloudflareKiller
+import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
 import android.util.Log
 import org.jsoup.nodes.Document
 
-class Streamed : MainAPI() {
+class StreamedProvider : MainAPI() {
     override var mainUrl = "https://streamed.su"
     override var name = "Streamed"
     override var supportedTypes = setOf(TvType.Live)
@@ -37,7 +38,7 @@ class Streamed : MainAPI() {
         val rawList = app.get(request.data).text
         val listJson = parseJson<List<Match>>(rawList)
         
-        val list = listJson.filter { it.matchSources.isNotEmpty() && it.popular }.amap { match ->
+        val list = listJson.filter { match -> match.matchSources.isNotEmpty() && match.popular }.map { match ->
             var url = ""
             if (match.matchSources.isNotEmpty()) {
                 val sourceName = match.matchSources[0].sourceName
@@ -45,12 +46,13 @@ class Streamed : MainAPI() {
                 url = "$mainUrl/api/stream/$sourceName/$id"
             }
             url += "/${match.id}"
-            LiveSearchResponse(
+            newLiveSearchResponse(
                 name = match.title,
                 url = url,
-                apiName = this@Streamed.name,
-                posterUrl = "$mainUrl${match.posterPath ?: "/api/images/poster/fallback.webp"}"
-            )
+                apiName = this@StreamedProvider.name
+            ) {
+                this.posterUrl = "$mainUrl${match.posterPath ?: "/api/images/poster/fallback.webp"}"
+            }
         }.filter { it.url.count { char -> char == '/' } > 1 }
 
         return newHomePageResponse(request.name, list, isHorizontalImages = true)
