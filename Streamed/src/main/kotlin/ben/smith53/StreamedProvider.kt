@@ -57,7 +57,7 @@ class StreamedProvider : MainAPI() {
         Log.d("StreamedProvider", "DEBUG: Starting getMainPage - Version April 03, 2025")
         val response = app.get("$mainUrl/api/matches/live", headers = headers, interceptor = cloudflareKiller)
         Log.d("StreamedProvider", "DEBUG: Response received")
-        return newHomePageResponse(response.parsedSafe<List<APIMatch>>()?.groupBy { it.category }?.map { entry ->
+        val matchGroups = response.parsedSafe<List<APIMatch>>()?.groupBy { it.category }?.map { entry ->
             HomePageList(
                 name = entry.key,
                 list = entry.value.map { match ->
@@ -75,7 +75,8 @@ class StreamedProvider : MainAPI() {
         } ?: run {
             Log.w("StreamedProvider", "No matches found from API")
             emptyList()
-        }).also {
+        }
+        return newHomePageResponse(matchGroups).also {
             Log.d("StreamedProvider", "Found ${it.size} categories with ${response.parsedSafe<List<APIMatch>>()?.size ?: 0} total matches")
         }
     }
