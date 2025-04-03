@@ -61,7 +61,7 @@ class StreamedProvider : MainAPI() {
         val posterUrl = if (streamList.isNullOrEmpty()) {
             "$mainUrl/api/images/poster/fallback.webp"
         } else {
-            "$mainUrl/api/images/poster/${streamList[0].id}.webp" // Assuming poster based on ID
+            "$mainUrl/api/images/poster/${streamList[0].id}.webp"
         }
 
         return newLiveStreamLoadResponse(
@@ -123,7 +123,7 @@ class StreamedExtractor {
     private val mainUrl = "https://embedstreams.top"
     private val headers = mapOf(
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
-        "Referer" to "https://streamed.su/"
+        "Referer" to "https://streamed.su/" // Base referer, overridden in fetch
     )
     private val cloudflareKiller = CloudflareKiller()
 
@@ -145,12 +145,17 @@ class StreamedExtractor {
 
         Log.d("StreamedExtractor", "Using variables: k=$k, i=$i, s=$s")
 
-        // Fetch encrypted string
+        // Fetch encrypted string with embedUrl as referer
         val fetchUrl = "$mainUrl/fetch"
         val postData = mapOf("source" to k, "id" to i, "streamNo" to s)
-        val fetchHeaders = headers + mapOf("Content-Type" to "application/json", "Referer" to embedUrl)
+        val fetchHeaders = headers + mapOf(
+            "Content-Type" to "application/json",
+            "Referer" to embedUrl // Match the iframe URL
+        )
         val encryptedResponse = try {
-            app.post(fetchUrl, headers = fetchHeaders, json = postData, interceptor = cloudflareKiller, timeout = 15).text
+            val response = app.post(fetchUrl, headers = fetchHeaders, json = postData, interceptor = cloudflareKiller, timeout = 15)
+            Log.d("StreamedExtractor", "Fetch response code: ${response.code}")
+            response.text
         } catch (e: Exception) {
             Log.e("StreamedExtractor", "Fetch failed: ${e.message}")
             return false
@@ -160,9 +165,14 @@ class StreamedExtractor {
         // Decrypt using Deno
         val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
         val decryptPostData = mapOf("encrypted" to encryptedResponse)
-        val decryptResponse = app.post(decryptUrl, json = decryptPostData, headers = mapOf("Content-Type" to "application/json"))
-            .parsedSafe<Map<String, String>>()
-        val decryptedPath = decryptResponse?.get("decrypted") ?: return false.also { Log.e("StreamedExtractor", "Decryption failed") }
+        val decryptResponse = try {
+            app.post(decryptUrl, json = decryptPostData, headers = mapOf("Content-Type" to "application/json"))
+                .parsedSafe<Map<String, String>>()
+        } catch (e: Exception) {
+            Log.e("StreamedExtractor", "Decryption request failed: ${e.message}")
+            return false
+        }
+        val decryptedPath = decryptResponse?.get("decrypted") ?: return false.also { Log.e("StreamedExtractor", "Decryption failed or no 'decrypted' key") }
         Log.d("StreamedExtractor", "Decrypted path: $decryptedPath")
 
         // Construct and verify M3U8 URL
