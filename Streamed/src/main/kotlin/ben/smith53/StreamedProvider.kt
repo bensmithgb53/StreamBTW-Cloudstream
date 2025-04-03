@@ -89,7 +89,7 @@ class StreamedProvider : MainAPI() {
         var success = false
         streamList.forEach { stream ->
             Log.d("StreamedProvider", "Processing stream: ${stream.embedUrl}")
-            if (extractor.getUrl(stream.embedUrl, stream.hd, stream.streamNo, subtitleCallback, callback)) {
+            if (extractor.getUrl(stream, subtitleCallback, callback)) {
                 success = true
             }
         }
@@ -128,31 +128,32 @@ class StreamedExtractor {
     private val cloudflareKiller = CloudflareKiller()
 
     suspend fun getUrl(
-        url: String,
-        isHd: Boolean,
-        streamNo: Int,
+        stream: StreamOption,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        Log.d("StreamedExtractor", "Starting extraction for: $url")
+        Log.d("StreamedExtractor", "Starting extraction for: ${stream.embedUrl}")
 
-        // Step 1: Fetch iframe content and extract variables
-        val iframeResponse = app.get(url, headers = headers, interceptor = cloudflareKiller, timeout = 15).text
-        val varPairs = Regex("""(\w+)\s*=\s*["']([^"']+)["']""").findAll(iframeResponse)
-            .associate { it.groupValues[1] to it.groupValues[2] }
-        val k = varPairs["k"] ?: return false.also { Log.e("StreamedExtractor", "Variable 'k' not found") }
-        val i = varPairs["i"] ?: return false.also { Log.e("StreamedExtractor", "Variable 'i' not found") }
-        val s = varPairs["s"] ?: return false.also { Log.e("StreamedExtractor", "Variable 's' not found") }
-        Log.d("StreamedExtractor", "Variables: k=$k, i=$i, s=$s")
+        // Use StreamOption data directly
+        val k = stream.source // e.g., "alpha"
+        val i = stream.id    // e.g., "mlb-2025-season-live"
+        val s = stream.streamNo.toString() // e.g., "1"
 
-        // Step 2: Fetch encrypted string
+        Log.d("StreamedExtractor", "Using variables: k=$k, i=$i, s=$s")
+
+        // Fetch encrypted string
         val fetchUrl = "$mainUrl/fetch"
         val postData = mapOf("source" to k, "id" to i, "streamNo" to s)
-        val fetchHeaders = headers + mapOf("Content-Type" to "application/json")
-        val encryptedResponse = app.post(fetchUrl, headers = fetchHeaders, json = postData, interceptor = cloudflareKiller, timeout = 15).text
+        val fetchHeaders = headers + mapOf("Content-Type" to "application/json", "Referer" to stream.embedUrl)
+        val encryptedResponse = try {
+            app.post(fetchUrl, headers = fetchHeaders, json = postData, interceptor = cloudflareKiller, timeout = 15).text
+        } catch (e: Exception) {
+            Log.e("StreamedExtractor", "Fetch failed: ${e.message}")
+            return false
+        }
         Log.d("StreamedExtractor", "Encrypted response: $encryptedResponse")
 
-        // Step 3: Decrypt using Deno
+        // Decrypt using Deno
         val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
         val decryptPostData = mapOf("encrypted" to encryptedResponse)
         val decryptResponse = app.post(decryptUrl, json = decryptPostData, headers = mapOf("Content-Type" to "application/json"))
@@ -160,18 +161,18 @@ class StreamedExtractor {
         val decryptedPath = decryptResponse?.get("decrypted") ?: return false.also { Log.e("StreamedExtractor", "Decryption failed") }
         Log.d("StreamedExtractor", "Decrypted path: $decryptedPath")
 
-        // Step 4: Construct and verify M3U8 URL
+        // Construct and verify M3U8 URL
         val m3u8Url = "https://rr.buytommy.top$decryptedPath"
         try {
-            val testResponse = app.get(m3u8Url, headers = headers + mapOf("Referer" to url), interceptor = cloudflareKiller, timeout = 15)
+            val testResponse = app.get(m3u8Url, headers = headers + mapOf("Referer" to stream.embedUrl), interceptor = cloudflareKiller, timeout = 15)
             if (testResponse.code == 200) {
                 callback(
                     ExtractorLink(
                         source = "Streamed",
-                        name = "Stream $streamNo (${if (isHd) "HD" else "SD"})",
+                        name = "Stream ${stream.streamNo} (${if (stream.hd) "HD" else "SD"})",
                         url = m3u8Url,
-                        referer = url,
-                        quality = if (isHd) Qualities.P1080.value else Qualities.Unknown.value,
+                        referer = stream.embedUrl,
+                        quality = if (stream.hd) Qualities.P1080.value else Qualities.Unknown.value,
                         isM3u8 = true,
                         headers = headers
                     )
