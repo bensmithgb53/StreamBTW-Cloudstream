@@ -4,8 +4,8 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
-import org.jsoup.nodes.Document
 import android.util.Log
+import com.fasterxml.jackson.annotation.JsonProperty
 
 class StreamedProvider : MainAPI() {
     override var name = "StreamedSU"
@@ -17,56 +17,77 @@ class StreamedProvider : MainAPI() {
     )
     private val cloudflareKiller = CloudflareKiller()
 
+    // Data classes for API responses
+    data class APIMatch(
+        val id: String,
+        val title: String,
+        val category: String,
+        val date: Long,
+        val poster: String?,
+        val popular: Boolean,
+        val teams: Teams?,
+        val sources: List<Source>
+    )
+
+    data class Teams(
+        val home: Team?,
+        val away: Team?
+    )
+
+    data class Team(
+        val name: String,
+        val badge: String
+    )
+
+    data class Source(
+        val source: String,
+        val id: String
+    )
+
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        Log.d("StreamedProvider", "Fetching main page: $mainUrl")
-        val doc = app.get(mainUrl, headers = headers, interceptor = cloudflareKiller).document
-
-        val categories = doc.select("div.category, section.category, div#categories > div")
-            .mapNotNull { category ->
-                val catName = category.selectFirst("h2, .category-title, span")?.text() ?: return@mapNotNull null
-                val streams = category.select("a[href*='/category/'], div.match-card, li.stream-item")
-                    .mapNotNull { stream ->
-                        val title = stream.selectFirst(".title, h3, span")?.text() ?: return@mapNotNull null
-                        val url = stream.attr("href").let { if (it.startsWith("/")) "$mainUrl$it" else it }
-                        LiveSearchResponse(
-                            name = title,
-                            url = url,
-                            apiName = this.name,
-                            type = TvType.Live
-                        )
-                    }
-                HomePageList(catName, streams, isHorizontalImages = false)
-            }
-
-        return if (categories.isNotEmpty()) {
-            Log.d("StreamedProvider", "Found ${categories.size} categories")
-            HomePageResponse(categories)
-        } else {
-            Log.w("StreamedProvider", "No categories found, using flat list")
-            val streams = doc.select("a[href*='/category/'], div.match-card, li.stream-item")
-                .mapNotNull { stream ->
-                    val title = stream.selectFirst(".title, h3, span")?.text() ?: return@mapNotNull null
-                    val url = stream.attr("href").let { if (it.startsWith("/")) "$mainUrl$it" else it }
-                    LiveSearchResponse(
-                        name = title,
-                        url = url,
-                        apiName = this.name,
-                        type = TvType.Live
-                    )
-                }
-            HomePageResponse(listOf(HomePageList("Live Streams", streams)))
+        Log.d("StreamedProvider", "Fetching main page via API: $mainUrl/api/matches/live")
+        val response = app.get("$mainUrl/api/matches/live", headers = headers, interceptor = cloudflareKiller)
+        val matches = response.parsedSafe<List<APIMatch>>()
+        
+        if (matches.isNullOrEmpty()) {
+            Log.w("StreamedProvider", "No matches found from API")
+            return HomePageResponse(emptyList())
         }
+
+        // Group matches by category
+        val categories = matches.groupBy { it.category }.map { (category, matchList) ->
+            val streams = matchList.map { match ->
+                val title = match.teams?.let { "${it.home?.name ?: ""} vs ${it.away?.name ?: ""}" } ?: match.title
+                LiveSearchResponse(
+                    name = title,
+                    url = "$mainUrl/match/${match.id}", // Construct a unique URL
+                    apiName = this.name,
+                    type = TvType.Live,
+                    posterUrl = match.poster?.let { "$mainUrl$it" }
+                )
+            }
+            HomePageList(category, streams, isHorizontalImages = false)
+        }
+
+        Log.d("StreamedProvider", "Found ${categories.size} categories with ${matches.size} total matches")
+        return HomePageResponse(categories)
     }
 
     override suspend fun load(url: String): LoadResponse {
         Log.d("StreamedProvider", "Loading stream: $url")
-        val doc = app.get(url, headers = headers, interceptor = cloudflareKiller).document
-        val title = doc.selectFirst("h1, .stream-title, title")?.text() ?: url.split("/").last().replace("-", " ").capitalize()
+        val matchId = url.split("/").last()
+        val apiUrl = "$mainUrl/api/matches/all" // Could optimize by using a specific match endpoint if available
+        val matches = app.get(apiUrl, headers = headers, interceptor = cloudflareKiller)
+            .parsedSafe<List<APIMatch>>()
+        val match = matches?.find { it.id == matchId } ?: throw ErrorLoadingException("Match not found")
+
+        val title = match.teams?.let { "${it.home?.name ?: ""} vs ${it.away?.name ?: ""}" } ?: match.title
         return LiveStreamLoadResponse(
             name = title,
             url = url,
             apiName = this.name,
-            dataUrl = url
+            dataUrl = url,
+            posterUrl = match.poster?.let { "$mainUrl$it" }
         )
     }
 
@@ -77,29 +98,25 @@ class StreamedProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         Log.d("StreamedProvider", "Starting loadLinks for: $data")
-        val doc = app.get(data, headers = headers, interceptor = cloudflareKiller).document
-        val iframeUrl = doc.selectFirst("iframe[src*='embedstreams.top']")?.attr("src") ?: run {
-            Log.e("StreamedProvider", "No iframe found on $data")
-            return false
-        }
-        Log.d("StreamedProvider", "Iframe URL: $iframeUrl")
+        val matchId = data.split("/").last()
+        val matchResponse = app.get("$mainUrl/api/matches/all", headers = headers, interceptor = cloudflareKiller)
+        val match = matchResponse.parsedSafe<List<APIMatch>>()?.find { it.id == matchId } ?: return false
+        
+        val source = match.sources.firstOrNull() ?: return false
+        val streamResponse = app.get("$mainUrl/api/stream/${source.source}/${source.id}", 
+            headers = headers, 
+            interceptor = cloudflareKiller
+        ).parsedSafe<Stream>() ?: return false
 
+        // Rest of the link extraction logic remains similar
+        val iframeUrl = streamResponse.embedUrl
         val iframeResponse = app.get(iframeUrl, headers = headers, interceptor = cloudflareKiller).text
         val varPairs = Regex("""(\w+)\s*=\s*["']([^"']+)["']""").findAll(iframeResponse)
             .associate { it.groupValues[1] to it.groupValues[2] }
-        val k = varPairs["k"] ?: run {
-            Log.e("StreamedProvider", "Variable 'k' not found")
-            return false
-        }
-        val i = varPairs["i"] ?: run {
-            Log.e("StreamedProvider", "Variable 'i' not found")
-            return false
-        }
-        val s = varPairs["s"] ?: run {
-            Log.e("StreamedProvider", "Variable 's' not found")
-            return false
-        }
-        Log.d("StreamedProvider", "Variables: k=$k, i=$i, s=$s")
+        
+        val k = varPairs["k"] ?: return false
+        val i = varPairs["i"] ?: return false
+        val s = varPairs["s"] ?: return false
 
         val fetchUrl = "https://embedstreams.top/fetch"
         val postData = mapOf("source" to k, "id" to i, "streamNo" to s)
@@ -108,17 +125,12 @@ class StreamedProvider : MainAPI() {
             "Referer" to iframeUrl
         )
         val encryptedResponse = app.post(fetchUrl, headers = fetchHeaders, json = postData, interceptor = cloudflareKiller).text
-        Log.d("StreamedProvider", "Encrypted response: $encryptedResponse")
-
+        
         val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
         val decryptPostData = mapOf("encrypted" to encryptedResponse)
         val decryptResponse = app.post(decryptUrl, json = decryptPostData, headers = mapOf("Content-Type" to "application/json"))
             .parsedSafe<Map<String, String>>()
-        val decryptedPath = decryptResponse?.get("decrypted") ?: run {
-            Log.e("StreamedProvider", "Failed to decrypt: $decryptResponse")
-            return false
-        }
-        Log.d("StreamedProvider", "Decrypted path: $decryptedPath")
+        val decryptedPath = decryptResponse?.get("decrypted") ?: return false
 
         val m3u8Url = "https://rr.buytommy.top$decryptedPath"
         try {
@@ -130,20 +142,27 @@ class StreamedProvider : MainAPI() {
                         name = "Live Stream",
                         url = m3u8Url,
                         referer = iframeUrl,
-                        quality = Qualities.Unknown.value,
+                        quality = if (streamResponse.hd) Qualities.P1080.value else Qualities.Unknown.value,
                         isM3u8 = true,
                         headers = headers
                     )
                 )
-                Log.d("StreamedProvider", "M3U8 URL added: $m3u8Url")
                 return true
-            } else {
-                Log.e("StreamedProvider", "M3U8 test failed with code: ${testResponse.code}")
-                return false
             }
         } catch (e: Exception) {
             Log.e("StreamedProvider", "M3U8 test failed: ${e.message}")
             return false
         }
+        return false
     }
+
+    // Data class for stream response
+    data class Stream(
+        val id: String,
+        val streamNo: Int,
+        val language: String,
+        val hd: Boolean,
+        val embedUrl: String,
+        val source: String
+    )
 }
