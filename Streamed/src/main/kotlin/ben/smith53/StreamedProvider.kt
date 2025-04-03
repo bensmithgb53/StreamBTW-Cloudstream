@@ -8,8 +8,8 @@ import org.jsoup.nodes.Document
 import android.util.Log
 
 class StreamedProvider : MainAPI() {
-    override var name = "StreamedSU" // Must be 'var' to override MainAPI
-    override var mainUrl = "https://streamed.su" // Must be 'var'
+    override var name = "StreamedSU" // Set once, no reassignment
+    override var mainUrl = "https://streamed.su" // Set once, no reassignment
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.Live)
     private val headers = mapOf(
@@ -21,7 +21,7 @@ class StreamedProvider : MainAPI() {
         Log.d("StreamedProvider", "Fetching main page: $mainUrl")
         val doc = app.get(mainUrl, headers = headers, interceptor = cloudflareKiller).document
 
-        // Scrape categories and streams (adjust selectors based on streamed.su structure)
+        // Scrape categories and streams
         val categories = doc.select("div.category, section.category, div#categories > div")
             .mapNotNull { category ->
                 val catName = category.selectFirst("h2, .category-title, span")?.text() ?: return@mapNotNull null
@@ -38,7 +38,6 @@ class StreamedProvider : MainAPI() {
                 HomePageList(catName, streams, isHorizontalImages = false)
             }
 
-        // Fallback to flat list if no categories
         return if (categories.isNotEmpty()) {
             Log.d("StreamedProvider", "Found ${categories.size} categories")
             newHomePageResponse(categories)
@@ -77,7 +76,6 @@ class StreamedProvider : MainAPI() {
     ): Boolean {
         Log.d("StreamedProvider", "Starting loadLinks for: $data")
 
-        // Step 1: Fetch stream page and extract iframe
         val doc = app.get(data, headers = headers, interceptor = cloudflareKiller).document
         val iframeUrl = doc.selectFirst("iframe[src*='embedstreams.top']")?.attr("src") ?: run {
             Log.e("StreamedProvider", "No iframe found on $data")
@@ -85,7 +83,6 @@ class StreamedProvider : MainAPI() {
         }
         Log.d("StreamedProvider", "Iframe URL: $iframeUrl")
 
-        // Step 2: Fetch iframe content and extract variables
         val iframeResponse = app.get(iframeUrl, headers = headers, interceptor = cloudflareKiller).text
         val varPairs = Regex("""(\w+)\s*=\s*["']([^"']+)["']""").findAll(iframeResponse)
             .associate { it.groupValues[1] to it.groupValues[2] }
@@ -103,7 +100,6 @@ class StreamedProvider : MainAPI() {
         }
         Log.d("StreamedProvider", "Variables: k=$k, i=$i, s=$s")
 
-        // Step 3: Fetch encrypted string
         val fetchUrl = "https://embedstreams.top/fetch"
         val postData = mapOf("source" to k, "id" to i, "streamNo" to s)
         val fetchHeaders = headers + mapOf(
@@ -113,7 +109,6 @@ class StreamedProvider : MainAPI() {
         val encryptedResponse = app.post(fetchUrl, headers = fetchHeaders, json = postData, interceptor = cloudflareKiller).text
         Log.d("StreamedProvider", "Encrypted response: $encryptedResponse")
 
-        // Step 4: Decrypt using Deno Deploy
         val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
         val decryptPostData = mapOf("encrypted" to encryptedResponse)
         val decryptResponse = app.post(decryptUrl, json = decryptPostData, headers = mapOf("Content-Type" to "application/json"))
@@ -124,7 +119,6 @@ class StreamedProvider : MainAPI() {
         }
         Log.d("StreamedProvider", "Decrypted path: $decryptedPath")
 
-        // Step 5: Add M3U8 URL
         val m3u8Url = "https://rr.buytommy.top$decryptedPath"
         try {
             val testResponse = app.get(m3u8Url, headers = headers + mapOf("Referer" to iframeUrl), interceptor = cloudflareKiller)
@@ -151,9 +145,4 @@ class StreamedProvider : MainAPI() {
             return false
         }
     }
-}
-
-// Register in a separate file or main entry point
-fun main() {
-    registerMainAPI(StreamedProvider())
 }
