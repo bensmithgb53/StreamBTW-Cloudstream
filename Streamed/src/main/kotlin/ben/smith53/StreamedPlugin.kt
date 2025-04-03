@@ -1,12 +1,7 @@
 package ben.smith53
 
-import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
-import com.lagradost.cloudstream3.plugins.Plugin
-import android.content.Context
+import com.lagradost.cloudstream3.registerMainAPI
 
-@CloudstreamPlugin
-class StreamedPlugin : Plugin() {
-    override fun load(context: Context) {
-        registerMainAPI(StreamedProvider())
-    }
+fun main() {
+    registerMainAPI(StreamedProvider())
 }
