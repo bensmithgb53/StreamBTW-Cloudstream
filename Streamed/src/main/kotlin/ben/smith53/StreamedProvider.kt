@@ -13,7 +13,7 @@ class StreamedProvider : MainAPI() {
     override var supportedTypes = setOf(TvType.Live)
     override val hasMainPage = true
 
-    private val sources = listOf("admin", "alpha", "bravo", "charlie", "delta")
+    private val sources = listOf("alpha", "bravo", "charlie", "delta") // Removed "admin"
     private val maxStreams = 3
 
     override val mainPage = mainPageOf(
@@ -38,7 +38,7 @@ class StreamedProvider : MainAPI() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val rawList = app.get(request.data).text
         val listJson = parseJson<List<Match>>(rawList)
-        
+
         val list = listJson.filter { match -> match.matchSources.isNotEmpty() }.map { match ->
             val url = "$mainUrl/watch/${match.id}"
             newLiveSearchResponse(
