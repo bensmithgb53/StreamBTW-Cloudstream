@@ -14,7 +14,7 @@ class StreamedProvider : MainAPI() {
     override val hasMainPage = true
 
     private val sources = listOf("admin", "alpha", "bravo", "charlie", "delta")
-    private val maxStreams = 3 // Adjust based on how many streams per source (e.g., /1, /2, /3)
+    private val maxStreams = 3
 
     override val mainPage = mainPageOf(
         "$mainUrl/api/matches/live/popular" to "Popular",
@@ -79,10 +79,9 @@ class StreamedProvider : MainAPI() {
         val extractor = StreamedExtractor()
         var success = false
 
-        // Generate stream URLs for each source and stream number
         sources.forEach { source ->
             for (streamNo in 1..maxStreams) {
-                val streamUrl = "$data/$source/$streamNo"
+                val streamUrl = "$mainUrl/watch/$matchId/$source/$streamNo"
                 Log.d("StreamedProvider", "Processing stream URL: $streamUrl")
                 if (extractor.getUrl(streamUrl, matchId, source, streamNo, subtitleCallback, callback)) {
                     success = true
@@ -123,7 +122,7 @@ class StreamedExtractor {
     ): Boolean {
         Log.d("StreamedExtractor", "Starting extraction for: $streamUrl")
 
-        // Fetch stream page to get cookies or context
+        // Fetch stream page for cookies
         val streamResponse = try {
             app.get(streamUrl, headers = baseHeaders, timeout = 15)
         } catch (e: Exception) {
@@ -135,10 +134,11 @@ class StreamedExtractor {
 
         // POST to fetch encrypted string
         val postData = mapOf(
-            "source" to source,    // e.g., "alpha"
-            "id" to matchId,       // e.g., "chelsea-vs-tottenham-2070133"
-            "streamNo" to streamNo.toString() // e.g., "1"
+            "source" to source,
+            "id" to matchId,
+            "streamNo" to streamNo.toString()
         )
+        val embedReferer = "https://embedstreams.top/embed/$source/$matchId/$streamNo"
         val fetchHeaders = baseHeaders + mapOf(
             "Referer" to streamUrl,
             "Cookie" to cookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
@@ -168,17 +168,17 @@ class StreamedExtractor {
         val decryptedPath = decryptResponse?.get("decrypted") ?: return false.also { Log.e("StreamedExtractor", "Decryption failed or no 'decrypted' key") }
         Log.d("StreamedExtractor", "Decrypted path: $decryptedPath")
 
-        // Construct and verify M3U8 URL
+        // Construct M3U8 URL with embed referer
         val m3u8Url = "https://rr.buytommy.top$decryptedPath"
         try {
-            val testResponse = app.get(m3u8Url, headers = baseHeaders + mapOf("Referer" to streamUrl), timeout = 15)
+            val testResponse = app.get(m3u8Url, headers = baseHeaders + mapOf("Referer" to embedReferer), timeout = 15)
             if (testResponse.code == 200) {
                 callback(
                     ExtractorLink(
                         source = "Streamed",
                         name = "$source Stream $streamNo",
                         url = m3u8Url,
-                        referer = streamUrl,
+                        referer = embedReferer,
                         quality = Qualities.Unknown.value,
                         isM3u8 = true,
                         headers = baseHeaders
@@ -188,10 +188,37 @@ class StreamedExtractor {
                 return true
             } else {
                 Log.e("StreamedExtractor", "M3U8 test failed with code: ${testResponse.code}")
+                // Skip test and add link anyway
+                callback(
+                    ExtractorLink(
+                        source = "Streamed",
+                        name = "$source Stream $streamNo",
+                        url = m3u8Url,
+                        referer = embedReferer,
+                        quality = Qualities.Unknown.value,
+                        isM3u8 = true,
+                        headers = baseHeaders
+                    )
+                )
+                Log.d("StreamedExtractor", "M3U8 test failed but added anyway: $m3u8Url")
+                return true
             }
         } catch (e: Exception) {
             Log.e("StreamedExtractor", "M3U8 test failed: ${e.message}")
+            // Skip test and add link anyway
+            callback(
+                ExtractorLink(
+                    source = "Streamed",
+                    name = "$source Stream $streamNo",
+                    url = m3u8Url,
+                    referer = embedReferer,
+                    quality = Qualities.Unknown.value,
+                    isM3u8 = true,
+                    headers = baseHeaders
+                )
+            )
+            Log.d("StreamedExtractor", "M3U8 test failed but added anyway: $m3u8Url")
+            return true
         }
-        return false
     }
 }
