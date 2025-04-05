@@ -2,7 +2,6 @@ package ben.smith53
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import com.lagradost.cloudstream3.utils.ExtractorLink as NewExtractorLink
 import org.json.JSONObject
 import java.util.zip.GZIPInputStream
 
@@ -38,7 +37,6 @@ class PPVLandProvider : MainAPI() {
             val response = app.get(apiUrl, headers = headers, timeout = 15)
             println("Main API Status Code: ${response.code}")
 
-            // Decompress gzip response
             val decompressedText = if (response.headers["Content-Encoding"] == "gzip") {
                 GZIPInputStream(response.body.byteStream()).bufferedReader().use { it.readText() }
             } else {
@@ -149,7 +147,6 @@ class PPVLandProvider : MainAPI() {
         val response = app.get(apiUrl, headers = headers, timeout = 15)
         println("Stream API Status Code: ${response.code}")
 
-        // Decompress gzip response
         val decompressedText = if (response.headers["Content-Encoding"] == "gzip") {
             GZIPInputStream(response.body.byteStream()).bufferedReader().use { it.readText() }
         } else {
@@ -186,18 +183,17 @@ class PPVLandProvider : MainAPI() {
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (NewExtractorLink) -> Unit
+        callback: (ExtractorLink) -> Unit
     ): Boolean {
-        callback(
-            ExtractorLink(
-                source = this.name,
-                name = "PPVLand",
-                url = data,
-                referer = mainUrl,
-                quality = Qualities.Unknown.value, // Changed from -1 to a valid Qualities enum value
-                isM3u8 = true
-            )
-        )
+        newExtractorLink(
+            source = this.name,
+            name = "PPVLand",
+            url = data
+        ) {
+            this.referer = mainUrl
+            this.quality = Qualities.Unknown.value
+            this.isM3u8 = true
+        }.let { callback(it) }
         println("Provided m3u8 link: $data")
         return true
     }
