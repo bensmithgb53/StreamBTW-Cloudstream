@@ -169,26 +169,60 @@ class StreamedExtractor {
         val decryptedPath = decryptResponse?.get("decrypted") ?: return false.also { Log.e("StreamedExtractor", "Decryption failed or no 'decrypted' key") }
         Log.d("StreamedExtractor", "Decrypted path: $decryptedPath")
 
-        // Construct M3U8 URL with embed referer and cookies
+        // Construct M3U8 URL with embed referer and enhanced headers
         val m3u8Url = "https://rr.buytommy.top$decryptedPath"
         val m3u8Headers = baseHeaders + mapOf(
             "Referer" to embedReferer,
             "Cookie" to cookies.entries.joinToString("; ") { "${it.key}=${it.value}" },
             "Origin" to "https://embedstreams.top"
         )
-        // Use newExtractorLink instead of deprecated constructor
-        newExtractorLink(
-            source = "Streamed",
-            name = "$source Stream $streamNo",
-            url = m3u8Url,
-            referer = embedReferer,
-            quality = Qualities.Unknown.value,
-            isM3u8 = true,
-            headers = m3u8Headers
-        ) { link ->
-            callback(link)
+        try {
+            val testResponse = app.get(m3u8Url, headers = m3u8Headers, timeout = 15)
+            if (testResponse.code == 200) {
+                callback(
+                    ExtractorLink(
+                        source = "Streamed",
+                        name = "$source Stream $streamNo",
+                        url = m3u8Url,
+                        referer = embedReferer,
+                        quality = Qualities.Unknown.value,
+                        isM3u8 = true,
+                        headers = m3u8Headers
+                    )
+                )
+                Log.d("StreamedExtractor", "M3U8 URL added: $m3u8Url")
+                return true
+            } else {
+                Log.e("StreamedExtractor", "M3U8 test failed with code: ${testResponse.code}")
+                callback(
+                    ExtractorLink(
+                        source = "Streamed",
+                        name = "$source Stream $streamNo",
+                        url = m3u8Url,
+                        referer = embedReferer,
+                        quality = Qualities.Unknown.value,
+                        isM3u8 = true,
+                        headers = m3u8Headers
+                    )
+                )
+                Log.d("StreamedExtractor", "M3U8 test failed but added anyway: $m3u8Url")
+                return true
+            }
+        } catch (e: Exception) {
+            Log.e("StreamedExtractor", "M3U8 test failed: ${e.message}")
+            callback(
+                ExtractorLink(
+                    source = "Streamed",
+                    name = "$source Stream $streamNo",
+                    url = m3u8Url,
+                    referer = embedReferer,
+                    quality = Qualities.Unknown.value,
+                    isM3u8 = true,
+                    headers = m3u8Headers
+                )
+            )
+            Log.d("StreamedExtractor", "M3U8 test failed but added anyway: $m3u8Url")
+            return true
         }
-        Log.d("StreamedExtractor", "M3U8 URL added without test: $m3u8Url")
-        return true
     }
 }
