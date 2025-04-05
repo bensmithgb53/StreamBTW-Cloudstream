@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import android.util.Log
 
@@ -105,10 +106,10 @@ class StreamedProvider : MainAPI() {
     )
 }
 
-open class StreamedExtractor : ExtractorApi() {
-    override val name = "Streamed"
-    override val mainUrl = "https://streamed.su"
-    override val requiresReferer = true
+class StreamedExtractor : ExtractorApi() {
+    override val name: String = "Streamed"
+    override val mainUrl: String = "https://streamed.su"
+    override val requiresReferer: Boolean = true
 
     private val fetchUrl = "https://embedstreams.top/fetch"
     private val baseHeaders = mapOf(
@@ -183,7 +184,7 @@ open class StreamedExtractor : ExtractorApi() {
             "Origin" to "https://embedstreams.top"
         )
         
-        // Use newExtractorLink as recommended by the deprecation warning
+        // Use newExtractorLink with type parameter from diff example
         callback.invoke(
             newExtractorLink(
                 source = this.name,
@@ -191,7 +192,7 @@ open class StreamedExtractor : ExtractorApi() {
                 url = m3u8Url,
                 referer = embedReferer,
                 quality = Qualities.Unknown.value,
-                isM3u8 = true,
+                type = ExtractorLinkType.M3U8,
                 headers = m3u8Headers
             )
         )
