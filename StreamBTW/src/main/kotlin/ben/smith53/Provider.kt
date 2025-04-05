@@ -1,14 +1,13 @@
-package ben.smith53
-
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.network.CloudflareKiller
+import com.lagradost.cloudstream3.utils.ExtractorLink as NewExtractorLink
 import okhttp3.Interceptor
 import okhttp3.Response
 import org.jsoup.nodes.Document
 
 class StreamBTW : MainAPI() {
-    override var lang = "en"  // Assuming English; adjust if needed
+    override var lang = "en"
     override var mainUrl = "https://streambtw.com"
     override var name = "StreamBTW"
     override val hasMainPage = true
@@ -89,13 +88,13 @@ class StreamBTW : MainAPI() {
 
     private suspend fun extractVideoLinks(
         url: String,
-        callback: (ExtractorLink) -> Unit
+        callback: (NewExtractorLink) -> Unit
     ) {
         val document = app.get(url).document
         val streamUrl = getStreamUrl(document) ?: return
-        
+
         callback(
-            ExtractorLink(
+            NewExtractorLink(
                 source = this.name,
                 name = "StreamBTW",
                 url = streamUrl,
@@ -113,7 +112,7 @@ class StreamBTW : MainAPI() {
             val iframeDoc = app.get(iframeUrl, referer = url).document
             getStreamUrl(iframeDoc)?.let { iframeStream ->
                 callback(
-                    ExtractorLink(
+                    NewExtractorLink(
                         source = this.name,
                         name = "StreamBTW (iframe)",
                         url = iframeStream,
@@ -130,13 +129,13 @@ class StreamBTW : MainAPI() {
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
+        callback: (NewExtractorLink) -> Unit
     ): Boolean {
         extractVideoLinks(data, callback)
         return true
     }
 
-    override fun getVideoInterceptor(extractorLink: ExtractorLink): Interceptor {
+    override fun getVideoInterceptor(extractorLink: NewExtractorLink): Interceptor {
         return object : Interceptor {
             override fun intercept(chain: Interceptor.Chain): Response {
                 return cfKiller.intercept(chain)
