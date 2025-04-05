@@ -3,9 +3,9 @@ package ben.smith53
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
-import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLink as NewExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
-import com.lagradost.cloudstream3.utils.loadExtractor // Import for newExtractorLink
+import com.lagradost.cloudstream3.utils.loadExtractor
 import android.util.Log
 
 class StreamedProvider : MainAPI() {
@@ -14,7 +14,7 @@ class StreamedProvider : MainAPI() {
     override var supportedTypes = setOf(TvType.Live)
     override val hasMainPage = true
 
-    private val sources = listOf("alpha", "bravo", "charlie", "delta") // Removed "admin"
+    private val sources = listOf("alpha", "bravo", "charlie", "delta")
     private val maxStreams = 3
 
     override val mainPage = mainPageOf(
@@ -74,7 +74,7 @@ class StreamedProvider : MainAPI() {
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
+        callback: (NewExtractorLink) -> Unit
     ): Boolean {
         val matchId = data.substringAfterLast("/")
         val extractor = StreamedExtractor()
@@ -120,7 +120,7 @@ class StreamedExtractor {
         source: String,
         streamNo: Int,
         subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
+        callback: (NewExtractorLink) -> Unit
     ): Boolean {
         Log.d("StreamedExtractor", "Starting extraction for: $streamUrl")
 
