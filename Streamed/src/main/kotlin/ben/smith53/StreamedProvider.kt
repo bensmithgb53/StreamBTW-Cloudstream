@@ -109,8 +109,7 @@ class StreamedExtractor {
     private val fetchUrl = "https://embedstreams.top/fetch"
     private val baseHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
-        "Content-Type" to "application/json",
-        "Accept" to "application/vnd.apple.mpegurl, video/mp2t, */*"
+        "Content-Type" to "application/json"
     )
 
     suspend fun getUrl(
@@ -169,15 +168,10 @@ class StreamedExtractor {
         val decryptedPath = decryptResponse?.get("decrypted") ?: return false.also { Log.e("StreamedExtractor", "Decryption failed or no 'decrypted' key") }
         Log.d("StreamedExtractor", "Decrypted path: $decryptedPath")
 
-        // Construct M3U8 URL with embed referer and enhanced headers
+        // Construct M3U8 URL with embed referer
         val m3u8Url = "https://rr.buytommy.top$decryptedPath"
-        val m3u8Headers = baseHeaders + mapOf(
-            "Referer" to embedReferer,
-            "Cookie" to cookies.entries.joinToString("; ") { "${it.key}=${it.value}" },
-            "Origin" to "https://embedstreams.top"
-        )
         try {
-            val testResponse = app.get(m3u8Url, headers = m3u8Headers, timeout = 15)
+            val testResponse = app.get(m3u8Url, headers = baseHeaders + mapOf("Referer" to embedReferer), timeout = 15)
             if (testResponse.code == 200) {
                 callback(
                     ExtractorLink(
@@ -187,7 +181,7 @@ class StreamedExtractor {
                         referer = embedReferer,
                         quality = Qualities.Unknown.value,
                         isM3u8 = true,
-                        headers = m3u8Headers
+                        headers = baseHeaders
                     )
                 )
                 Log.d("StreamedExtractor", "M3U8 URL added: $m3u8Url")
@@ -203,7 +197,7 @@ class StreamedExtractor {
                         referer = embedReferer,
                         quality = Qualities.Unknown.value,
                         isM3u8 = true,
-                        headers = m3u8Headers
+                        headers = baseHeaders
                     )
                 )
                 Log.d("StreamedExtractor", "M3U8 test failed but added anyway: $m3u8Url")
@@ -220,7 +214,7 @@ class StreamedExtractor {
                     referer = embedReferer,
                     quality = Qualities.Unknown.value,
                     isM3u8 = true,
-                    headers = m3u8Headers
+                    headers = baseHeaders
                 )
             )
             Log.d("StreamedExtractor", "M3U8 test failed but added anyway: $m3u8Url")
