@@ -5,7 +5,7 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink as NewExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
-import com.lagradost.cloudstream3.utils.loadExtractor
+import com.lagradost.cloudstream3.utils.newExtractorLink
 import android.util.Log
 
 class StreamedProvider : MainAPI() {
@@ -124,7 +124,6 @@ class StreamedExtractor {
     ): Boolean {
         Log.d("StreamedExtractor", "Starting extraction for: $streamUrl")
 
-        // Fetch stream page for cookies
         val streamResponse = try {
             app.get(streamUrl, headers = baseHeaders, timeout = 15)
         } catch (e: Exception) {
@@ -134,7 +133,6 @@ class StreamedExtractor {
         val cookies = streamResponse.cookies
         Log.d("StreamedExtractor", "Stream cookies: $cookies")
 
-        // POST to fetch encrypted string
         val postData = mapOf(
             "source" to source,
             "id" to matchId,
@@ -157,7 +155,6 @@ class StreamedExtractor {
         }
         Log.d("StreamedExtractor", "Encrypted response: $encryptedResponse")
 
-        // Decrypt using Deno
         val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
         val decryptPostData = mapOf("encrypted" to encryptedResponse)
         val decryptResponse = try {
@@ -170,77 +167,40 @@ class StreamedExtractor {
         val decryptedPath = decryptResponse?.get("decrypted") ?: return false.also { Log.e("StreamedExtractor", "Decryption failed or no 'decrypted' key") }
         Log.d("StreamedExtractor", "Decrypted path: $decryptedPath")
 
-        // Construct M3U8 URL with embed referer and enhanced headers
         val m3u8Url = "https://rr.buytommy.top$decryptedPath"
         val m3u8Headers = baseHeaders + mapOf(
             "Referer" to embedReferer,
             "Cookie" to cookies.entries.joinToString("; ") { "${it.key}=${it.value}" },
             "Origin" to "https://embedstreams.top"
         )
+
         try {
             val testResponse = app.get(m3u8Url, headers = m3u8Headers, timeout = 15)
-            if (testResponse.code == 200) {
-                loadExtractor(
-                    name = "$source Stream $streamNo",
-                    url = m3u8Url,
-                    referer = embedReferer,
-                ) {
-                    newExtractorLink(
-                        source = "Streamed",
-                        name = "$source Stream $streamNo",
-                        url = m3u8Url,
-                        referer = embedReferer,
-                        quality = Qualities.Unknown.value,
-                        isM3u8 = true,
-                        headers = m3u8Headers
-                    ) { link ->
-                        callback(link)
-                    }
-                }
-                Log.d("StreamedExtractor", "M3U8 URL added: $m3u8Url")
-                return true
-            } else {
-                Log.e("StreamedExtractor", "M3U8 test failed with code: ${testResponse.code}")
-                // Skip test and add link anyway
-                loadExtractor(
-                    name = "$source Stream $streamNo",
-                    url = m3u8Url,
-                    referer = embedReferer,
-                ) {
-                    newExtractorLink(
-                        source = "Streamed",
-                        name = "$source Stream $streamNo",
-                        url = m3u8Url,
-                        referer = embedReferer,
-                        quality = Qualities.Unknown.value,
-                        isM3u8 = true,
-                        headers = m3u8Headers
-                    ) { link ->
-                        callback(link)
-                    }
-                }
-                Log.d("StreamedExtractor", "M3U8 test failed but added anyway: $m3u8Url")
-                return true
-            }
-        } catch (e: Exception) {
-            Log.e("StreamedExtractor", "M3U8 test failed: ${e.message}")
-            // Skip test and add link anyway
-            loadExtractor(
+            newExtractorLink(
+                source = "Streamed",
                 name = "$source Stream $streamNo",
                 url = m3u8Url,
                 referer = embedReferer,
-            ) {
-                newExtractorLink(
-                    source = "Streamed",
-                    name = "$source Stream $streamNo",
-                    url = m3u8Url,
-                    referer = embedReferer,
-                    quality = Qualities.Unknown.value,
-                    isM3u8 = true,
-                    headers = m3u8Headers
-                ) { link ->
-                    callback(link)
-                }
+                quality = Qualities.Unknown.value,
+                isM3u8 = true,
+                headers = m3u8Headers
+            ) { link ->
+                callback(link)
+            }
+            Log.d("StreamedExtractor", "M3U8 URL added: $m3u8Url")
+            return true
+        } catch (e: Exception) {
+            Log.e("StreamedExtractor", "M3U8 test failed: ${e.message}")
+            newExtractorLink(
+                source = "Streamed",
+                name = "$source Stream $streamNo",
+                url = m3u8Url,
+                referer = embedReferer,
+                quality = Qualities.Unknown.value,
+                isM3u8 = true,
+                headers = m3u8Headers
+            ) { link ->
+                callback(link)
             }
             Log.d("StreamedExtractor", "M3U8 test failed but added anyway: $m3u8Url")
             return true
