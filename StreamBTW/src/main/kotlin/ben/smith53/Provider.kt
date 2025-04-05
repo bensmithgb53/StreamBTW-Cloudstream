@@ -1,9 +1,8 @@
 package ben.smith53
 
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.network.CloudflareKiller
-import com.lagradost.cloudstream3.utils.ExtractorLink as NewExtractorLink
+import com.lagradost.cloudstream3.utils.*
 import okhttp3.Interceptor
 import okhttp3.Response
 import org.jsoup.nodes.Document
@@ -90,39 +89,36 @@ class StreamBTW : MainAPI() {
 
     private suspend fun extractVideoLinks(
         url: String,
-        callback: (NewExtractorLink) -> Unit
+        callback: (ExtractorLink) -> Unit
     ) {
         val document = app.get(url).document
         val streamUrl = getStreamUrl(document) ?: return
 
-        callback.invoke(
-            ExtractorLink(
-                this.name,
-                "StreamBTW",
-                streamUrl,
-                url,
-                Qualities.Unknown.value,
-                isM3u8 = true
-            )
-        )
+        newExtractorLink(
+            source = this.name,
+            name = "StreamBTW",
+            url = streamUrl
+        ) {
+            this.referer = url
+            this.quality = Qualities.Unknown.value
+            this.isM3u8 = true
+        }.let { callback(it) }
 
-        // Check iframes for additional streams
         document.select("iframe[src]").forEach { iframe ->
             val iframeUrl = iframe.attr("src").let { 
                 if (it.startsWith("http")) it else "$mainUrl$it"
             }
             val iframeDoc = app.get(iframeUrl, referer = url).document
             getStreamUrl(iframeDoc)?.let { iframeStream ->
-                callback.invoke(
-                    ExtractorLink(
-                        this.name,
-                        "StreamBTW (iframe)",
-                        iframeStream,
-                        iframeUrl,
-                        Qualities.Unknown.value,
-                        isM3u8 = true
-                    )
-                )
+                newExtractorLink(
+                    source = this.name,
+                    name = "StreamBTW (iframe)",
+                    url = iframeStream
+                ) {
+                    this.referer = iframeUrl
+                    this.quality = Qualities.Unknown.value
+                    this.isM3u8 = true
+                }.let { callback(it) }
             }
         }
     }
@@ -131,13 +127,13 @@ class StreamBTW : MainAPI() {
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (NewExtractorLink) -> Unit
+        callback: (ExtractorLink) -> Unit
     ): Boolean {
         extractVideoLinks(data, callback)
         return true
     }
 
-    override fun getVideoInterceptor(extractorLink: NewExtractorLink): Interceptor {
+    override fun getVideoInterceptor(extractorLink: ExtractorLink): Interceptor {
         return object : Interceptor {
             override fun intercept(chain: Interceptor.Chain): Response {
                 return cfKiller.intercept(chain)
