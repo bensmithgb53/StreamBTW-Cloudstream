@@ -61,7 +61,7 @@ class StreamBTW : MainAPI() {
         val titleElem = document.selectFirst(".card-title") ?: document.selectFirst("h5")
         val title = titleElem?.text()?.trim() ?: "Unknown Event"
 
-        val teamsElem = card.selectFirst(".card-text") ?: card.selectFirst("p")
+        val teamsElem = document.selectFirst(".card-text") ?: document.selectFirst("p")
         val teams = teamsElem?.text()?.trim() ?: ""
         val fullTitle = if (teams.isNotEmpty()) "$title - $teams" else title
 
@@ -98,11 +98,12 @@ class StreamBTW : MainAPI() {
             newExtractorLink(
                 source = this.name,
                 name = "StreamBTW",
-                url = streamUrl,
-                referer = url,
-                quality = Qualities.Unknown.value,
+                url = streamUrl
+            ) {
+                referer = url
+                quality = Qualities.Unknown.value
                 isM3u8 = true
-            )
+            }
         )
 
         document.select("iframe[src]").forEach { iframe ->
@@ -115,11 +116,12 @@ class StreamBTW : MainAPI() {
                     newExtractorLink(
                         source = this.name,
                         name = "StreamBTW (iframe)",
-                        url = iframeStream,
-                        referer = iframeUrl,
-                        quality = Qualities.Unknown.value,
+                        url = iframeStream
+                    ) {
+                        referer = iframeUrl
+                        quality = Qualities.Unknown.value
                         isM3u8 = true
-                    )
+                    }
                 )
             }
         }
