@@ -128,7 +128,6 @@ class StreamedExtractor : ExtractorApi() {
     ): Boolean {
         Log.d("StreamedExtractor", "Starting extraction for: $streamUrl")
 
-        // Fetch stream page for cookies
         val streamResponse = try {
             app.get(streamUrl, headers = baseHeaders, timeout = 15)
         } catch (e: Exception) {
@@ -138,7 +137,6 @@ class StreamedExtractor : ExtractorApi() {
         val cookies = streamResponse.cookies
         Log.d("StreamedExtractor", "Stream cookies: $cookies")
 
-        // POST to fetch encrypted string
         val postData = mapOf(
             "source" to source,
             "id" to matchId,
@@ -161,7 +159,6 @@ class StreamedExtractor : ExtractorApi() {
         }
         Log.d("StreamedExtractor", "Encrypted response: $encryptedResponse")
 
-        // Decrypt using Deno
         val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
         val decryptPostData = mapOf("encrypted" to encryptedResponse)
         val decryptResponse = try {
@@ -176,7 +173,6 @@ class StreamedExtractor : ExtractorApi() {
         }
         Log.d("StreamedExtractor", "Decrypted path: $decryptedPath")
 
-        // Construct M3U8 URL with embed referer and cookies
         val m3u8Url = "https://rr.buytommy.top$decryptedPath"
         val m3u8Headers = baseHeaders + mapOf(
             "Referer" to embedReferer,
@@ -184,7 +180,6 @@ class StreamedExtractor : ExtractorApi() {
             "Origin" to "https://embedstreams.top"
         )
         
-        // Use newExtractorLink with type parameter from diff example
         callback.invoke(
             newExtractorLink(
                 source = this.name,
