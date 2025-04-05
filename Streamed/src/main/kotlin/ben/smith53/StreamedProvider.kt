@@ -176,18 +176,20 @@ class StreamedExtractor {
             "Origin" to "https://embedstreams.top"
         )
         
-        // Use newExtractorLink instead of ExtractorLink constructor
-        newExtractorLink(
-            Source = "Streamed",
-            name = "$source Stream $streamNo",
-            url = m3u8Url,
-            Type = null  // Assuming Type can be null as per your example
-        ) {
-            this.referer = embedReferer
-            this.quality = Qualities.Unknown.value
-            this.isM3u8 = true
-            this.headers = m3u8Headers
-        }.let { callback(it) }
+        // Use newExtractorLink with updated parameters from dev example
+        callback.invoke(
+            newExtractorLink(
+                name = "$source Stream $streamNo",
+                source = "Streamed",
+                url = m3u8Url,
+                type = INFER_TYPE
+            ) {
+                this.referer = embedReferer
+                this.quality = Qualities.Unknown.value
+                this.isM3u8 = true
+                this.headers = m3u8Headers
+            }
+        )
         
         Log.d("StreamedExtractor", "M3U8 URL added without test: $m3u8Url")
         return true
