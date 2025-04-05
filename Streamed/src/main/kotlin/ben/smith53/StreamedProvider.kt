@@ -178,12 +178,13 @@ class StreamedExtractor {
                     newExtractorLink(
                         source = "Streamed",
                         name = "$source Stream $streamNo",
-                        url = m3u8Url,
-                        referer = embedReferer,
-                        quality = Qualities.Unknown.value,
-                        isM3u8 = true,
+                        url = m3u8Url
+                    ) {
+                        referer = embedReferer
+                        quality = Qualities.Unknown.value
+                        isM3u8 = true
                         headers = m3u8Headers
-                    )
+                    }
                 )
                 Log.d("StreamedExtractor", "M3U8 URL added: $m3u8Url")
                 return true
@@ -196,12 +197,13 @@ class StreamedExtractor {
             newExtractorLink(
                 source = "Streamed",
                 name = "$source Stream $streamNo",
-                url = m3u8Url,
-                referer = embedReferer,
-                quality = Qualities.Unknown.value,
-                isM3u8 = true,
+                url = m3u8Url
+            ) {
+                referer = embedReferer
+                quality = Qualities.Unknown.value
+                isM3u8 = true
                 headers = m3u8Headers
-            )
+            }
         )
         Log.d("StreamedExtractor", "M3U8 test failed but added anyway: $m3u8Url")
         return true
