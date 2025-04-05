@@ -176,18 +176,18 @@ class StreamedExtractor {
             "Cookie" to cookies.entries.joinToString("; ") { "${it.key}=${it.value}" },
             "Origin" to "https://embedstreams.top"
         )
-        // Skip test and pass directly to ExoPlayer
-        callback(
-            ExtractorLink(
-                source = "Streamed",
-                name = "$source Stream $streamNo",
-                url = m3u8Url,
-                referer = embedReferer,
-                quality = Qualities.Unknown.value,
-                isM3u8 = true,
-                headers = m3u8Headers
-            )
-        )
+        // Use newExtractorLink instead of deprecated constructor
+        newExtractorLink(
+            source = "Streamed",
+            name = "$source Stream $streamNo",
+            url = m3u8Url,
+            referer = embedReferer,
+            quality = Qualities.Unknown.value,
+            isM3u8 = true,
+            headers = m3u8Headers
+        ) { link ->
+            callback(link)
+        }
         Log.d("StreamedExtractor", "M3U8 URL added without test: $m3u8Url")
         return true
     }
