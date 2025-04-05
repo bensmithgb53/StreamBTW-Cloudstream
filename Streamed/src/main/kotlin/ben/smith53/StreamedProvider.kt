@@ -2,9 +2,7 @@ package ben.smith53
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.AppUtils.parseJson
-import com.lagradost.cloudstream3.utils.ExtractorLink as NewExtractorLink
-import com.lagradost.cloudstream3.utils.Qualities
+import com.lagradost.cloudstream3.utils.*
 import android.util.Log
 
 class StreamedProvider : MainAPI() {
@@ -73,7 +71,7 @@ class StreamedProvider : MainAPI() {
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (NewExtractorLink) -> Unit
+        callback: (ExtractorLink) -> Unit
     ): Boolean {
         val matchId = data.substringAfterLast("/")
         val extractor = StreamedExtractor()
@@ -119,7 +117,7 @@ class StreamedExtractor {
         source: String,
         streamNo: Int,
         subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (NewExtractorLink) -> Unit
+        callback: (ExtractorLink) -> Unit
     ): Boolean {
         Log.d("StreamedExtractor", "Starting extraction for: $streamUrl")
 
@@ -176,17 +174,16 @@ class StreamedExtractor {
         try {
             val testResponse = app.get(m3u8Url, headers = m3u8Headers, timeout = 15)
             if (testResponse.code == 200) {
-                callback.invoke(
-                    ExtractorLink(
-                        "Streamed",
-                        "$source Stream $streamNo",
-                        m3u8Url,
-                        embedReferer,
-                        Qualities.Unknown.value,
-                        isM3u8 = true,
-                        headers = m3u8Headers
-                    )
-                )
+                newExtractorLink(
+                    source = "Streamed",
+                    name = "$source Stream $streamNo",
+                    url = m3u8Url
+                ) {
+                    this.referer = embedReferer
+                    this.quality = Qualities.Unknown.value
+                    this.isM3u8 = true
+                    this.headers = m3u8Headers
+                }.let { callback(it) }
                 Log.d("StreamedExtractor", "M3U8 URL added: $m3u8Url")
                 return true
             }
@@ -194,18 +191,16 @@ class StreamedExtractor {
             Log.e("StreamedExtractor", "M3U8 test failed: ${e.message}")
         }
 
-        // Add link even if test fails
-        callback.invoke(
-            ExtractorLink(
-                "Streamed",
-                "$source Stream $streamNo",
-                m3u8Url,
-                embedReferer,
-                Qualities.Unknown.value,
-                isM3u8 = true,
-                headers = m3u8Headers
-            )
-        )
+        newExtractorLink(
+            source = "Streamed",
+            name = "$source Stream $streamNo",
+            url = m3u8Url
+        ) {
+            this.referer = embedReferer
+            this.quality = Qualities.Unknown.value
+            this.isM3u8 = true
+            this.headers = m3u8Headers
+        }.let { callback(it) }
         Log.d("StreamedExtractor", "M3U8 test failed but added anyway: $m3u8Url")
         return true
     }
