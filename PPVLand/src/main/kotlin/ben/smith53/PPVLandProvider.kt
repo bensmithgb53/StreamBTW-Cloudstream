@@ -185,15 +185,16 @@ class PPVLandProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        newExtractorLink(
-            source = this.name,
-            name = "PPVLand",
-            url = data
-        ) {
-            this.referer = mainUrl
-            this.quality = Qualities.Unknown.value
-            this.isM3u8 = true
-        }.let { callback(it) }
+        callback.invoke(
+            newExtractorLink(
+                source = this.name,
+                name = "PPVLand",
+                url = data,
+                referer = mainUrl,
+                quality = Qualities.Unknown.value,
+                isM3u8 = true
+            )
+        )
         println("Provided m3u8 link: $data")
         return true
     }
