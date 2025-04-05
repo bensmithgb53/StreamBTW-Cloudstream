@@ -1,9 +1,7 @@
-package ben.smith53
+package ben.smith53.extractors
 
 import com.lagradost.cloudstream3.app
-import com.lagradost.cloudstream3.utils.ExtractorApi
-import com.lagradost.cloudstream3.utils.ExtractorLink as NewExtractorLink
-import com.lagradost.cloudstream3.utils.Qualities
+import com.lagradost.cloudstream3.utils.*
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
 
@@ -23,7 +21,7 @@ class PPVLandExtractor : ExtractorApi() {
         "Cookie" to "cf_clearance=Spt9tCB2G5.prpsED77vIRRv_7DXvw__Jw_Esqm53yw-1742505249-1.2.1.1-VXaRZXapXOenQsbIVYelJXCR2YFju.WlikuWSiXF2DNtDyxt5gjuRRhQq6hznJq9xn11ZqLhHFH4QOaitqLCccDwUXy4T2hJwE9qQ7gxlychuZ8E1zpx_XF0eiriJjZ4sw2ORWwokajxGlnxMLnZVMUGXh9sPkOKGKKyldQaga9r8Xus9esujwBVbTRtv7fCAFrF5f5j18Y1A.Rv3zQ7dxmonhSWOsD4c.mUpqXXid7oUJaNPVPw0OZOtYv1CEAPbGDjr1tAkuSJg.ij.6695qjiZsAj8XipJLbXy5IjACJoGVq32ScAy4ABlsXSTLDAtmbtZLUcqiHzljQsxZmt9Ljb7jq0O_HDx8x2VQ83tvI"
     )
 
-    override suspend fun getUrl(url: String, referer: String?): List<NewExtractorLink>? {
+    override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
         try {
             val apiUrl = if (url.startsWith("$mainUrl/api/streams/")) {
                 url
@@ -41,14 +39,15 @@ class PPVLandExtractor : ExtractorApi() {
             val m3u8Url = data["m3u8"] as? String ?: throw Exception("No 'm3u8' URL found in JSON")
 
             return listOf(
-                ExtractorLink(
+                newExtractorLink(
                     source = this.name,
                     name = this.name,
-                    url = m3u8Url,
-                    referer = "$mainUrl/",
-                    quality = Qualities.Unknown.value,
-                    isM3u8 = true
-                )
+                    url = m3u8Url
+                ) {
+                    this.referer = "$mainUrl/"
+                    this.quality = Qualities.Unknown.value
+                    this.isM3u8 = true
+                }
             )
         } catch (e: Exception) {
             return null
