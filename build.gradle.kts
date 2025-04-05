@@ -1,5 +1,7 @@
 import com.lagradost.cloudstream3.gradle.CloudstreamExtension
 import com.android.build.gradle.BaseExtension
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import org.jetbrains.kotlin.gradle.tasks.KotlinJvmCompile
 
 buildscript {
     repositories {
@@ -49,29 +51,33 @@ subprojects {
             targetCompatibility = JavaVersion.VERSION_1_8
         }
 
-        tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
-            kotlinOptions {
-                jvmTarget = "1.8"
-                freeCompilerArgs = freeCompilerArgs +
-                        "-Xno-call-assertions" +
-                        "-Xno-param-assertions" +
-                        "-Xno-receiver-assertions"
+        tasks.withType<KotlinJvmCompile> {
+            compilerOptions {
+                jvmTarget.set(JvmTarget.JVM_1_8)
+                freeCompilerArgs.addAll(
+                    "-Xno-call-assertions",
+                    "-Xno-param-assertions",
+                    "-Xno-receiver-assertions"
+                )
             }
         }
     }
 
     dependencies {
-        val apk by configurations
+        val cloudstream by configurations
         val implementation by configurations
 
-        apk("com.lagradost:cloudstream3:pre-release") // Includes nicehttp for app.get
+        // Use cloudstream configuration for Cloudstream library
+        cloudstream("com.lagradost:cloudstream3:pre-release")
+
+        // Additional dependencies
         implementation(kotlin("stdlib"))
-        implementation("com.github.Blatzar:NiceHttp:0.4.11") // Already present, but not used here
-        implementation("org.jsoup:jsoup:1.18.1") // For other providers, not needed here
-        implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.16.0") // For JSON parsing
-        implementation("com.fasterxml.jackson.core:jackson-databind:2.16.0") // For JSON parsing
-        implementation("com.squareup.okhttp3:okhttp:4.12.0") // For fetchEncryptedData
-        implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1") // For suspendCancellableCoroutine
+        implementation("com.github.Blatzar:NiceHttp:0.4.11")
+        implementation("org.jsoup:jsoup:1.18.1")
+        implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.16.0")
+        implementation("com.fasterxml.jackson.core:jackson-databind:2.16.0")
+        implementation("com.squareup.okhttp3:okhttp:4.12.0")
+        implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
     }
 }
 
