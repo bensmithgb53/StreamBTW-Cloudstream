@@ -5,8 +5,6 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
-import com.lagradost.cloudstream3.utils.extractorApis
-import com.lagradost.cloudstream3.utils.loadExtractor
 import android.util.Log
 
 class StreamedProvider : MainAPI() {
@@ -107,7 +105,7 @@ class StreamedProvider : MainAPI() {
     )
 }
 
-class StreamedExtractor : ExtractorApi() {
+open class StreamedExtractor : ExtractorApi() {
     override val name = "Streamed"
     override val mainUrl = "https://streamed.su"
     override val requiresReferer = true
@@ -185,9 +183,9 @@ class StreamedExtractor : ExtractorApi() {
             "Origin" to "https://embedstreams.top"
         )
         
-        // Use ExtractorLink constructor instead of newExtractorLink
+        // Use newExtractorLink as recommended by the deprecation warning
         callback.invoke(
-            ExtractorLink(
+            newExtractorLink(
                 source = this.name,
                 name = "$source Stream $streamNo",
                 url = m3u8Url,
