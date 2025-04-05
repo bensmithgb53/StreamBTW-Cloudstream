@@ -3,7 +3,10 @@ package ben.smith53
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
+import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
+import com.lagradost.cloudstream3.utils.extractorApis
+import com.lagradost.cloudstream3.utils.loadExtractor
 import android.util.Log
 
 class StreamedProvider : MainAPI() {
@@ -104,7 +107,11 @@ class StreamedProvider : MainAPI() {
     )
 }
 
-class StreamedExtractor {
+class StreamedExtractor : ExtractorApi() {
+    override val name = "Streamed"
+    override val mainUrl = "https://streamed.su"
+    override val requiresReferer = true
+
     private val fetchUrl = "https://embedstreams.top/fetch"
     private val baseHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
@@ -165,7 +172,9 @@ class StreamedExtractor {
             Log.e("StreamedExtractor", "Decryption request failed: ${e.message}")
             return false
         }
-        val decryptedPath = decryptResponse?.get("decrypted") ?: return false.also { Log.e("StreamedExtractor", "Decryption failed or no 'decrypted' key") }
+        val decryptedPath = decryptResponse?.get("decrypted") ?: return false.also { 
+            Log.e("StreamedExtractor", "Decryption failed or no 'decrypted' key") 
+        }
         Log.d("StreamedExtractor", "Decrypted path: $decryptedPath")
 
         // Construct M3U8 URL with embed referer and cookies
@@ -176,22 +185,32 @@ class StreamedExtractor {
             "Origin" to "https://embedstreams.top"
         )
         
-        // Use newExtractorLink with updated parameters from dev example
+        // Use ExtractorLink constructor instead of newExtractorLink
         callback.invoke(
-            newExtractorLink(
+            ExtractorLink(
+                source = this.name,
                 name = "$source Stream $streamNo",
-                source = "Streamed",
                 url = m3u8Url,
-                type = INFER_TYPE
-            ) {
-                this.referer = embedReferer
-                this.quality = Qualities.Unknown.value
-                this.isM3u8 = true
-                this.headers = m3u8Headers
-            }
+                referer = embedReferer,
+                quality = Qualities.Unknown.value,
+                isM3u8 = true,
+                headers = m3u8Headers
+            )
         )
         
         Log.d("StreamedExtractor", "M3U8 URL added without test: $m3u8Url")
         return true
+    }
+
+    override suspend fun getUrl(
+        url: String,
+        referer: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        val matchId = url.substringAfterLast("/")
+        val source = url.split("/").dropLast(1).last()
+        val streamNo = url.split("/").last().toIntOrNull() ?: 1
+        getUrl(url, matchId, source, streamNo, subtitleCallback, callback)
     }
 }
