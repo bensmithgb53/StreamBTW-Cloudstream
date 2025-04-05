@@ -42,12 +42,11 @@ class PPVLandExtractor : ExtractorApi() {
                 newExtractorLink(
                     source = this.name,
                     name = this.name,
-                    url = m3u8Url
-                ) {
-                    this.referer = "$mainUrl/"
-                    this.quality = Qualities.Unknown.value
-                    this.isM3u8 = true
-                }
+                    url = m3u8Url,
+                    referer = "$mainUrl/",
+                    quality = Qualities.Unknown.value,
+                    isM3u8 = true
+                )
             )
         } catch (e: Exception) {
             return null
