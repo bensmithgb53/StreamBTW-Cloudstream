@@ -5,7 +5,6 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink as NewExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
-import com.lagradost.cloudstream3.utils.newExtractorLink
 import android.util.Log
 
 class StreamedProvider : MainAPI() {
@@ -176,34 +175,38 @@ class StreamedExtractor {
 
         try {
             val testResponse = app.get(m3u8Url, headers = m3u8Headers, timeout = 15)
-            newExtractorLink(
-                source = "Streamed",
-                name = "$source Stream $streamNo",
-                url = m3u8Url,
-                referer = embedReferer,
-                quality = Qualities.Unknown.value,
-                isM3u8 = true,
-                headers = m3u8Headers
-            ) { link ->
-                callback(link)
+            if (testResponse.code == 200) {
+                callback.invoke(
+                    ExtractorLink(
+                        "Streamed",
+                        "$source Stream $streamNo",
+                        m3u8Url,
+                        embedReferer,
+                        Qualities.Unknown.value,
+                        isM3u8 = true,
+                        headers = m3u8Headers
+                    )
+                )
+                Log.d("StreamedExtractor", "M3U8 URL added: $m3u8Url")
+                return true
             }
-            Log.d("StreamedExtractor", "M3U8 URL added: $m3u8Url")
-            return true
         } catch (e: Exception) {
             Log.e("StreamedExtractor", "M3U8 test failed: ${e.message}")
-            newExtractorLink(
-                source = "Streamed",
-                name = "$source Stream $streamNo",
-                url = m3u8Url,
-                referer = embedReferer,
-                quality = Qualities.Unknown.value,
+        }
+
+        // Add link even if test fails
+        callback.invoke(
+            ExtractorLink(
+                "Streamed",
+                "$source Stream $streamNo",
+                m3u8Url,
+                embedReferer,
+                Qualities.Unknown.value,
                 isM3u8 = true,
                 headers = m3u8Headers
-            ) { link ->
-                callback(link)
-            }
-            Log.d("StreamedExtractor", "M3U8 test failed but added anyway: $m3u8Url")
-            return true
-        }
+            )
+        )
+        Log.d("StreamedExtractor", "M3U8 test failed but added anyway: $m3u8Url")
+        return true
     }
 }
