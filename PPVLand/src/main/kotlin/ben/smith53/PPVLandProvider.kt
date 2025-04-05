@@ -1,19 +1,8 @@
 package ben.smith53
 
-import com.lagradost.cloudstream3.HomePageList
-import com.lagradost.cloudstream3.HomePageResponse
-import com.lagradost.cloudstream3.LiveSearchResponse
-import com.lagradost.cloudstream3.LiveStreamLoadResponse
-import com.lagradost.cloudstream3.LoadResponse
-import com.lagradost.cloudstream3.MainAPI
-import com.lagradost.cloudstream3.MainPageRequest
-import com.lagradost.cloudstream3.SearchResponse
-import com.lagradost.cloudstream3.SubtitleFile
-import com.lagradost.cloudstream3.TvType
-import com.lagradost.cloudstream3.VPNStatus
-import com.lagradost.cloudstream3.app
-import com.lagradost.cloudstream3.newHomePageResponse
-import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.utils.*
+import com.lagradost.cloudstream3.utils.ExtractorLink as NewExtractorLink
 import org.json.JSONObject
 import java.util.zip.GZIPInputStream
 
@@ -48,7 +37,7 @@ class PPVLandProvider : MainAPI() {
         try {
             val response = app.get(apiUrl, headers = headers, timeout = 15)
             println("Main API Status Code: ${response.code}")
-            
+
             // Decompress gzip response
             val decompressedText = if (response.headers["Content-Encoding"] == "gzip") {
                 GZIPInputStream(response.body.byteStream()).bufferedReader().use { it.readText() }
@@ -197,7 +186,7 @@ class PPVLandProvider : MainAPI() {
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
+        callback: (NewExtractorLink) -> Unit
     ): Boolean {
         callback(
             ExtractorLink(
@@ -205,7 +194,7 @@ class PPVLandProvider : MainAPI() {
                 name = "PPVLand",
                 url = data,
                 referer = mainUrl,
-                quality = -1,
+                quality = Qualities.Unknown.value, // Changed from -1 to a valid Qualities enum value
                 isM3u8 = true
             )
         )
