@@ -61,7 +61,7 @@ class StreamBTW : MainAPI() {
         val titleElem = document.selectFirst(".card-title") ?: document.selectFirst("h5")
         val title = titleElem?.text()?.trim() ?: "Unknown Event"
 
-        val teamsElem = document.selectFirst(".card-text") ?: document.selectFirst("p")
+        val teamsElem = card.selectFirst(".card-text") ?: card.selectFirst("p")
         val teams = teamsElem?.text()?.trim() ?: ""
         val fullTitle = if (teams.isNotEmpty()) "$title - $teams" else title
 
@@ -94,15 +94,16 @@ class StreamBTW : MainAPI() {
         val document = app.get(url).document
         val streamUrl = getStreamUrl(document) ?: return
 
-        newExtractorLink(
-            source = this.name,
-            name = "StreamBTW",
-            url = streamUrl
-        ) {
-            this.referer = url
-            this.quality = Qualities.Unknown.value
-            this.isM3u8 = true
-        }.let { callback(it) }
+        callback.invoke(
+            newExtractorLink(
+                source = this.name,
+                name = "StreamBTW",
+                url = streamUrl,
+                referer = url,
+                quality = Qualities.Unknown.value,
+                isM3u8 = true
+            )
+        )
 
         document.select("iframe[src]").forEach { iframe ->
             val iframeUrl = iframe.attr("src").let { 
@@ -110,15 +111,16 @@ class StreamBTW : MainAPI() {
             }
             val iframeDoc = app.get(iframeUrl, referer = url).document
             getStreamUrl(iframeDoc)?.let { iframeStream ->
-                newExtractorLink(
-                    source = this.name,
-                    name = "StreamBTW (iframe)",
-                    url = iframeStream
-                ) {
-                    this.referer = iframeUrl
-                    this.quality = Qualities.Unknown.value
-                    this.isM3u8 = true
-                }.let { callback(it) }
+                callback.invoke(
+                    newExtractorLink(
+                        source = this.name,
+                        name = "StreamBTW (iframe)",
+                        url = iframeStream,
+                        referer = iframeUrl,
+                        quality = Qualities.Unknown.value,
+                        isM3u8 = true
+                    )
+                )
             }
         }
     }
