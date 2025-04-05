@@ -1,7 +1,10 @@
+package ben.smith53
+
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.utils.ExtractorLink as NewExtractorLink
+import com.lagradost.cloudstream3.utils.newExtractorLink
 import okhttp3.Interceptor
 import okhttp3.Response
 import org.jsoup.nodes.Document
@@ -93,16 +96,16 @@ class StreamBTW : MainAPI() {
         val document = app.get(url).document
         val streamUrl = getStreamUrl(document) ?: return
 
-        callback(
-            NewExtractorLink(
-                source = this.name,
-                name = "StreamBTW",
-                url = streamUrl,
-                referer = url,
-                quality = Qualities.Unknown.value,
-                isM3u8 = true
-            )
-        )
+        newExtractorLink(
+            source = this.name,
+            name = "StreamBTW",
+            url = streamUrl,
+            referer = url,
+            quality = Qualities.Unknown.value,
+            isM3u8 = true
+        ) { link ->
+            callback(link)
+        }
 
         // Check iframes for additional streams
         document.select("iframe[src]").forEach { iframe ->
@@ -111,16 +114,16 @@ class StreamBTW : MainAPI() {
             }
             val iframeDoc = app.get(iframeUrl, referer = url).document
             getStreamUrl(iframeDoc)?.let { iframeStream ->
-                callback(
-                    NewExtractorLink(
-                        source = this.name,
-                        name = "StreamBTW (iframe)",
-                        url = iframeStream,
-                        referer = iframeUrl,
-                        quality = Qualities.Unknown.value,
-                        isM3u8 = true
-                    )
-                )
+                newExtractorLink(
+                    source = this.name,
+                    name = "StreamBTW (iframe)",
+                    url = iframeStream,
+                    referer = iframeUrl,
+                    quality = Qualities.Unknown.value,
+                    isM3u8 = true
+                ) { link ->
+                    callback(link)
+                }
             }
         }
     }
