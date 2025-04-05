@@ -1,7 +1,19 @@
 package ben.smith53
 
-import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.*
+import com.lagradost.cloudstream3.HomePageList
+import com.lagradost.cloudstream3.HomePageResponse
+import com.lagradost.cloudstream3.LiveSearchResponse
+import com.lagradost.cloudstream3.LiveStreamLoadResponse
+import com.lagradost.cloudstream3.LoadResponse
+import com.lagradost.cloudstream3.MainAPI
+import com.lagradost.cloudstream3.MainPageRequest
+import com.lagradost.cloudstream3.SearchResponse
+import com.lagradost.cloudstream3.SubtitleFile
+import com.lagradost.cloudstream3.TvType
+import com.lagradost.cloudstream3.VPNStatus
+import com.lagradost.cloudstream3.app
+import com.lagradost.cloudstream3.newHomePageResponse
+import com.lagradost.cloudstream3.utils.ExtractorLink
 import org.json.JSONObject
 import java.util.zip.GZIPInputStream
 
@@ -36,7 +48,8 @@ class PPVLandProvider : MainAPI() {
         try {
             val response = app.get(apiUrl, headers = headers, timeout = 15)
             println("Main API Status Code: ${response.code}")
-
+            
+            // Decompress gzip response
             val decompressedText = if (response.headers["Content-Encoding"] == "gzip") {
                 GZIPInputStream(response.body.byteStream()).bufferedReader().use { it.readText() }
             } else {
@@ -147,6 +160,7 @@ class PPVLandProvider : MainAPI() {
         val response = app.get(apiUrl, headers = headers, timeout = 15)
         println("Stream API Status Code: ${response.code}")
 
+        // Decompress gzip response
         val decompressedText = if (response.headers["Content-Encoding"] == "gzip") {
             GZIPInputStream(response.body.byteStream()).bufferedReader().use { it.readText() }
         } else {
@@ -185,13 +199,13 @@ class PPVLandProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        callback.invoke(
-            newExtractorLink(
+        callback(
+            ExtractorLink(
                 source = this.name,
                 name = "PPVLand",
                 url = data,
                 referer = mainUrl,
-                quality = Qualities.Unknown.value,
+                quality = -1,
                 isM3u8 = true
             )
         )
