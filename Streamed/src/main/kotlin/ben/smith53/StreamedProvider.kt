@@ -3,7 +3,6 @@ package ben.smith53
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
-import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
 import android.util.Log
 
@@ -38,7 +37,7 @@ class StreamedProvider : MainAPI() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val rawList = app.get(request.data).text
         val listJson = parseJson<List<Match>>(rawList)
-        
+
         val list = listJson.filter { match -> match.matchSources.isNotEmpty() }.map { match ->
             val url = "$mainUrl/watch/${match.id}"
             newLiveSearchResponse(
@@ -174,15 +173,16 @@ class StreamedExtractor {
             val testResponse = app.get(m3u8Url, headers = baseHeaders + mapOf("Referer" to embedReferer), timeout = 15)
             if (testResponse.code == 200) {
                 callback(
-                    ExtractorLink(
+                    newExtractorLink(
                         source = "Streamed",
                         name = "$source Stream $streamNo",
-                        url = m3u8Url,
-                        referer = embedReferer,
-                        quality = Qualities.Unknown.value,
-                        isM3u8 = true,
-                        headers = baseHeaders
-                    )
+                        url = m3u8Url
+                    ) {
+                        this.referer = embedReferer
+                        this.quality = Qualities.Unknown.value
+                        this.isM3u8 = true
+                        this.headers = baseHeaders
+                    }
                 )
                 Log.d("StreamedExtractor", "M3U8 URL added: $m3u8Url")
                 return true
@@ -190,15 +190,16 @@ class StreamedExtractor {
                 Log.e("StreamedExtractor", "M3U8 test failed with code: ${testResponse.code}")
                 // Skip test and add link anyway
                 callback(
-                    ExtractorLink(
+                    newExtractorLink(
                         source = "Streamed",
                         name = "$source Stream $streamNo",
-                        url = m3u8Url,
-                        referer = embedReferer,
-                        quality = Qualities.Unknown.value,
-                        isM3u8 = true,
-                        headers = baseHeaders
-                    )
+                        url = m3u8Url
+                    ) {
+                        this.referer = embedReferer
+                        this.quality = Qualities.Unknown.value
+                        this.isM3u8 = true
+                        this.headers = baseHeaders
+                    }
                 )
                 Log.d("StreamedExtractor", "M3U8 test failed but added anyway: $m3u8Url")
                 return true
@@ -207,15 +208,16 @@ class StreamedExtractor {
             Log.e("StreamedExtractor", "M3U8 test failed: ${e.message}")
             // Skip test and add link anyway
             callback(
-                ExtractorLink(
+                newExtractorLink(
                     source = "Streamed",
                     name = "$source Stream $streamNo",
-                    url = m3u8Url,
-                    referer = embedReferer,
-                    quality = Qualities.Unknown.value,
-                    isM3u8 = true,
-                    headers = baseHeaders
-                )
+                    url = m3u8Url
+                ) {
+                    this.referer = embedReferer
+                    this.quality = Qualities.Unknown.value
+                    this.isM3u8 = true
+                    this.headers = baseHeaders
+                }
             )
             Log.d("StreamedExtractor", "M3U8 test failed but added anyway: $m3u8Url")
             return true
