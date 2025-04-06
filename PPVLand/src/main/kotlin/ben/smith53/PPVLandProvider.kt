@@ -204,7 +204,7 @@ class PPVLandProvider : MainAPI() {
             this.name,
             "PPVLand",
             url = data,
-            type = true // isM3u8
+            ExtractorLinkType.M3u8
         ) {
             this.referer = mainUrl
             this.quality = Qualities.Unknown.value
