@@ -117,7 +117,7 @@ class StreamBTW : MainAPI() {
                         source = this.name,
                         name = "StreamBTW (iframe)",
                         url = iframeStream,
-                        ExtractorLinkType.M3u8
+                        ExtractorLinkType.M3U8
                     ) {
                         referer = iframeUrl
                         quality = Qualities.Unknown.value
