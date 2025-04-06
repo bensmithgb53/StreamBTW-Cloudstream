@@ -73,7 +73,7 @@ class StreamedProvider : MainAPI() {
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (newExtractorLink) -> Unit
+        callback: (ExtractorLink) -> Unit
     ): Boolean {
         val matchId = data.substringAfterLast("/")
         val extractor = StreamedExtractor()
@@ -118,7 +118,7 @@ class StreamedExtractor {
         source: String,
         streamNo: Int,
         subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (newExtractorLink) -> Unit
+        callback: (ExtractorLink) -> Unit
     ): Boolean {
         Log.d("StreamedExtractor", "Starting extraction for: $streamUrl")
 
