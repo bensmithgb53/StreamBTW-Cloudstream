@@ -3,7 +3,7 @@ package ben.smith53
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
-import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
 import android.util.Log
 
@@ -73,7 +73,7 @@ class StreamedProvider : MainAPI() {
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
+        callback: (newExtractorLink) -> Unit
     ): Boolean {
         val matchId = data.substringAfterLast("/")
         val extractor = StreamedExtractor()
@@ -118,7 +118,7 @@ class StreamedExtractor {
         source: String,
         streamNo: Int,
         subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
+        callback: (newExtractorLink) -> Unit
     ): Boolean {
         Log.d("StreamedExtractor", "Starting extraction for: $streamUrl")
 
@@ -190,7 +190,7 @@ class StreamedExtractor {
                 Log.e("StreamedExtractor", "M3U8 test failed with code: ${testResponse.code}")
                 // Skip test and add link anyway
                 callback(
-                    ExtractorLink(
+                    newExtractorLink(
                         source = "Streamed",
                         name = "$source Stream $streamNo",
                         url = m3u8Url,
@@ -207,7 +207,7 @@ class StreamedExtractor {
             Log.e("StreamedExtractor", "M3U8 test failed: ${e.message}")
             // Skip test and add link anyway
             callback(
-                ExtractorLink(
+                newExtractorLink(
                     source = "Streamed",
                     name = "$source Stream $streamNo",
                     url = m3u8Url,
