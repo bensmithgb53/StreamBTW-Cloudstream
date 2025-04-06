@@ -200,14 +200,16 @@ class PPVLandProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         callback.invoke(
-            ExtractorLink(
-                source = this.name,
-                name = "PPVLand",
-                url = data,
-                this.referer = mainUrl,
-                this.quality = -1,
-                isM3u8 = true
-            )
+            newExtractorLink(
+            this.name,
+            "PPVLand",
+            url = data,
+            ExtractorLinkType.M3u8
+        ) {
+            this.referer = mainUrl
+            this.quality = Qualities.Unknown.value
+        }
+
         )
         println("Provided m3u8 link: $data")
         return true

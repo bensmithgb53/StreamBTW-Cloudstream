@@ -40,13 +40,15 @@ class PPVLandExtractor : ExtractorApi() {
 
             return listOf(
                 newExtractorLink(
-                    source = this.name,
-                    name = this.name,
-                    url = m3u8Url,
-                    this.referer = "$mainUrl/",
-                    this.quality = Qualities.Unknown.value,
-                    isM3u8 = true
-                )
+                source = this.name,
+                name = this.name,
+                url = m3u8Url,
+                type = ExtractorLinkType.M3U8
+            ) {
+                this.referer = "$mainUrl/"
+                this.quality = Qualities.Unknown.value
+              }
+
             )
         } catch (e: Exception) {
             return null

@@ -177,7 +177,7 @@ class StreamedExtractor {
                     source = "Streamed",
                     name = "$source Stream $streamNo",
                     url = m3u8Url,
-                type=ExtractorLinkType.M3u8
+                    type=ExtractorLinkType.M3u8
              ) {
                     this.referer = embedReferer,
                     this.quality = Qualities.Unknown.value,
@@ -193,7 +193,7 @@ class StreamedExtractor {
                     source = "Streamed",
                     name = "$source Stream $streamNo",
                     url = m3u8Url,
-                type=ExtractorLinkType.M3u8
+                    type=ExtractorLinkType.M3u8
              ) {
                     this.referer = embedReferer,
                     this.quality = Qualities.Unknown.value,
@@ -210,7 +210,7 @@ class StreamedExtractor {
                     source = "Streamed",
                     name = "$source Stream $streamNo",
                     url = m3u8Url,
-            type=ExtractorLinkType.M3u8
+                    type=ExtractorLinkType.M3u8
              ) {
                     this.referer = embedReferer,
                     this.quality = Qualities.Unknown.value,
