@@ -43,8 +43,8 @@ class PPVLandExtractor : ExtractorApi() {
                     source = this.name,
                     name = this.name,
                     url = m3u8Url,
-                    referer = "$mainUrl/",
-                    quality = Qualities.Unknown.value,
+                    this.referer = "$mainUrl/",
+                    this.quality = Qualities.Unknown.value,
                     isM3u8 = true
                 )
             )
