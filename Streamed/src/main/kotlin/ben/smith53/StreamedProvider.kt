@@ -2,6 +2,7 @@ package ben.smith53
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.utils.* // Import for newExtractorLink
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.Qualities
 import android.util.Log
@@ -164,7 +165,9 @@ class StreamedExtractor {
             Log.e("StreamedExtractor", "Decryption request failed: ${e.message}")
             return false
         }
-        val decryptedPath = decryptResponse?.get("decrypted") ?: return false.also { Log.e("StreamedExtractor", "Decryption failed or no 'decrypted' key") }
+        val decryptedPath = decryptResponse?.get("decrypted") ?: return false.also {
+            Log.e("StreamedExtractor", "Decryption failed or no 'decrypted' key")
+        }
         Log.d("StreamedExtractor", "Decrypted path: $decryptedPath")
 
         // Construct M3U8 URL with embed referer
@@ -172,7 +175,7 @@ class StreamedExtractor {
         try {
             val testResponse = app.get(m3u8Url, headers = baseHeaders + mapOf("Referer" to embedReferer), timeout = 15)
             if (testResponse.code == 200) {
-                callback(
+                callback.invoke(
                     newExtractorLink(
                         source = "Streamed",
                         name = "$source Stream $streamNo",
@@ -189,7 +192,7 @@ class StreamedExtractor {
             } else {
                 Log.e("StreamedExtractor", "M3U8 test failed with code: ${testResponse.code}")
                 // Skip test and add link anyway
-                callback(
+                callback.invoke(
                     newExtractorLink(
                         source = "Streamed",
                         name = "$source Stream $streamNo",
@@ -207,7 +210,7 @@ class StreamedExtractor {
         } catch (e: Exception) {
             Log.e("StreamedExtractor", "M3U8 test failed: ${e.message}")
             // Skip test and add link anyway
-            callback(
+            callback.invoke(
                 newExtractorLink(
                     source = "Streamed",
                     name = "$source Stream $streamNo",
