@@ -120,7 +120,7 @@ class StreamBTW : MainAPI() {
                     ) {
                         referer = iframeUrl
                         quality = Qualities.Unknown.value
-                        isM3u8 = true
+                        type=ExtractorLinkType.M3u8 = true
                     }
                 )
             }
