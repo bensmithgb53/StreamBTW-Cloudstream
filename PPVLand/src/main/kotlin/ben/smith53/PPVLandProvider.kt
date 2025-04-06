@@ -199,13 +199,13 @@ class PPVLandProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        callback(
+        callback.invoke(
             ExtractorLink(
                 source = this.name,
                 name = "PPVLand",
                 url = data,
-                referer = mainUrl,
-                quality = -1,
+                this.referer = mainUrl,
+                this.quality = -1,
                 isM3u8 = true
             )
         )
