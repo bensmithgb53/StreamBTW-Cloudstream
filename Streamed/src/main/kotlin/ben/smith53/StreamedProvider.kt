@@ -2,8 +2,8 @@ package ben.smith53
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
+import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
 import android.util.Log
 
@@ -38,7 +38,7 @@ class StreamedProvider : MainAPI() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val rawList = app.get(request.data).text
         val listJson = parseJson<List<Match>>(rawList)
-
+        
         val list = listJson.filter { match -> match.matchSources.isNotEmpty() }.map { match ->
             val url = "$mainUrl/watch/${match.id}"
             newLiveSearchResponse(
@@ -165,9 +165,7 @@ class StreamedExtractor {
             Log.e("StreamedExtractor", "Decryption request failed: ${e.message}")
             return false
         }
-        val decryptedPath = decryptResponse?.get("decrypted") ?: return false.also {
-            Log.e("StreamedExtractor", "Decryption failed or no 'decrypted' key")
-        }
+        val decryptedPath = decryptResponse?.get("decrypted") ?: return false.also { Log.e("StreamedExtractor", "Decryption failed or no 'decrypted' key") }
         Log.d("StreamedExtractor", "Decrypted path: $decryptedPath")
 
         // Construct M3U8 URL with embed referer
@@ -179,10 +177,10 @@ class StreamedExtractor {
                     newExtractorLink(
                         source = "Streamed",
                         name = "$source Stream $streamNo",
-                        url = m3u8Url
+                        url = m3u8Url,
                     ) {
-                        this.referer = embedReferer
-                        this.quality = Qualities.Unknown.value
+                        this.referer = embedReferer,
+                        this.quality = Qualities.Unknown.value,
                         this.headers = baseHeaders
                     }
                 )
@@ -191,16 +189,16 @@ class StreamedExtractor {
             } else {
                 Log.e("StreamedExtractor", "M3U8 test failed with code: ${testResponse.code}")
                 // Skip test and add link anyway
-                callback.invoke(
-                    newExtractorLink(
+                callback(
+                    ExtractorLink(
                         source = "Streamed",
                         name = "$source Stream $streamNo",
-                        url = m3u8Url
-                    ) {
-                        this.referer = embedReferer
-                        this.quality = Qualities.Unknown.value
-                        this.headers = baseHeaders
-                    }
+                        url = m3u8Url,
+                        referer = embedReferer,
+                        quality = Qualities.Unknown.value,
+                        isM3u8 = true,
+                        headers = baseHeaders
+                    )
                 )
                 Log.d("StreamedExtractor", "M3U8 test failed but added anyway: $m3u8Url")
                 return true
@@ -208,16 +206,16 @@ class StreamedExtractor {
         } catch (e: Exception) {
             Log.e("StreamedExtractor", "M3U8 test failed: ${e.message}")
             // Skip test and add link anyway
-            callback.invoke(
-                newExtractorLink(
+            callback(
+                ExtractorLink(
                     source = "Streamed",
                     name = "$source Stream $streamNo",
-                    url = m3u8Url
-                ) {
-                    this.referer = embedReferer
-                    this.quality = Qualities.Unknown.value
-                    this.headers = baseHeaders
-                }
+                    url = m3u8Url,
+                    referer = embedReferer,
+                    quality = Qualities.Unknown.value,
+                    isM3u8 = true,
+                    headers = baseHeaders
+                )
             )
             Log.d("StreamedExtractor", "M3U8 test failed but added anyway: $m3u8Url")
             return true
