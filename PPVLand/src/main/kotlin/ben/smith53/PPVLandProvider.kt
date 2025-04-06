@@ -13,7 +13,12 @@ import com.lagradost.cloudstream3.TvType
 import com.lagradost.cloudstream3.VPNStatus
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.newHomePageResponse
+import com.lagradost.cloudstream3.newLiveSearchResponse
+import com.lagradost.cloudstream3.newLiveStreamLoadResponse
 import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.Qualities
+import com.lagradost.cloudstream3.utils.newExtractorLink
 import org.json.JSONObject
 import java.util.zip.GZIPInputStream
 
@@ -126,12 +131,7 @@ class PPVLandProvider : MainAPI() {
                 HomePageList(
                     name = "Error",
                     list = listOf(
-                        LiveSearchResponse(
-                            name = "Failed to load events: ${e.message}",
-                            url = mainUrl,
-                            apiName = this.name,
-                            posterUrl = posterUrl
-                        )
+                        newLiveSearchResponse("Failed to load events: ${e.message}",mainUrl)
                     ),
                     isHorizontalImages = false
                 )
@@ -184,13 +184,7 @@ class PPVLandProvider : MainAPI() {
             ?: json.optString("name", "Stream $streamId")
 
         println("Found m3u8 URL: $m3u8Url")
-        return LiveStreamLoadResponse(
-            name = streamName,
-            url = m3u8Url,
-            apiName = this.name,
-            dataUrl = m3u8Url,
-            posterUrl = posterUrl
-        )
+        return newLiveStreamLoadResponse(streamName,m3u8Url,m3u8Url)
     }
 
     override suspend fun loadLinks(
@@ -204,7 +198,7 @@ class PPVLandProvider : MainAPI() {
             this.name,
             "PPVLand",
             url = data,
-            ExtractorLinkType.M3u8
+            ExtractorLinkType.M3U8
         ) {
             this.referer = mainUrl
             this.quality = Qualities.Unknown.value
