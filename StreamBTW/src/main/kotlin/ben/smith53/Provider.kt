@@ -98,11 +98,11 @@ class StreamBTW : MainAPI() {
             newExtractorLink(
                 source = this.name,
                 name = "StreamBTW",
-                url = streamUrl
+                url = streamUrl,
+                ExtractorLinkType.M3U8
             ) {
                 referer = url
                 quality = Qualities.Unknown.value
-                isM3u8 = true
             }
         )
 
@@ -116,11 +116,11 @@ class StreamBTW : MainAPI() {
                     newExtractorLink(
                         source = this.name,
                         name = "StreamBTW (iframe)",
-                        url = iframeStream
+                        url = iframeStream,
+                        ExtractorLinkType.M3u8
                     ) {
                         referer = iframeUrl
                         quality = Qualities.Unknown.value
-                        type=ExtractorLinkType.M3u8 = true
                     }
                 )
             }
