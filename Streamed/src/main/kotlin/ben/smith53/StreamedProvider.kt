@@ -173,32 +173,32 @@ class StreamedExtractor {
         try {
             val testResponse = app.get(m3u8Url, headers = baseHeaders + mapOf("Referer" to embedReferer), timeout = 15)
             if (testResponse.code == 200) {
-                callback.invoke(
-                    newExtractorLink(
-                        source = "Streamed",
-                        name = "$source Stream $streamNo",
-                        url = m3u8Url,
-                        this.referer = embedReferer,
-                        this.quality = Qualities.Unknown.value,
-                        isM3u8 = true,
-                        this.headers = baseHeaders
-                    )
+                newExtractorLink(
+                    source = "Streamed",
+                    name = "$source Stream $streamNo",
+                    url = m3u8Url,
+                type=ExtractorLinkType.M3u8
+             ) {
+                    this.referer = embedReferer,
+                    this.quality = Qualities.Unknown.value,
+                    this.headers = baseHeaders
+               }
                 )
                 Log.d("StreamedExtractor", "M3U8 URL added: $m3u8Url")
                 return true
             } else {
                 Log.e("StreamedExtractor", "M3U8 test failed with code: ${testResponse.code}")
                 // Skip test and add link anyway
-                callback.invoke(
-                    newExtractorLink(
-                        source = "Streamed",
-                        name = "$source Stream $streamNo",
-                        url = m3u8Url,
-                        this.referer = embedReferer,
-                        this.quality = Qualities.Unknown.value,
-                        isM3u8 = true,
-                        this.headers = baseHeaders
-                    )
+                newExtractorLink(
+                    source = "Streamed",
+                    name = "$source Stream $streamNo",
+                    url = m3u8Url,
+                type=ExtractorLinkType.M3u8
+             ) {
+                    this.referer = embedReferer,
+                    this.quality = Qualities.Unknown.value,
+                    this.headers = baseHeaders
+               }
                 )
                 Log.d("StreamedExtractor", "M3U8 test failed but added anyway: $m3u8Url")
                 return true
@@ -206,16 +206,16 @@ class StreamedExtractor {
         } catch (e: Exception) {
             Log.e("StreamedExtractor", "M3U8 test failed: ${e.message}")
             // Skip test and add link anyway
-            callback.invoke(
-                newExtractorLink(
+            newExtractorLink(
                     source = "Streamed",
                     name = "$source Stream $streamNo",
                     url = m3u8Url,
+            type=ExtractorLinkType.M3u8
+             ) {
                     this.referer = embedReferer,
                     this.quality = Qualities.Unknown.value,
-                    isM3u8 = true,
                     this.headers = baseHeaders
-                )
+               }
             )
             Log.d("StreamedExtractor", "M3U8 test failed but added anyway: $m3u8Url")
             return true
