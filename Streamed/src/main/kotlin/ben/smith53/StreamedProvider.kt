@@ -9,6 +9,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import android.util.Log
 import java.util.Locale
+import kotlinx.coroutines.delay
 
 class StreamedProvider : MainAPI() {
     override var mainUrl = "https://streamed.su"
@@ -16,7 +17,7 @@ class StreamedProvider : MainAPI() {
     override var supportedTypes = setOf(TvType.Live)
     override val hasMainPage = true
 
-    private val sources = listOf("alpha", "bravo", "charlie", "delta") // Removed "admin" only
+    private val sources = listOf("alpha", "bravo", "charlie", "delta")
     private val maxStreams = 3
 
     override val mainPage = mainPageOf(
@@ -91,6 +92,7 @@ class StreamedProvider : MainAPI() {
                 if (extractor.getUrl(streamUrl, matchId, source, streamNo, subtitleCallback, callback)) {
                     success = true
                 }
+                delay(1000) // 1s delay between streams to avoid rate-limiting
             }
         }
         return success
@@ -115,6 +117,7 @@ class StreamedExtractor {
     private val baseHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36"
     )
+    private val baseUrl = "https://rr.buytommy.top"
 
     suspend fun getUrl(
         streamUrl: String,
@@ -126,7 +129,6 @@ class StreamedExtractor {
     ): Boolean {
         Log.d("StreamedExtractor", "Starting extraction for: $streamUrl")
 
-        // Fetch stream page for cookies
         val streamResponse = try {
             app.get(streamUrl, headers = baseHeaders, timeout = 15)
         } catch (e: Exception) {
@@ -136,7 +138,6 @@ class StreamedExtractor {
         val cookies = streamResponse.cookies
         Log.d("StreamedExtractor", "Stream cookies: $cookies")
 
-        // POST to fetch encrypted string
         val postData = mapOf(
             "source" to source,
             "id" to matchId,
@@ -159,7 +160,6 @@ class StreamedExtractor {
         }
         Log.d("StreamedExtractor", "Encrypted response: $encryptedResponse")
 
-        // Decrypt using Deno
         val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
         val decryptPostData = mapOf("encrypted" to encryptedResponse)
         val decryptResponse = try {
@@ -172,63 +172,24 @@ class StreamedExtractor {
         val decryptedPath = decryptResponse?.get("decrypted") ?: return false.also { Log.e("StreamedExtractor", "Decryption failed or no 'decrypted' key") }
         Log.d("StreamedExtractor", "Decrypted path: $decryptedPath")
 
-        // Construct M3U8 URL with curl-matched headers
-        val m3u8Url = "https://rr.buytommy.top$decryptedPath"
+        val m3u8Url = "$baseUrl$decryptedPath"
         val m3u8Headers = baseHeaders + mapOf(
             "Referer" to "https://embedstreams.top"
         )
-        Log.d("StreamedExtractor", "Testing M3U8 URL: $m3u8Url with headers: $m3u8Headers")
-        try {
-            val testResponse = app.get(m3u8Url, headers = m3u8Headers, timeout = 15)
-            Log.d("StreamedExtractor", "Test response code: ${testResponse.code}")
-            if (testResponse.code == 200) {
-                callback.invoke(
-                    newExtractorLink(
-                        source = "Streamed",
-                        name = "$source Stream $streamNo",
-                        url = m3u8Url,
-                        type = ExtractorLinkType.M3U8
-                    ) {
-                        this.referer = "https://embedstreams.top"
-                        this.quality = Qualities.Unknown.value
-                        this.headers = m3u8Headers
-                    }
-                )
-                Log.d("StreamedExtractor", "M3U8 URL added: $m3u8Url")
-                return true
-            } else {
-                Log.e("StreamedExtractor", "M3U8 test failed with code: ${testResponse.code}")
-                callback.invoke(
-                    newExtractorLink(
-                        source = "Streamed",
-                        name = "$source Stream $streamNo",
-                        url = m3u8Url,
-                        type = ExtractorLinkType.M3U8
-                    ) {
-                        this.referer = "https://embedstreams.top"
-                        this.quality = Qualities.Unknown.value
-                        this.headers = m3u8Headers
-                    }
-                )
-                Log.d("StreamedExtractor", "M3U8 test failed but added anyway: $m3u8Url")
-                return true
+        Log.d("StreamedExtractor", "Adding M3U8 URL for playback: $m3u8Url with headers: $m3u8Headers")
+        callback.invoke(
+            newExtractorLink(
+                source = "Streamed",
+                name = "$source Stream $streamNo",
+                url = m3u8Url,
+                type = ExtractorLinkType.M3U8
+            ) {
+                this.referer = "https://embedstreams.top"
+                this.quality = Qualities.Unknown.value
+                this.headers = m3u8Headers
+                this.extractorData = "buffer=30000"
             }
-        } catch (e: Exception) {
-            Log.e("StreamedExtractor", "M3U8 test failed with exception: ${e.message}")
-            callback.invoke(
-                newExtractorLink(
-                    source = "Streamed",
-                    name = "$source Stream $streamNo",
-                    url = m3u8Url,
-                    type = ExtractorLinkType.M3U8
-                ) {
-                    this.referer = "https://embedstreams.top"
-                    this.quality = Qualities.Unknown.value
-                    this.headers = m3u8Headers
-                }
-            )
-            Log.d("StreamedExtractor", "M3U8 test failed but added anyway: $m3u8Url")
-            return true
-        }
+        )
+        return true
     }
 }
