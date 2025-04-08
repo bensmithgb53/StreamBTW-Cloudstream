@@ -114,7 +114,7 @@ class StreamedExtractor {
     private val fetchUrl = "https://embedstreams.top/fetch"
     private val baseHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
-        "Content-Type" to "application/json"
+        "Accept" to "*/*"
     )
 
     suspend fun getUrl(
@@ -146,7 +146,8 @@ class StreamedExtractor {
         val embedReferer = "https://embedstreams.top/embed/$source/$matchId/$streamNo"
         val fetchHeaders = baseHeaders + mapOf(
             "Referer" to streamUrl,
-            "Cookie" to cookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
+            "Cookie" to cookies.entries.joinToString("; ") { "${it.key}=${it.value}" },
+            "Content-Type" to "application/json"
         )
         val encryptedResponse = try {
             val response = app.post(fetchUrl, headers = fetchHeaders, json = postData, timeout = 15)
@@ -183,14 +184,28 @@ class StreamedExtractor {
         }
         Log.d("StreamedExtractor", "M3U8 content: $m3u8Content")
 
-        // Step 5: Parse the key URL from the M3U8 playlist
+        // Step 5: Find and resolve the key URL
         val keyUrlMatch = Regex("#EXT-X-KEY:METHOD=AES-128,URI=\"([^\"]+)\"").find(m3u8Content)
         val keyUrl = keyUrlMatch?.groupValues?.get(1)?.let {
             if (it.startsWith("http")) it else "https://rr.buytommy.top$it" // Resolve relative URL
         }
-        Log.d("StreamedExtractor", "Key URL: $keyUrl")
+        if (keyUrl == null) {
+            Log.e("StreamedExtractor", "Failed to find #EXT-X-KEY in M3U8")
+            return false
+        }
+        Log.d("StreamedExtractor", "Found key URL: $keyUrl")
 
-        // Step 6: Add the ExtractorLink with proper headers
+        // Step 6: Test fetching the key
+        try {
+            val keyResponse = app.get(keyUrl, headers = m3u8Headers, timeout = 15)
+            val keyBytes = keyResponse.body?.bytes()
+            Log.d("StreamedExtractor", "Key fetch successful, length: ${keyBytes?.size} bytes")
+        } catch (e: Exception) {
+            Log.e("StreamedExtractor", "Key fetch failed: ${e.message}")
+            // Continue anyway, as ExoPlayer might still fetch it
+        }
+
+        // Step 7: Add the ExtractorLink with proper headers
         callback.invoke(
             newExtractorLink(
                 source = "Streamed",
