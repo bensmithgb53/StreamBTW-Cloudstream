@@ -9,7 +9,6 @@ import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import android.util.Log
 import java.util.Locale
-import kotlinx.coroutines.delay
 
 class StreamedProvider : MainAPI() {
     override var mainUrl = "https://streamed.su"
@@ -92,7 +91,6 @@ class StreamedProvider : MainAPI() {
                 if (extractor.getUrl(streamUrl, matchId, source, streamNo, subtitleCallback, callback)) {
                     success = true
                 }
-                delay(1000) // 1s delay between streams to avoid rate-limiting
             }
         }
         return success
