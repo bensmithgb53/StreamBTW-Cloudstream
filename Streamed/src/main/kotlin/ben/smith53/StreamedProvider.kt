@@ -112,15 +112,10 @@ class StreamedProvider : MainAPI() {
 
 class StreamedExtractor {
     private val fetchUrl = "https://embedstreams.top/fetch"
-    private val possibleBaseUrls = listOf(
-        "https://rr.buytommy.top",
-        "https://director.chinese-restaurant-api.site/v4/variant"
-    )
     private val baseHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
-        "Accept" to "*/*",
-        "Accept-Encoding" to "gzip, deflate, br",
-        "Accept-Language" to "en-GB,en-US;q=0.9,en;q=0.8"
+        "Content-Type" to "application/json",
+        "Accept" to "application/vnd.apple.mpegurl, video/mp2t, */*"
     )
 
     suspend fun getUrl(
@@ -152,8 +147,7 @@ class StreamedExtractor {
         val embedReferer = "https://embedstreams.top/embed/$source/$matchId/$streamNo"
         val fetchHeaders = baseHeaders + mapOf(
             "Referer" to streamUrl,
-            "Cookie" to cookies.entries.joinToString("; ") { "${it.key}=${it.value}" },
-            "Content-Type" to "application/json"
+            "Cookie" to cookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
         )
         Log.d("StreamedExtractor", "Fetching with data: $postData and headers: $fetchHeaders")
 
@@ -180,57 +174,63 @@ class StreamedExtractor {
         val decryptedPath = decryptResponse?.get("decrypted") ?: return false.also { Log.e("StreamedExtractor", "Decryption failed or no 'decrypted' key") }
         Log.d("StreamedExtractor", "Decrypted path: $decryptedPath")
 
-        // Enhanced headers for M3U8 request
+        // Construct M3U8 URL with embed referer
+        val m3u8Url = "https://rr.buytommy.top$decryptedPath"
         val m3u8Headers = baseHeaders + mapOf(
-            "Referer" to "https://www.vidembed.re/",
+            "Referer" to embedReferer,
             "Cookie" to cookies.entries.joinToString("; ") { "${it.key}=${it.value}" },
-            "Origin" to "https://www.vidembed.re"
+            "Origin" to "https://embedstreams.top"
         )
-
-        // Try multiple base URLs for the M3U8
-        for (baseUrl in possibleBaseUrls) {
-            val m3u8Url = "$baseUrl$decryptedPath"
-            Log.d("StreamedExtractor", "Trying M3U8 URL: $m3u8Url")
-            try {
-                val testResponse = app.get(m3u8Url, headers = m3u8Headers, timeout = 15)
-                if (testResponse.code == 200) {
-                    callback.invoke(
-                        newExtractorLink(
-                            source = "Streamed",
-                            name = "$source Stream $streamNo",
-                            url = m3u8Url,
-                            type = ExtractorLinkType.M3U8
-                        ) {
-                            this.referer = "https://www.vidembed.re/"
-                            this.quality = Qualities.Unknown.value
-                            this.headers = m3u8Headers
-                        }
-                    )
-                    Log.d("StreamedExtractor", "M3U8 URL added: $m3u8Url")
-                    return true
-                } else {
-                    Log.e("StreamedExtractor", "M3U8 test failed with code: ${testResponse.code} for $baseUrl")
+        try {
+            val testResponse = app.get(m3u8Url, headers = m3u8Headers, timeout = 15)
+            if (testResponse.code == 200) {
+                callback.invoke(
+                    newExtractorLink(
+                        source = "Streamed",
+                        name = "$source Stream $streamNo",
+                        url = m3u8Url,
+                        type = ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = embedReferer
+                        this.quality = Qualities.Unknown.value
+                        this.headers = m3u8Headers
+                    }
+                )
+                Log.d("StreamedExtractor", "M3U8 URL added: $m3u8Url")
+                return true
+            } else {
+                Log.e("StreamedExtractor", "M3U8 test failed with code: ${testResponse.code}")
+                callback.invoke(
+                    newExtractorLink(
+                        source = "Streamed",
+                        name = "$source Stream $streamNo",
+                        url = m3u8Url,
+                        type = ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = embedReferer
+                        this.quality = Qualities.Unknown.value
+                        this.headers = m3u8Headers
+                    }
+                )
+                Log.d("StreamedExtractor", "M3U8 test failed but added anyway: $m3u8Url")
+                return true
+            }
+        } catch (e: Exception) {
+            Log.e("StreamedExtractor", "M3U8 test failed: ${e.message}")
+            callback.invoke(
+                newExtractorLink(
+                    source = "Streamed",
+                    name = "$source Stream $streamNo",
+                    url = m3u8Url,
+                    type = ExtractorLinkType.M3U8
+                ) {
+                    this.referer = embedReferer
+                    this.quality = Qualities.Unknown.value
+                    this.headers = m3u8Headers
                 }
-            } catch (e: Exception) {
-                Log.e("StreamedExtractor", "M3U8 test failed for $baseUrl: ${e.message}")
-            }
+            )
+            Log.d("StreamedExtractor", "M3U8 test failed but added anyway: $m3u8Url")
+            return true
         }
-
-        // Fallback: Add the first URL anyway if all tests fail
-        val fallbackM3u8Url = "${possibleBaseUrls[0]}$decryptedPath"
-        callback.invoke(
-            newExtractorLink(
-                source = "Streamed",
-                name = "$source Stream $streamNo",
-                url = fallbackM3u8Url,
-                type = ExtractorLinkType.M3U8
-            ) {
-                this.referer = "https://www.vidembed.re/"
-                this.quality = Qualities.Unknown.value
-                this.headers = m3u8Headers
-            }
-        )
-        Log.d("StreamedExtractor", "M3U8 test failed for all bases, added fallback: $fallbackM3u8Url")
-        return true
     }
 }
