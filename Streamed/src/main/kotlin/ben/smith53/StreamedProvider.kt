@@ -113,9 +113,7 @@ class StreamedProvider : MainAPI() {
 class StreamedExtractor {
     private val fetchUrl = "https://embedstreams.top/fetch"
     private val baseHeaders = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
-        "Content-Type" to "application/json",
-        "Accept" to "application/vnd.apple.mpegurl, video/mp2t, */*"
+        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36"
     )
 
     suspend fun getUrl(
@@ -147,7 +145,8 @@ class StreamedExtractor {
         val embedReferer = "https://embedstreams.top/embed/$source/$matchId/$streamNo"
         val fetchHeaders = baseHeaders + mapOf(
             "Referer" to streamUrl,
-            "Cookie" to cookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
+            "Cookie" to cookies.entries.joinToString("; ") { "${it.key}=${it.value}" },
+            "Content-Type" to "application/json"
         )
         Log.d("StreamedExtractor", "Fetching with data: $postData and headers: $fetchHeaders")
 
@@ -174,15 +173,15 @@ class StreamedExtractor {
         val decryptedPath = decryptResponse?.get("decrypted") ?: return false.also { Log.e("StreamedExtractor", "Decryption failed or no 'decrypted' key") }
         Log.d("StreamedExtractor", "Decrypted path: $decryptedPath")
 
-        // Construct M3U8 URL with embed referer
+        // Construct M3U8 URL with curl-matched headers
         val m3u8Url = "https://rr.buytommy.top$decryptedPath"
         val m3u8Headers = baseHeaders + mapOf(
-            "Referer" to embedReferer,
-            "Cookie" to cookies.entries.joinToString("; ") { "${it.key}=${it.value}" },
-            "Origin" to "https://embedstreams.top"
+            "Referer" to "https://embedstreams.top"
         )
+        Log.d("StreamedExtractor", "Testing M3U8 URL: $m3u8Url with headers: $m3u8Headers")
         try {
             val testResponse = app.get(m3u8Url, headers = m3u8Headers, timeout = 15)
+            Log.d("StreamedExtractor", "Test response code: ${testResponse.code}")
             if (testResponse.code == 200) {
                 callback.invoke(
                     newExtractorLink(
@@ -191,7 +190,7 @@ class StreamedExtractor {
                         url = m3u8Url,
                         type = ExtractorLinkType.M3U8
                     ) {
-                        this.referer = embedReferer
+                        this.referer = "https://embedstreams.top"
                         this.quality = Qualities.Unknown.value
                         this.headers = m3u8Headers
                     }
@@ -207,7 +206,7 @@ class StreamedExtractor {
                         url = m3u8Url,
                         type = ExtractorLinkType.M3U8
                     ) {
-                        this.referer = embedReferer
+                        this.referer = "https://embedstreams.top"
                         this.quality = Qualities.Unknown.value
                         this.headers = m3u8Headers
                     }
@@ -216,7 +215,7 @@ class StreamedExtractor {
                 return true
             }
         } catch (e: Exception) {
-            Log.e("StreamedExtractor", "M3U8 test failed: ${e.message}")
+            Log.e("StreamedExtractor", "M3U8 test failed with exception: ${e.message}")
             callback.invoke(
                 newExtractorLink(
                     source = "Streamed",
@@ -224,7 +223,7 @@ class StreamedExtractor {
                     url = m3u8Url,
                     type = ExtractorLinkType.M3U8
                 ) {
-                    this.referer = embedReferer
+                    this.referer = "https://embedstreams.top"
                     this.quality = Qualities.Unknown.value
                     this.headers = m3u8Headers
                 }
