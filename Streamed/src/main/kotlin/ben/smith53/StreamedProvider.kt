@@ -41,7 +41,7 @@ class StreamedProvider : MainAPI() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val rawList = app.get(request.data).text
         val listJson = parseJson<List<Match>>(rawList)
-        
+
         val list = listJson.filter { match -> match.matchSources.isNotEmpty() }.map { match ->
             val url = "$mainUrl/watch/${match.id}"
             newLiveSearchResponse(
@@ -127,7 +127,7 @@ class StreamedExtractor {
     ): Boolean {
         Log.d("StreamedExtractor", "Starting extraction for: $streamUrl")
 
-        // Fetch stream page for cookies
+        // Step 1: Fetch stream page for cookies
         val streamResponse = try {
             app.get(streamUrl, headers = baseHeaders, timeout = 15)
         } catch (e: Exception) {
@@ -137,7 +137,7 @@ class StreamedExtractor {
         val cookies = streamResponse.cookies
         Log.d("StreamedExtractor", "Stream cookies: $cookies")
 
-        // POST to fetch encrypted string
+        // Step 2: POST to fetch encrypted string
         val postData = mapOf(
             "source" to source,
             "id" to matchId,
@@ -148,11 +148,8 @@ class StreamedExtractor {
             "Referer" to streamUrl,
             "Cookie" to cookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
         )
-        Log.d("StreamedExtractor", "Fetching with data: $postData and headers: $fetchHeaders")
-
         val encryptedResponse = try {
             val response = app.post(fetchUrl, headers = fetchHeaders, json = postData, timeout = 15)
-            Log.d("StreamedExtractor", "Fetch response code: ${response.code}")
             response.text
         } catch (e: Exception) {
             Log.e("StreamedExtractor", "Fetch failed: ${e.message}")
@@ -160,7 +157,7 @@ class StreamedExtractor {
         }
         Log.d("StreamedExtractor", "Encrypted response: $encryptedResponse")
 
-        // Decrypt using Deno
+        // Step 3: Decrypt using Deno server
         val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
         val decryptPostData = mapOf("encrypted" to encryptedResponse)
         val decryptResponse = try {
@@ -170,63 +167,43 @@ class StreamedExtractor {
             Log.e("StreamedExtractor", "Decryption request failed: ${e.message}")
             return false
         }
-        val decryptedPath = decryptResponse?.get("decrypted") ?: return false.also { Log.e("StreamedExtractor", "Decryption failed or no 'decrypted' key") }
+        val decryptedPath = decryptResponse?.get("decrypted") ?: return false.also {
+            Log.e("StreamedExtractor", "Decryption failed or no 'decrypted' key")
+        }
         Log.d("StreamedExtractor", "Decrypted path: $decryptedPath")
 
-        // Construct M3U8 URL with embed referer
+        // Step 4: Construct and fetch the M3U8 URL
         val m3u8Url = "https://rr.buytommy.top$decryptedPath"
-        try {
-            val testResponse = app.get(m3u8Url, headers = baseHeaders + mapOf("Referer" to embedReferer), timeout = 15)
-            if (testResponse.code == 200) {
-                callback.invoke(
-                newExtractorLink(
-                    source = "Streamed",
-                    name = "$source Stream $streamNo",
-                    url = m3u8Url,
-                    type= ExtractorLinkType.M3U8
-             ) {
-                    this.referer = embedReferer
-                    this.quality = Qualities.Unknown.value
-                    this.headers = baseHeaders
-               }
-                )
-                Log.d("StreamedExtractor", "M3U8 URL added: $m3u8Url")
-                return true
-            } else {
-                Log.e("StreamedExtractor", "M3U8 test failed with code: ${testResponse.code}")
-                // Skip test and add link anyway
-                callback.invoke(
-                newExtractorLink(
-                    source = "Streamed",
-                    name = "$source Stream $streamNo",
-                    url = m3u8Url,
-                    type=ExtractorLinkType.M3U8
-             ) {
-                    this.referer = embedReferer
-                    this.quality = Qualities.Unknown.value
-                    this.headers = baseHeaders
-               }
-                )
-                Log.d("StreamedExtractor", "M3U8 test failed but added anyway: $m3u8Url")
-                return true
-            }
+        val m3u8Headers = baseHeaders + mapOf("Referer" to embedReferer)
+        val m3u8Content = try {
+            app.get(m3u8Url, headers = m3u8Headers, timeout = 15).text
         } catch (e: Exception) {
-            Log.e("StreamedExtractor", "M3U8 test failed: ${e.message}")
-            // Skip test and add link anyway
-            callback.invoke(
+            Log.e("StreamedExtractor", "M3U8 fetch failed: ${e.message}")
+            return false
+        }
+        Log.d("StreamedExtractor", "M3U8 content: $m3u8Content")
+
+        // Step 5: Parse the key URL from the M3U8 playlist
+        val keyUrlMatch = Regex("#EXT-X-KEY:METHOD=AES-128,URI=\"([^\"]+)\"").find(m3u8Content)
+        val keyUrl = keyUrlMatch?.groupValues?.get(1)?.let {
+            if (it.startsWith("http")) it else "https://rr.buytommy.top$it" // Resolve relative URL
+        }
+        Log.d("StreamedExtractor", "Key URL: $keyUrl")
+
+        // Step 6: Add the ExtractorLink with proper headers
+        callback.invoke(
             newExtractorLink(
-                    source = "Streamed",
-                    name = "$source Stream $streamNo",
-                    url = m3u8Url,
-                    type=ExtractorLinkType.M3U8
-             ) {
+                source = "Streamed",
+                name = "$source Stream $streamNo",
+                url = m3u8Url,
+                type = ExtractorLinkType.M3U8
+            ) {
                 this.referer = embedReferer
                 this.quality = Qualities.Unknown.value
-                this.headers = baseHeaders
+                this.headers = m3u8Headers
             }
-            )
-            Log.d("StreamedExtractor", "M3U8 test failed but added anyway: $m3u8Url")
-            return true
-        }
+        )
+        Log.d("StreamedExtractor", "M3U8 URL added: $m3u8Url")
+        return true
     }
 }
