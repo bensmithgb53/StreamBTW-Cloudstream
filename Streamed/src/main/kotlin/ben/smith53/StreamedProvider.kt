@@ -127,22 +127,17 @@ class StreamedExtractor {
     ): Boolean {
         Log.d("StreamedExtractor", "Starting extraction for: $streamUrl")
 
-        // Step 1: Fetch stream page for cookies
-        val streamResponse = try {
-            app.get(streamUrl, headers = baseHeaders, timeout = 15)
+        // Step 1: Fetch cookies from the stream page
+        val cookies = try {
+            val response = app.get(streamUrl, headers = baseHeaders, timeout = 15)
+            response.cookies
         } catch (e: Exception) {
-            Log.e("StreamedExtractor", "Stream page fetch failed: ${e.message}")
+            Log.e("StreamedExtractor", "Failed to fetch cookies: ${e.message}")
             return false
         }
-        val cookies = streamResponse.cookies
-        Log.d("StreamedExtractor", "Stream cookies: $cookies")
+        Log.d("StreamedExtractor", "Cookies: $cookies")
 
-        // Step 2: POST to fetch encrypted string
-        val postData = mapOf(
-            "source" to source,
-            "id" to matchId,
-            "streamNo" to streamNo.toString()
-        )
+        // Step 2: Fetch encrypted path
         val embedReferer = "https://embedstreams.top/embed/$source/$matchId/$streamNo"
         val fetchHeaders = baseHeaders + mapOf(
             "Referer" to streamUrl,
@@ -150,75 +145,82 @@ class StreamedExtractor {
             "Content-Type" to "application/json"
         )
         val encryptedResponse = try {
-            val response = app.post(fetchUrl, headers = fetchHeaders, json = postData, timeout = 15)
-            response.text
+            val postData = mapOf("source" to source, "id" to matchId, "streamNo" to streamNo.toString())
+            app.post(fetchUrl, headers = fetchHeaders, json = postData, timeout = 15).text
         } catch (e: Exception) {
-            Log.e("StreamedExtractor", "Fetch failed: ${e.message}")
+            Log.e("StreamedExtractor", "Failed to fetch encrypted path: ${e.message}")
             return false
         }
-        Log.d("StreamedExtractor", "Encrypted response: $encryptedResponse")
+        Log.d("StreamedExtractor", "Encrypted path: $encryptedResponse")
 
-        // Step 3: Decrypt using Deno server
-        val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
-        val decryptPostData = mapOf("encrypted" to encryptedResponse)
-        val decryptResponse = try {
-            app.post(decryptUrl, json = decryptPostData, headers = mapOf("Content-Type" to "application/json"))
-                .parsedSafe<Map<String, String>>()
+        // Step 3: Decrypt the path
+        val decryptedPath = try {
+            val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
+            val decryptResponse = app.post(
+                decryptUrl,
+                json = mapOf("encrypted" to encryptedResponse),
+                headers = mapOf("Content-Type" to "application/json")
+            ).parsedSafe<Map<String, String>>()
+            decryptResponse?.get("decrypted") ?: throw Exception("No 'decrypted' key in response")
         } catch (e: Exception) {
-            Log.e("StreamedExtractor", "Decryption request failed: ${e.message}")
+            Log.e("StreamedExtractor", "Decryption failed: ${e.message}")
             return false
-        }
-        val decryptedPath = decryptResponse?.get("decrypted") ?: return false.also {
-            Log.e("StreamedExtractor", "Decryption failed or no 'decrypted' key")
         }
         Log.d("StreamedExtractor", "Decrypted path: $decryptedPath")
 
-        // Step 4: Construct and fetch the M3U8 URL
+        // Step 4: Fetch the M3U8 playlist
         val m3u8Url = "https://rr.buytommy.top$decryptedPath"
-        val m3u8Headers = baseHeaders + mapOf("Referer" to embedReferer)
+        val m3u8Headers = baseHeaders + mapOf(
+            "Referer" to embedReferer,
+            "Cookie" to cookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
+        )
         val m3u8Content = try {
             app.get(m3u8Url, headers = m3u8Headers, timeout = 15).text
         } catch (e: Exception) {
             Log.e("StreamedExtractor", "M3U8 fetch failed: ${e.message}")
             return false
         }
-        Log.d("StreamedExtractor", "M3U8 content: $m3u8Content")
+        Log.d("StreamedExtractor", "M3U8 content:\n$m3u8Content")
 
-        // Step 5: Find and resolve the key URL
+        // Step 5: Extract and fetch the key
         val keyUrlMatch = Regex("#EXT-X-KEY:METHOD=AES-128,URI=\"([^\"]+)\"").find(m3u8Content)
         val keyUrl = keyUrlMatch?.groupValues?.get(1)?.let {
-            if (it.startsWith("http")) it else "https://rr.buytommy.top$it" // Resolve relative URL
-        }
-        if (keyUrl == null) {
-            Log.e("StreamedExtractor", "Failed to find #EXT-X-KEY in M3U8")
+            if (it.startsWith("http")) it else "https://rr.buytommy.top$it"
+        } ?: run {
+            Log.e("StreamedExtractor", "No #EXT-X-KEY found in M3U8")
             return false
         }
-        Log.d("StreamedExtractor", "Found key URL: $keyUrl")
+        Log.d("StreamedExtractor", "Key URL: $keyUrl")
 
-        // Step 6: Test fetching the key
-        try {
+        val keyBytes = try {
             val keyResponse = app.get(keyUrl, headers = m3u8Headers, timeout = 15)
-            val keyBytes = keyResponse.body?.bytes()
-            Log.d("StreamedExtractor", "Key fetch successful, length: ${keyBytes?.size} bytes")
+            keyResponse.body?.bytes()?.also {
+                Log.d("StreamedExtractor", "Key fetched: ${it.size} bytes, hex: ${it.joinToString("") { "%02x".format(it) }}")
+                if (it.size != 16) Log.w("StreamedExtractor", "Key length is ${it.size}, expected 16 bytes for AES-128")
+            }
         } catch (e: Exception) {
             Log.e("StreamedExtractor", "Key fetch failed: ${e.message}")
-            // Continue anyway, as ExoPlayer might still fetch it
+            null
         }
 
-        // Step 7: Add the ExtractorLink with proper headers
-        callback.invoke(
-            newExtractorLink(
-                source = "Streamed",
-                name = "$source Stream $streamNo",
-                url = m3u8Url,
-                type = ExtractorLinkType.M3U8
-            ) {
-                this.referer = embedReferer
-                this.quality = Qualities.Unknown.value
-                this.headers = m3u8Headers
-            }
-        )
-        Log.d("StreamedExtractor", "M3U8 URL added: $m3u8Url")
-        return true
+        // Step 6: Pass the M3U8 to ExoPlayer
+        if (keyBytes != null || keyUrl.isNotEmpty()) {  // Proceed even if key fetch fails, as ExoPlayer will retry
+            callback.invoke(
+                newExtractorLink(
+                    source = "Streamed",
+                    name = "$source Stream $streamNo",
+                    url = m3u8Url,
+                    type = ExtractorLinkType.M3U8
+                ) {
+                    this.referer = embedReferer
+                    this.quality = Qualities.Unknown.value
+                    this.headers = m3u8Headers
+                }
+            )
+            Log.d("StreamedExtractor", "ExtractorLink added: $m3u8Url")
+            return true
+        }
+        Log.e("StreamedExtractor", "Failed to validate key or URL")
+        return false
     }
 }
