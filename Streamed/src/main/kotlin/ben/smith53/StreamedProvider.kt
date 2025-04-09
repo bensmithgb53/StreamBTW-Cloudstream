@@ -7,6 +7,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
 import android.util.Log
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.newExtractorLink
 import java.util.Locale
 
 class StreamedProvider : MainAPI() {
@@ -100,7 +101,7 @@ class StreamedProvider : MainAPI() {
                 Log.d("StreamedProvider", "Processing stream URL: $streamUrl")
                 if (extractor.getUrl(streamUrl, matchId, source, streamNo, subtitleCallback, callback)) {
                     success = true
-                    break
+                    break // Stop on first success like Python proxy
                 }
             }
             if (success) return@forEach
@@ -217,17 +218,18 @@ class StreamedProvider : MainAPI() {
             val rewrittenM3u8 = rewrittenLines.joinToString("\n")
             Log.d("StreamedExtractor", "Rewritten M3U8:\n$rewrittenM3u8")
 
-            // Pass rewritten M3U8 URL directly
+            // Pass to player using newExtractorLink
             callback.invoke(
                 newExtractorLink(
-                    source = this@StreamedProvider.name,
+                    source = "Streamed",
                     name = "$source Stream $streamNo",
                     url = m3u8Url,
-                    referer = embedReferer,
-                    quality = Qualities.Unknown.value,
-                    type = ExtractorLinkType.M3U8,
-                    headers = m3u8Headers
-                )
+                    type = ExtractorLinkType.M3U8
+                ) {
+                    this.referer = embedReferer
+                    this.quality = Qualities.Unknown.value
+                    this.headers = m3u8Headers
+                }
             )
             Log.d("StreamedExtractor", "M3U8 URL added: $m3u8Url")
             return true
