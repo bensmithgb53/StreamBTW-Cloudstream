@@ -117,7 +117,6 @@ class StreamedExtractor {
     private val serverUrl = "https://bensmithgb53-decrypt-13.deno.dev"
     private val baseHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
-        "Content-Type" to "application/json",
         "Accept" to "*/*",
         "Origin" to "https://embedstreams.top",
         "Connection" to "keep-alive",
@@ -155,7 +154,8 @@ class StreamedExtractor {
         val embedReferer = "https://embedstreams.top/embed/$source/$matchId/$streamNo"
         val fetchHeaders = baseHeaders + mapOf(
             "Referer" to streamUrl,
-            "Cookie" to cookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
+            "Cookie" to cookies.entries.joinToString("; ") { "${it.key}=${it.value}" },
+            "Content-Type" to "application/json"
         )
         Log.d("StreamedExtractor", "Fetching with data: $postData and headers: $fetchHeaders")
 
@@ -186,9 +186,9 @@ class StreamedExtractor {
         val m3u8Url = "$baseUrl$decryptedPath"
         Log.d("StreamedExtractor", "Constructed M3U8 URL: $m3u8Url")
 
-        // Fetch M3U8 directly
+        // Fetch M3U8 with Python headers
         val m3u8Headers = baseHeaders + mapOf(
-            "Referer" to embedReferer,
+            "Referer" to "https://embedstreams.top/", // Match Python exactly
             "Cookie" to cookies.entries.joinToString("; ") { "${it.key}=${it.value}" },
             "Accept-Encoding" to "br"
         )
@@ -200,13 +200,13 @@ class StreamedExtractor {
         }
         Log.d("StreamedExtractor", "M3U8 response code: ${response.code}")
 
-        // Handle Brotli decompression
+        // Handle response (Brotli or plain text)
         val m3u8Content = if (response.headers["Content-Encoding"]?.lowercase() == "br") {
             try {
                 String(BrotliInputStream(response.body.byteStream()).readBytes())
             } catch (e: Exception) {
                 Log.e("StreamedExtractor", "Brotli decompression failed: ${e.message}")
-                response.text // Fallback to raw text
+                response.text // Fallback
             }
         } else {
             response.text
@@ -226,7 +226,7 @@ class StreamedExtractor {
                 url = m3u8Url,
                 type = ExtractorLinkType.M3U8
             ) {
-                this.referer = embedReferer
+                this.referer = "https://embedstreams.top/"
                 this.quality = Qualities.Unknown.value
                 this.headers = m3u8Headers
             }
