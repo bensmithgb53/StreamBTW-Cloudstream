@@ -9,7 +9,6 @@ import android.util.Log
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import java.util.Locale
-import org.brotli.dec.BrotliInputStream
 
 class StreamedProvider : MainAPI() {
     override var mainUrl = "https://streamed.su"
@@ -88,12 +87,17 @@ class StreamedProvider : MainAPI() {
         sources.forEach { source ->
             for (streamNo in 1..maxStreams) {
                 val streamUrl = "$mainUrl/watch/$matchId/$source/$streamNo"
-                Log.d("StreamedProvider", "Processing stream URL: $streamUrl")
-                if (extractor.getUrl(streamUrl, matchId, source, streamNo, subtitleCallback, callback)) {
+                Log.d("StreamedProvider", "Attempting source: $source, streamNo: $streamNo, URL: $streamUrl")
+                val result = extractor.getUrl(streamUrl, matchId, source, streamNo, subtitleCallback, callback)
+                if (result) {
+                    Log.d("StreamedProvider", "Success for $source Stream $streamNo")
                     success = true
+                } else {
+                    Log.w("StreamedProvider", "Failed for $source Stream $streamNo")
                 }
             }
         }
+        Log.d("StreamedProvider", "Overall success: $success")
         return success
     }
 
@@ -188,7 +192,7 @@ class StreamedExtractor {
 
         // Fetch M3U8 with Python headers
         val m3u8Headers = baseHeaders + mapOf(
-            "Referer" to "https://embedstreams.top/", // Match Python exactly
+            "Referer" to "https://embedstreams.top/",
             "Cookie" to cookies.entries.joinToString("; ") { "${it.key}=${it.value}" },
             "Accept-Encoding" to "br"
         )
@@ -200,17 +204,8 @@ class StreamedExtractor {
         }
         Log.d("StreamedExtractor", "M3U8 response code: ${response.code}")
 
-        // Handle response (Brotli or plain text)
-        val m3u8Content = if (response.headers["Content-Encoding"]?.lowercase() == "br") {
-            try {
-                String(BrotliInputStream(response.body.byteStream()).readBytes())
-            } catch (e: Exception) {
-                Log.e("StreamedExtractor", "Brotli decompression failed: ${e.message}")
-                response.text // Fallback
-            }
-        } else {
-            response.text
-        }
+        // Use response.text directly
+        val m3u8Content = response.text
         Log.d("StreamedExtractor", "M3U8 Content:\n$m3u8Content")
 
         if (!m3u8Content.startsWith("#EXTM3U")) {
