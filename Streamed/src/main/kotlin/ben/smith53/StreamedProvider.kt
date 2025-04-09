@@ -9,6 +9,7 @@ import android.util.Log
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import java.util.Locale
+import java.util.zip.GZIPInputStream
 
 class StreamedProvider : MainAPI() {
     override var mainUrl = "https://streamed.su"
@@ -16,7 +17,7 @@ class StreamedProvider : MainAPI() {
     override var supportedTypes = setOf(TvType.Live)
     override val hasMainPage = true
 
-    private val sources = listOf("alpha", "bravo", "charlie", "delta")
+    private val sources = listOf("admin", "alpha", "bravo", "charlie", "delta")
     private val maxStreams = 3
 
     override val mainPage = mainPageOf(
@@ -139,7 +140,7 @@ class StreamedExtractor {
         val cookies = streamResponse.cookies
         Log.d("StreamedExtractor", "Cookies: $cookies")
 
-        // Step 2: Fetch encrypted path with proper headers
+        // Step 2: Fetch encrypted path
         val embedReferer = "https://embedstreams.top/embed/$source/$matchId/$streamNo"
         val fetchHeaders = baseHeaders + mapOf(
             "Referer" to streamUrl,
@@ -174,19 +175,28 @@ class StreamedExtractor {
         }
         Log.d("StreamedExtractor", "Decrypted path: $decryptedPath")
 
-        // Step 4: Fetch M3U8 with adjusted headers to avoid 403
+        // Step 4: Fetch M3U8 with decompression handling
         val m3u8Url = "$baseUrl$decryptedPath"
         Log.d("StreamedExtractor", "Constructed M3U8 URL: $m3u8Url")
         val m3u8Headers = baseHeaders + mapOf(
-            "Referer" to embedReferer, // Use embed URL as referer
+            "Referer" to embedReferer,
             "Cookie" to cookies.entries.joinToString("; ") { "${it.key}=${it.value}" },
             "Accept-Encoding" to "gzip, deflate, br"
         )
         val m3u8Content = try {
             val response = app.get(m3u8Url, headers = m3u8Headers, timeout = 15)
-            response.text.also {
-                if (it.contains("403 token mismatch")) throw Exception("403 token mismatch received")
+            val rawBytes = response.body?.bytes() ?: throw Exception("No response body")
+            Log.d("StreamedExtractor", "Raw M3U8 bytes (first 100): ${rawBytes.take(100).joinToString("") { "%02x".format(it) }}")
+
+            // Check if response is gzip-compressed and decompress if needed
+            val contentEncoding = response.headers["Content-Encoding"]?.lowercase()
+            val text = if (contentEncoding == "gzip") {
+                GZIPInputStream(rawBytes.inputStream()).bufferedReader().use { it.readText() }
+            } else {
+                rawBytes.toString(Charsets.UTF_8)
             }
+            if (text.contains("403 token mismatch")) throw Exception("403 token mismatch received")
+            text
         } catch (e: Exception) {
             Log.e("StreamedExtractor", "M3U8 fetch failed: ${e.message}")
             return false
@@ -203,7 +213,7 @@ class StreamedExtractor {
         }
         Log.d("StreamedExtractor", "Key URL: $keyUrl")
 
-        // Fetch the key explicitly for verification
+        // Fetch the key explicitly
         val keyBytes = try {
             val keyResponse = app.get(keyUrl, headers = m3u8Headers, timeout = 15)
             keyResponse.body?.bytes()?.also {
