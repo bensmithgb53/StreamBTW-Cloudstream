@@ -196,8 +196,9 @@ class StreamedExtractor {
                 headers = mapOf("Content-Type" to "application/json"),
                 timeout = 15
             )
+            Log.d("StreamedExtractor", "Raw Deno response: ${fetchResponse.text}")
             val jsonResponse = parseJson<Map<String, String>>(fetchResponse.text)
-            jsonResponse["m3u8"] ?: throw Exception("No 'm3u8' key in response")
+            jsonResponse["m3u8"] ?: throw Exception("No 'm3u8' key in response - response may contain error or warning")
         } catch (e: Exception) {
             Log.e("StreamedExtractor", "M3U8 fetch failed: ${e.message}")
             return false
