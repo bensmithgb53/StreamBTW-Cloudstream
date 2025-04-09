@@ -6,8 +6,6 @@ import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
 import android.util.Log
-import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.newExtractorLink
 import java.util.Locale
 
 class StreamedProvider : MainAPI() {
@@ -113,8 +111,9 @@ class StreamedProvider : MainAPI() {
 class StreamedExtractor {
     private val fetchUrl = "https://embedstreams.top/fetch"
     private val baseUrl = "https://rr.buytommy.top"
+    private val serverUrl = "https://bensmithgb53-decrypt-13.deno.dev"
     private val baseHeaders = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
         "Accept" to "*/*",
         "Origin" to "https://embedstreams.top"
     )
@@ -159,74 +158,65 @@ class StreamedExtractor {
         }
         Log.d("StreamedExtractor", "Encrypted path: $encryptedResponse")
 
-        // Step 3: Decrypt the path (should give M3U8 URL)
-        val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
-        val decryptedPath = try {
+        // Step 3: Decrypt the path to get M3U8 URL
+        val m3u8Url = try {
             val decryptResponse = app.post(
-                decryptUrl,
-                json = mapOf("encrypted" to encryptedResponse),
-                headers = mapOf("Content-Type" to "application/json")
+                "$serverUrl/decrypt",
+                json = mapOf("encrypted" to encryptedResponse, "referer" to embedReferer),
+                headers = mapOf("Content-Type" to "application/json"),
+                timeout = 15
             ).parsedSafe<Map<String, String>>()
-            decryptResponse?.get("decrypted") ?: throw Exception("No 'decrypted' key in response")
+            val decryptedPath = decryptResponse?.get("decrypted") ?: throw Exception("No 'decrypted' key in response")
+            "$baseUrl$decryptedPath"
         } catch (e: Exception) {
             Log.e("StreamedExtractor", "Decryption failed: ${e.message}")
             return false
         }
-        Log.d("StreamedExtractor", "Decrypted path: $decryptedPath")
-
-        // Step 4: Fetch the M3U8 directly
-        val m3u8Url = "$baseUrl$decryptedPath"
         Log.d("StreamedExtractor", "Constructed M3U8 URL: $m3u8Url")
+
+        // Step 4: Fetch M3U8 content via Deno server
         val m3u8Headers = baseHeaders + mapOf(
             "Referer" to embedReferer,
-            "Cookie" to cookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
+            "Cookie" to cookies.entries.joinToString("; ") { "${it.key}=${it.value}" },
+            "Accept-Encoding" to "br" // Match Deno's request
         )
         val m3u8Content = try {
-            val response = app.get(m3u8Url, headers = m3u8Headers, timeout = 15)
-            val headersLog = response.headers.entries.joinToString("; ") { "${it.key}=${it.value}" }
-            Log.d("StreamedExtractor", "M3U8 response headers: $headersLog")
-            val text = response.text
-            if (text.contains("403 token mismatch")) throw Exception("403 token mismatch received")
-            if (!text.startsWith("#EXTM3U")) throw Exception("Invalid M3U8 content")
-            text
+            val fetchResponse = app.post(
+                "$serverUrl/fetch-m3u8",
+                json = mapOf(
+                    "m3u8Url" to m3u8Url,
+                    "cookies" to cookies.entries.joinToString("; ") { "${it.key}=${it.value}" },
+                    "referer" to embedReferer
+                ),
+                headers = mapOf("Content-Type" to "application/json"),
+                timeout = 15
+            )
+            val responseText = fetchResponse.text
+            Log.d("StreamedExtractor", "Raw response from Deno: $responseText")
+            val jsonResponse = fetchResponse.parsedSafe<Map<String, String>>()
+            jsonResponse?.get("m3u8") ?: throw Exception("No 'm3u8' key in response")
         } catch (e: Exception) {
-            Log.e("StreamedExtractor", "M3U8 fetch failed: ${e.message}")
+            Log.e("StreamedExtractor", "M3U8 fetch from Deno failed: ${e.message}")
             return false
         }
         Log.d("StreamedExtractor", "M3U8 content:\n$m3u8Content")
 
-        // Step 5: Extract and fetch the key
-        val keyUrlMatch = Regex("#EXT-X-KEY:METHOD=AES-128,URI=\"([^\"]+)\"").find(m3u8Content)
-        val keyUrl = keyUrlMatch?.groupValues?.get(1)?.let {
-            if (it.startsWith("http")) it else "$baseUrl$it"
-        } ?: run {
+        // Step 5: Verify and pass to ExoPlayer
+        if (!m3u8Content.contains("#EXT-X-KEY")) {
             Log.e("StreamedExtractor", "No #EXT-X-KEY found in M3U8")
             return false
         }
-        Log.d("StreamedExtractor", "Key URL: $keyUrl")
 
-        // Fetch the key for verification
-        try {
-            val keyResponse = app.get(keyUrl, headers = m3u8Headers, timeout = 15)
-            keyResponse.body?.bytes()?.also {
-                Log.d("StreamedExtractor", "Key fetched: ${it.size} bytes, hex: ${it.joinToString("") { "%02x".format(it) }}")
-            }
-        } catch (e: Exception) {
-            Log.e("StreamedExtractor", "Key fetch failed: ${e.message}")
-        }
-
-        // Step 6: Pass to ExoPlayer
         callback.invoke(
-            newExtractorLink(
-                source = "Streamed",
-                name = "$source Stream $streamNo",
-                url = m3u8Url,
-                type = ExtractorLinkType.M3U8
-            ) {
-                this.referer = embedReferer
-                this.quality = Qualities.Unknown.value
-                this.headers = m3u8Headers
-            }
+            ExtractorLink(
+                "Streamed",
+                "$source Stream $streamNo",
+                m3u8Url,
+                embedReferer,
+                Qualities.Unknown.value,
+                type = ExtractorLinkType.M3U8,
+                headers = m3u8Headers
+            )
         )
         Log.d("StreamedExtractor", "ExtractorLink added: $m3u8Url")
         return true
