@@ -21,6 +21,7 @@ class StreamedProvider : MainAPI() {
     private val fetchUrl = "https://embedstreams.top/fetch"
     private val baseUrl = "https://rr.buytommy.top"
     private val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
+    private val proxyUrl = "https://corsproxy.io/?url="
 
     private val baseHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
@@ -101,7 +102,7 @@ class StreamedProvider : MainAPI() {
                 Log.d("StreamedProvider", "Processing stream URL: $streamUrl")
                 if (extractor.getUrl(streamUrl, matchId, source, streamNo, subtitleCallback, callback)) {
                     success = true
-                    break // Stop on first success like Python proxy
+                    break
                 }
             }
             if (success) return@forEach
@@ -180,7 +181,7 @@ class StreamedProvider : MainAPI() {
             }
             Log.d("StreamedExtractor", "Decrypted path: $decryptedPath")
 
-            // Fetch M3U8
+            // Fetch M3U8 with proxy fallback
             val m3u8Url = "$baseUrl$decryptedPath"
             val m3u8Headers = baseHeaders + mapOf(
                 "Cookie" to cookies.entries.joinToString("; ") { "${it.key}=${it.value}" },
@@ -189,18 +190,19 @@ class StreamedProvider : MainAPI() {
             val m3u8Response = try {
                 app.get(m3u8Url, headers = m3u8Headers, timeout = 15)
             } catch (e: Exception) {
-                Log.e("StreamedExtractor", "M3U8 fetch failed: ${e.message}")
-                return false
+                Log.e("StreamedExtractor", "Direct M3U8 fetch failed: ${e.message}")
+                return tryProxyFetch(m3u8Url, m3u8Headers, source, streamNo, embedReferer, callback)
             }
+
             if (m3u8Response.code != 200 || !m3u8Response.text.startsWith("#EXTM3U")) {
                 Log.e("StreamedExtractor", "Invalid M3U8: Code ${m3u8Response.code}, Content: ${m3u8Response.text.take(100)}")
-                return false
+                return tryProxyFetch(m3u8Url, m3u8Headers, source, streamNo, embedReferer, callback)
             }
 
             val m3u8Content = m3u8Response.text
             Log.d("StreamedExtractor", "Original M3U8:\n$m3u8Content")
 
-            // Rewrite M3U8 segments to use corsproxy
+            // Rewrite M3U8 segments
             val rewrittenLines = m3u8Content.split("\n").map { line ->
                 when {
                     line.startsWith("#EXT-X-KEY") && "URI=" in line -> {
@@ -210,7 +212,7 @@ class StreamedProvider : MainAPI() {
                     }
                     line.startsWith("https://") -> {
                         val originalUrl = line.trim()
-                        "https://corsproxy.io/?url=$originalUrl"
+                        "$proxyUrl$originalUrl"
                     }
                     else -> line
                 }
@@ -218,7 +220,7 @@ class StreamedProvider : MainAPI() {
             val rewrittenM3u8 = rewrittenLines.joinToString("\n")
             Log.d("StreamedExtractor", "Rewritten M3U8:\n$rewrittenM3u8")
 
-            // Pass to player using newExtractorLink
+            // Pass to player
             callback.invoke(
                 newExtractorLink(
                     source = "Streamed",
@@ -232,6 +234,66 @@ class StreamedProvider : MainAPI() {
                 }
             )
             Log.d("StreamedExtractor", "M3U8 URL added: $m3u8Url")
+            return true
+        }
+
+        private suspend fun tryProxyFetch(
+            m3u8Url: String,
+            m3u8Headers: Map<String, String>,
+            source: String,
+            streamNo: Int,
+            embedReferer: String,
+            callback: (ExtractorLink) -> Unit
+        ): Boolean {
+            Log.d("StreamedExtractor", "Falling back to proxy fetch for: $m3u8Url")
+            val proxiedM3u8Url = "$proxyUrl$m3u8Url"
+            val proxyResponse = try {
+                app.get(proxiedM3u8Url, headers = m3u8Headers, timeout = 15)
+            } catch (e: Exception) {
+                Log.e("StreamedExtractor", "Proxy M3U8 fetch failed: ${e.message}")
+                return false
+            }
+
+            if (proxyResponse.code != 200 || !proxyResponse.text.startsWith("#EXTM3U")) {
+                Log.e("StreamedExtractor", "Invalid proxied M3U8: Code ${proxyResponse.code}, Content: ${proxyResponse.text.take(100)}")
+                return false
+            }
+
+            val m3u8Content = proxyResponse.text
+            Log.d("StreamedExtractor", "Proxied M3U8:\n$m3u8Content")
+
+            // Rewrite segments
+            val rewrittenLines = m3u8Content.split("\n").map { line ->
+                when {
+                    line.startsWith("#EXT-X-KEY") && "URI=" in line -> {
+                        val uri = line.split("URI=\"")[1].split("\"")[0]
+                        val newUri = "$proxyUrl$baseUrl$uri"
+                        line.replace(uri, newUri)
+                    }
+                    line.startsWith("https://") -> {
+                        val originalUrl = line.trim()
+                        "$proxyUrl$originalUrl"
+                    }
+                    else -> line
+                }
+            }
+            val rewrittenM3u8 = rewrittenLines.joinToString("\n")
+            Log.d("StreamedExtractor", "Rewritten proxied M3U8:\n$rewrittenM3u8")
+
+            // Pass proxied URL
+            callback.invoke(
+                newExtractorLink(
+                    source = "Streamed",
+                    name = "$source Stream $streamNo (Proxied)",
+                    url = proxiedM3u8Url,
+                    type = ExtractorLinkType.M3U8
+                ) {
+                    this.referer = embedReferer
+                    this.quality = Qualities.Unknown.value
+                    this.headers = m3u8Headers
+                }
+            )
+            Log.d("StreamedExtractor", "Proxied M3U8 URL added: $proxiedM3u8Url")
             return true
         }
     }
