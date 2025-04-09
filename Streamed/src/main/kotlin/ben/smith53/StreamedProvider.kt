@@ -175,7 +175,7 @@ class StreamedExtractor {
         }
         Log.d("StreamedExtractor", "Decrypted path: $decryptedPath")
 
-        // Step 4: Fetch M3U8 with decompression handling
+        // Step 4: Fetch M3U8 with detailed response logging
         val m3u8Url = "$baseUrl$decryptedPath"
         Log.d("StreamedExtractor", "Constructed M3U8 URL: $m3u8Url")
         val m3u8Headers = baseHeaders + mapOf(
@@ -185,12 +185,15 @@ class StreamedExtractor {
         )
         val m3u8Content = try {
             val response = app.get(m3u8Url, headers = m3u8Headers, timeout = 15)
+            val headersLog = response.headers.entries.joinToString("; ") { "${it.key}=${it.value}" }
+            Log.d("StreamedExtractor", "M3U8 response headers: $headersLog")
             val rawBytes = response.body?.bytes() ?: throw Exception("No response body")
             Log.d("StreamedExtractor", "Raw M3U8 bytes (first 100): ${rawBytes.take(100).joinToString("") { "%02x".format(it) }}")
 
-            // Check if response is gzip-compressed and decompress if needed
+            // Check for gzip compression
             val contentEncoding = response.headers["Content-Encoding"]?.lowercase()
             val text = if (contentEncoding == "gzip") {
+                Log.d("StreamedExtractor", "Detected gzip encoding, decompressing...")
                 GZIPInputStream(rawBytes.inputStream()).bufferedReader().use { it.readText() }
             } else {
                 rawBytes.toString(Charsets.UTF_8)
@@ -199,7 +202,8 @@ class StreamedExtractor {
             text
         } catch (e: Exception) {
             Log.e("StreamedExtractor", "M3U8 fetch failed: ${e.message}")
-            return false
+            // Fallback: Try fetching from embed page
+            return tryEmbedFallback(embedReferer, m3u8Url, m3u8Headers, callback, source, streamNo)
         }
         Log.d("StreamedExtractor", "M3U8 content:\n$m3u8Content")
 
@@ -213,7 +217,7 @@ class StreamedExtractor {
         }
         Log.d("StreamedExtractor", "Key URL: $keyUrl")
 
-        // Fetch the key explicitly
+        // Fetch the key
         val keyBytes = try {
             val keyResponse = app.get(keyUrl, headers = m3u8Headers, timeout = 15)
             keyResponse.body?.bytes()?.also {
@@ -222,7 +226,6 @@ class StreamedExtractor {
             } ?: throw Exception("No key content received")
         } catch (e: Exception) {
             Log.e("StreamedExtractor", "Key fetch failed: ${e.message}")
-            // Continue anyway; ExoPlayer will retry
         }
 
         // Step 6: Pass the M3U8 to ExoPlayer
@@ -239,6 +242,76 @@ class StreamedExtractor {
             }
         )
         Log.d("StreamedExtractor", "ExtractorLink added: $m3u8Url")
+        return true
+    }
+
+    private suspend fun tryEmbedFallback(
+        embedUrl: String,
+        originalM3u8Url: String,
+        headers: Map<String, String>,
+        callback: (ExtractorLink) -> Unit,
+        source: String,
+        streamNo: Int
+    ): Boolean {
+        Log.d("StreamedExtractor", "Falling back to embed page: $embedUrl")
+        val embedResponse = try {
+            app.get(embedUrl, headers = headers, timeout = 15).text
+        } catch (e: Exception) {
+            Log.e("StreamedExtractor", "Embed fetch failed: ${e.message}")
+            return false
+        }
+        Log.d("StreamedExtractor", "Embed page content (first 500 chars):\n${embedResponse.take(500)}")
+
+        // Look for an M3U8 URL in the embed page
+        val m3u8Match = Regex("https?://[^\"']+\\.m3u8[^\"']*").find(embedResponse)
+        val fallbackM3u8Url = m3u8Match?.value ?: run {
+            Log.e("StreamedExtractor", "No M3U8 URL found in embed page")
+            return false
+        }
+        Log.d("StreamedExtractor", "Found M3U8 in embed: $fallbackM3u8Url")
+
+        val m3u8Content = try {
+            val response = app.get(fallbackM3u8Url, headers = headers, timeout = 15)
+            response.text
+        } catch (e: Exception) {
+            Log.e("StreamedExtractor", "Fallback M3U8 fetch failed: ${e.message}")
+            return false
+        }
+        Log.d("StreamedExtractor", "Fallback M3U8 content:\n$m3u8Content")
+
+        // Extract key from fallback M3U8
+        val keyUrlMatch = Regex("#EXT-X-KEY:METHOD=AES-128,URI=\"([^\"]+)\"").find(m3u8Content)
+        val keyUrl = keyUrlMatch?.groupValues?.get(1)?.let {
+            if (it.startsWith("http")) it else "$baseUrl$it"
+        } ?: run {
+            Log.e("StreamedExtractor", "No #EXT-X-KEY found in fallback M3U8")
+            return false
+        }
+        Log.d("StreamedExtractor", "Fallback Key URL: $keyUrl")
+
+        // Fetch the key
+        try {
+            val keyResponse = app.get(keyUrl, headers = headers, timeout = 15)
+            keyResponse.body?.bytes()?.also {
+                Log.d("StreamedExtractor", "Fallback Key fetched: ${it.size} bytes, hex: ${it.joinToString("") { "%02x".format(it) }}")
+            }
+        } catch (e: Exception) {
+            Log.e("StreamedExtractor", "Fallback Key fetch failed: ${e.message}")
+        }
+
+        callback.invoke(
+            newExtractorLink(
+                source = "Streamed",
+                name = "$source Stream $streamNo (Fallback)",
+                url = fallbackM3u8Url,
+                type = ExtractorLinkType.M3U8
+            ) {
+                this.referer = embedUrl
+                this.quality = Qualities.Unknown.value
+                this.headers = headers
+            }
+        )
+        Log.d("StreamedExtractor", "Fallback ExtractorLink added: $fallbackM3u8Url")
         return true
     }
 }
