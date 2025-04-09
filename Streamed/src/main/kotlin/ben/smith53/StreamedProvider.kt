@@ -18,6 +18,17 @@ class StreamedProvider : MainAPI() {
 
     private val sources = listOf("admin", "alpha", "bravo", "charlie", "delta")
     private val maxStreams = 3
+    private val fetchUrl = "https://embedstreams.top/fetch"
+    private val baseUrl = "https://rr.buytommy.top"
+    private val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
+
+    private val baseHeaders = mapOf(
+        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
+        "Accept" to "*/*",
+        "Origin" to "https://embedstreams.top",
+        "Referer" to "https://embedstreams.top/",
+        "Accept-Encoding" to "identity" // Match proxy script
+    )
 
     override val mainPage = mainPageOf(
         "$mainUrl/api/matches/live/popular" to "Popular",
@@ -87,15 +98,13 @@ class StreamedProvider : MainAPI() {
         sources.forEach { source ->
             for (streamNo in 1..maxStreams) {
                 val streamUrl = "$mainUrl/watch/$matchId/$source/$streamNo"
-                Log.d("StreamedProvider", "Attempting source: $source, streamNo: $streamNo, URL: $streamUrl")
-                val result = extractor.getUrl(streamUrl, matchId, source, streamNo, subtitleCallback, callback)
-                if (result) {
-                    Log.d("StreamedProvider", "Success for $source Stream $streamNo")
+                Log.d("StreamedProvider", "Processing stream URL: $streamUrl")
+                if (extractor.getUrl(streamUrl, matchId, source, streamNo, subtitleCallback, callback)) {
                     success = true
-                } else {
-                    Log.w("StreamedProvider", "Failed for $source Stream $streamNo")
+                    break // Stop on first success, like proxy
                 }
             }
+            if (success) return@forEach
         }
         Log.d("StreamedProvider", "Overall success: $success")
         return success
@@ -113,120 +122,116 @@ class StreamedProvider : MainAPI() {
         @JsonProperty("source") val sourceName: String,
         @JsonProperty("id") val id: String
     )
-}
 
-class StreamedExtractor {
-    private val fetchUrl = "https://embedstreams.top/fetch"
-    private val baseUrl = "https://rr.buytommy.top"
-    private val serverUrl = "https://bensmithgb53-decrypt-13.deno.dev"
-    private val baseHeaders = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
-        "Accept" to "*/*",
-        "Origin" to "https://embedstreams.top",
-        "Connection" to "keep-alive",
-        "Sec-Fetch-Dest" to "empty",
-        "Sec-Fetch-Mode" to "cors",
-        "Sec-Fetch-Site" to "cross-site"
-    )
+    inner class StreamedExtractor {
+        suspend fun getUrl(
+            streamUrl: String,
+            matchId: String,
+            source: String,
+            streamNo: Int,
+            subtitleCallback: (SubtitleFile) -> Unit,
+            callback: (ExtractorLink) -> Unit
+        ): Boolean {
+            Log.d("StreamedExtractor", "Starting extraction for: $streamUrl")
 
-    suspend fun getUrl(
-        streamUrl: String,
-        matchId: String,
-        source: String,
-        streamNo: Int,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ): Boolean {
-        Log.d("StreamedExtractor", "Starting extraction for: $streamUrl")
-
-        // Fetch stream page for cookies
-        val streamResponse = try {
-            app.get(streamUrl, headers = baseHeaders, timeout = 15)
-        } catch (e: Exception) {
-            Log.e("StreamedExtractor", "Stream page fetch failed: ${e.message}")
-            return false
-        }
-        val cookies = streamResponse.cookies
-        Log.d("StreamedExtractor", "Stream cookies: $cookies")
-
-        // POST to fetch encrypted string
-        val postData = mapOf(
-            "source" to source,
-            "id" to matchId,
-            "streamNo" to streamNo.toString()
-        )
-        val embedReferer = "https://embedstreams.top/embed/$source/$matchId/$streamNo"
-        val fetchHeaders = baseHeaders + mapOf(
-            "Referer" to streamUrl,
-            "Cookie" to cookies.entries.joinToString("; ") { "${it.key}=${it.value}" },
-            "Content-Type" to "application/json"
-        )
-        Log.d("StreamedExtractor", "Fetching with data: $postData and headers: $fetchHeaders")
-
-        val encryptedResponse = try {
-            val response = app.post(fetchUrl, headers = fetchHeaders, json = postData, timeout = 15)
-            Log.d("StreamedExtractor", "Fetch response code: ${response.code}")
-            response.text
-        } catch (e: Exception) {
-            Log.e("StreamedExtractor", "Fetch failed: ${e.message}")
-            return false
-        }
-        Log.d("StreamedExtractor", "Encrypted response: $encryptedResponse")
-
-        // Decrypt using Deno
-        val decryptUrl = "$serverUrl/decrypt"
-        val decryptPostData = mapOf("encrypted" to encryptedResponse, "referer" to embedReferer)
-        val decryptResponse = try {
-            app.post(decryptUrl, json = decryptPostData, headers = mapOf("Content-Type" to "application/json"))
-                .parsedSafe<Map<String, String>>()
-        } catch (e: Exception) {
-            Log.e("StreamedExtractor", "Decryption request failed: ${e.message}")
-            return false
-        }
-        val decryptedPath = decryptResponse?.get("decrypted") ?: return false.also { Log.e("StreamedExtractor", "Decryption failed or no 'decrypted' key") }
-        Log.d("StreamedExtractor", "Decrypted path: $decryptedPath")
-
-        // Construct M3U8 URL
-        val m3u8Url = "$baseUrl$decryptedPath"
-        Log.d("StreamedExtractor", "Constructed M3U8 URL: $m3u8Url")
-
-        // Fetch M3U8 with Python headers
-        val m3u8Headers = baseHeaders + mapOf(
-            "Referer" to "https://embedstreams.top/",
-            "Cookie" to cookies.entries.joinToString("; ") { "${it.key}=${it.value}" },
-            "Accept-Encoding" to "br"
-        )
-        val response = try {
-            app.get(m3u8Url, headers = m3u8Headers, timeout = 15)
-        } catch (e: Exception) {
-            Log.e("StreamedExtractor", "M3U8 fetch failed: ${e.message}")
-            return false
-        }
-        Log.d("StreamedExtractor", "M3U8 response code: ${response.code}")
-
-        // Use response.text directly
-        val m3u8Content = response.text
-        Log.d("StreamedExtractor", "M3U8 Content:\n$m3u8Content")
-
-        if (!m3u8Content.startsWith("#EXTM3U")) {
-            Log.e("StreamedExtractor", "Invalid M3U8 content: $m3u8Content")
-            return false
-        }
-
-        // Pass to ExoPlayer
-        callback.invoke(
-            newExtractorLink(
-                source = "Streamed",
-                name = "$source Stream $streamNo",
-                url = m3u8Url,
-                type = ExtractorLinkType.M3U8
-            ) {
-                this.referer = "https://embedstreams.top/"
-                this.quality = Qualities.Unknown.value
-                this.headers = m3u8Headers
+            // Fetch cookies
+            val streamResponse = try {
+                app.get(streamUrl, headers = baseHeaders, timeout = 15)
+            } catch (e: Exception) {
+                Log.e("StreamedExtractor", "Stream page fetch failed: ${e.message}")
+                return false
             }
-        )
-        Log.d("StreamedExtractor", "M3U8 URL added: $m3u8Url")
-        return true
+            val cookies = streamResponse.cookies
+            Log.d("StreamedExtractor", "Stream cookies: $cookies")
+
+            // Fetch encrypted string
+            val postData = mapOf(
+                "source" to source,
+                "id" to matchId,
+                "streamNo" to streamNo.toString()
+            )
+            val embedReferer = "https://embedstreams.top/embed/$source/$matchId/$streamNo"
+            val fetchHeaders = baseHeaders + mapOf(
+                "Referer" to streamUrl,
+                "Cookie" to cookies.entries.joinToString("; ") { "${it.key}=${it.value}" },
+                "Content-Type" to "application/json"
+            )
+            val encryptedResponse = try {
+                val response = app.post(fetchUrl, headers = fetchHeaders, json = postData, timeout = 15)
+                Log.d("StreamedExtractor", "Fetch response code: ${response.code}")
+                response.text
+            } catch (e: Exception) {
+                Log.e("StreamedExtractor", "Fetch failed: ${e.message}")
+                return false
+            }
+            Log.d("StreamedExtractor", "Encrypted response: $encryptedResponse")
+
+            // Decrypt
+            val decryptPostData = mapOf("encrypted" to encryptedResponse)
+            val decryptResponse = try {
+                app.post(decryptUrl, json = decryptPostData, headers = mapOf("Content-Type" to "application/json"))
+                    .parsedSafe<Map<String, String>>()
+            } catch (e: Exception) {
+                Log.e("StreamedExtractor", "Decryption failed: ${e.message}")
+                return false
+            }
+            val decryptedPath = decryptResponse?.get("decrypted") ?: return false.also {
+                Log.e("StreamedExtractor", "No decrypted path")
+            }
+            Log.d("StreamedExtractor", "Decrypted path: $decryptedPath")
+
+            // Fetch and rewrite M3U8
+            val m3u8Url = "$baseUrl$decryptedPath"
+            val m3u8Headers = baseHeaders + mapOf("Cookie" to cookies.entries.joinToString("; ") { "${it.key}=${it.value}" })
+            val m3u8Response = try {
+                app.get(m3u8Url, headers = m3u8Headers, timeout = 15)
+            } catch (e: Exception) {
+                Log.e("StreamedExtractor", "M3U8 fetch failed: ${e.message}")
+                return false
+            }
+            if (m3u8Response.code != 200 || !m3u8Response.text.startsWith("#EXTM3U")) {
+                Log.e("StreamedExtractor", "Invalid M3U8: Code ${m3u8Response.code}, Content: ${m3u8Response.text.take(100)}")
+                return false
+            }
+
+            val m3u8Content = m3u8Response.text
+            Log.d("StreamedExtractor", "Original M3U8:\n$m3u8Content")
+
+            // Rewrite M3U8 in-memory
+            val rewrittenLines = m3u8Content.split("\n").map { line ->
+                when {
+                    line.startsWith("#EXT-X-KEY") && "URI=" in line -> {
+                        val uri = line.split("URI=\"")[1].split("\"")[0]
+                        val newUri = "$baseUrl$uri"
+                        line.replace(uri, newUri)
+                    }
+                    line.startsWith("https://") -> {
+                        val originalUrl = line.trim()
+                        val segmentName = originalUrl.split("/").last().replace(".js", ".ts")
+                        "https://corsproxy.io/?url=$originalUrl" // Proxy like Python script
+                    }
+                    else -> line
+                }
+            }
+            val rewrittenM3u8 = rewrittenLines.joinToString("\n")
+            Log.d("StreamedExtractor", "Rewritten M3U8:\n$rewrittenM3u8")
+
+            // Pass to player
+            callback.invoke(
+                newExtractorLink(
+                    source = "Streamed",
+                    name = "$source Stream $streamNo",
+                    url = m3u8Url,
+                    type = ExtractorLinkType.M3U8
+                ) {
+                    this.referer = embedReferer
+                    this.quality = Qualities.Unknown.value
+                    this.headers = m3u8Headers
+                    this.m3u8ContentOverride = rewrittenM3u8 // Override with rewritten content
+                }
+            )
+            Log.d("StreamedExtractor", "M3U8 URL added: $m3u8Url")
+            return true
+        }
     }
 }
