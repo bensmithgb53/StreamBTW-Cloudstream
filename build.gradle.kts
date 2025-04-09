@@ -40,7 +40,7 @@ subprojects {
         namespace = "ben.smith53"
         defaultConfig {
             minSdk = 21
-            compileSdk = 35
+            compileSdkVersion(35)
             targetSdk = 35
         }
 
@@ -71,7 +71,7 @@ subprojects {
         implementation("org.jsoup:jsoup:1.18.1")
         implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.16.0")
         implementation("com.fasterxml.jackson.core:jackson-databind:2.16.0")
-        implementation("org.brotli:dec:0.1.2") // Must be here
+        implementation("org.brotli:dec:0.1.2") // Ensure this is correct
     }
 }
 
