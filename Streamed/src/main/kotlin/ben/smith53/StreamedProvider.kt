@@ -112,6 +112,7 @@ class StreamedProvider : MainAPI() {
 
 class StreamedExtractor {
     private val fetchUrl = "https://embedstreams.top/fetch"
+    private val baseUrl = "https://rr.buytommy.top"
     private val baseHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
         "Accept" to "*/*",
@@ -139,6 +140,7 @@ class StreamedExtractor {
         Log.d("StreamedExtractor", "Cookies: $cookies")
 
         // Step 2: Fetch encrypted path with proper headers
+        val embedReferer = "https://embedstreams.top/embed/$source/$matchId/$streamNo"
         val fetchHeaders = baseHeaders + mapOf(
             "Referer" to streamUrl,
             "Cookie" to cookies.entries.joinToString("; ") { "${it.key}=${it.value}" },
@@ -172,11 +174,13 @@ class StreamedExtractor {
         }
         Log.d("StreamedExtractor", "Decrypted path: $decryptedPath")
 
-        // Step 4: Fetch M3U8 with consistent headers
-        val m3u8Url = "https://rr.buytommy.top$decryptedPath"
+        // Step 4: Fetch M3U8 with adjusted headers to avoid 403
+        val m3u8Url = "$baseUrl$decryptedPath"
+        Log.d("StreamedExtractor", "Constructed M3U8 URL: $m3u8Url")
         val m3u8Headers = baseHeaders + mapOf(
-            "Referer" to streamUrl, // Use the watch URL as referer
-            "Cookie" to cookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
+            "Referer" to embedReferer, // Use embed URL as referer
+            "Cookie" to cookies.entries.joinToString("; ") { "${it.key}=${it.value}" },
+            "Accept-Encoding" to "gzip, deflate, br"
         )
         val m3u8Content = try {
             val response = app.get(m3u8Url, headers = m3u8Headers, timeout = 15)
@@ -192,7 +196,7 @@ class StreamedExtractor {
         // Step 5: Extract and fetch the key
         val keyUrlMatch = Regex("#EXT-X-KEY:METHOD=AES-128,URI=\"([^\"]+)\"").find(m3u8Content)
         val keyUrl = keyUrlMatch?.groupValues?.get(1)?.let {
-            if (it.startsWith("http")) it else "https://rr.buytommy.top$it"
+            if (it.startsWith("http")) it else "$baseUrl$it"
         } ?: run {
             Log.e("StreamedExtractor", "No #EXT-X-KEY found in M3U8")
             return false
@@ -208,7 +212,7 @@ class StreamedExtractor {
             } ?: throw Exception("No key content received")
         } catch (e: Exception) {
             Log.e("StreamedExtractor", "Key fetch failed: ${e.message}")
-            // Don’t fail here; let ExoPlayer try fetching the key itself
+            // Continue anyway; ExoPlayer will retry
         }
 
         // Step 6: Pass the M3U8 to ExoPlayer
@@ -219,7 +223,7 @@ class StreamedExtractor {
                 url = m3u8Url,
                 type = ExtractorLinkType.M3U8
             ) {
-                this.referer = streamUrl
+                this.referer = embedReferer
                 this.quality = Qualities.Unknown.value
                 this.headers = m3u8Headers
             }
