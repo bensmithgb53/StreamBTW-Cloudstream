@@ -9,6 +9,7 @@ import android.util.Log
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import java.util.Locale
+import org.brotli.dec.BrotliInputStream
 
 class StreamedProvider : MainAPI() {
     override var mainUrl = "https://streamed.su"
@@ -115,8 +116,14 @@ class StreamedExtractor {
     private val baseUrl = "https://rr.buytommy.top"
     private val serverUrl = "https://bensmithgb53-decrypt-13.deno.dev"
     private val baseHeaders = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
-        "Content-Type" to "application/json"
+        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
+        "Content-Type" to "application/json",
+        "Accept" to "*/*",
+        "Origin" to "https://embedstreams.top",
+        "Connection" to "keep-alive",
+        "Sec-Fetch-Dest" to "empty",
+        "Sec-Fetch-Mode" to "cors",
+        "Sec-Fetch-Site" to "cross-site"
     )
 
     suspend fun getUrl(
@@ -179,33 +186,33 @@ class StreamedExtractor {
         val m3u8Url = "$baseUrl$decryptedPath"
         Log.d("StreamedExtractor", "Constructed M3U8 URL: $m3u8Url")
 
-        // Fetch M3U8 content via Deno server
+        // Fetch M3U8 directly
         val m3u8Headers = baseHeaders + mapOf(
             "Referer" to embedReferer,
             "Cookie" to cookies.entries.joinToString("; ") { "${it.key}=${it.value}" },
             "Accept-Encoding" to "br"
         )
-        val m3u8Content = try {
-            val fetchResponse = app.post(
-                "$serverUrl/fetch-m3u8",
-                json = mapOf(
-                    "m3u8Url" to m3u8Url,
-                    "cookies" to cookies.entries.joinToString("; ") { "${it.key}=${it.value}" },
-                    "referer" to embedReferer
-                ),
-                headers = mapOf("Content-Type" to "application/json"),
-                timeout = 15
-            )
-            Log.d("StreamedExtractor", "Raw Deno response: ${fetchResponse.text}")
-            val jsonResponse = parseJson<Map<String, String>>(fetchResponse.text)
-            jsonResponse["m3u8"] ?: throw Exception("No 'm3u8' key in response - response may contain error or warning")
+        val response = try {
+            app.get(m3u8Url, headers = m3u8Headers, timeout = 15)
         } catch (e: Exception) {
             Log.e("StreamedExtractor", "M3U8 fetch failed: ${e.message}")
             return false
         }
-        Log.d("StreamedExtractor", "M3U8 content:\n$m3u8Content")
+        Log.d("StreamedExtractor", "M3U8 response code: ${response.code}")
 
-        // Verify M3U8 content
+        // Handle Brotli decompression
+        val m3u8Content = if (response.headers["Content-Encoding"]?.lowercase() == "br") {
+            try {
+                String(BrotliInputStream(response.body.byteStream()).readBytes())
+            } catch (e: Exception) {
+                Log.e("StreamedExtractor", "Brotli decompression failed: ${e.message}")
+                response.text // Fallback to raw text
+            }
+        } else {
+            response.text
+        }
+        Log.d("StreamedExtractor", "M3U8 Content:\n$m3u8Content")
+
         if (!m3u8Content.startsWith("#EXTM3U")) {
             Log.e("StreamedExtractor", "Invalid M3U8 content: $m3u8Content")
             return false
