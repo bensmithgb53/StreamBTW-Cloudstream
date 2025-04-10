@@ -11,7 +11,7 @@ buildscript {
     dependencies {
         classpath("com.android.tools.build:gradle:8.6.0")
         classpath("com.github.recloudstream:gradle:-SNAPSHOT")
-        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.10") // Downgrade to match Cloudstream3 stability
+        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.10")
     }
 }
 
@@ -23,9 +23,11 @@ allprojects {
     }
 }
 
-fun Project.cloudstream(configuration: CloudstreamExtension.() -> Unit) = extensions.getByName<CloudstreamExtension>("cloudstream").configuration()
+fun Project.cloudstream(configuration: CloudstreamExtension.() -> Unit) = 
+    extensions.getByName<CloudstreamExtension>("cloudstream").configuration()
 
-fun Project.android(configuration: BaseExtension.() -> Unit) = extensions.getByName<BaseExtension>("android").configuration()
+fun Project.android(configuration: BaseExtension.() -> Unit) = 
+    extensions.getByName<BaseExtension>("android").configuration()
 
 subprojects {
     apply(plugin = "com.android.library")
@@ -37,8 +39,7 @@ subprojects {
     }
 
     android {
-        namespace = "ben.smith53"
-        compileSdk = 35
+        compileSdkVersion(35) // Corrected to compileSdkVersion
 
         defaultConfig {
             minSdk = 21
@@ -62,8 +63,8 @@ subprojects {
         }
 
         buildTypes {
-            release {
-                minifyEnabled = false
+            getByName("release") { // Corrected buildTypes syntax
+                isMinifyEnabled = false // Corrected to isMinifyEnabled
                 proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             }
         }
@@ -73,11 +74,9 @@ subprojects {
         val apk by configurations
         val implementation by configurations
 
-        // Cloudstream3 for both runtime (apk) and compile-time (implementation)
         apk("com.lagradost:cloudstream3:pre-release")
         implementation("com.lagradost:cloudstream3:pre-release")
 
-        // Kotlin and other dependencies
         implementation(kotlin("stdlib", "1.9.10"))
         implementation("com.github.Blatzar:NiceHttp:0.4.11")
         implementation("org.jsoup:jsoup:1.18.1")
@@ -87,6 +86,6 @@ subprojects {
     }
 }
 
-task<Delete>("clean") {
-    delete(rootProject.buildDir)
+tasks.register<Delete>("clean") {
+    delete(buildDir) // Updated to use buildDir directly, avoiding deprecated getter
 }
