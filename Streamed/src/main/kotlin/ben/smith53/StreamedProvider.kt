@@ -4,8 +4,9 @@ import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
-import com.lagradost.cloudstream3.utils.SubtitleFile
+import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import android.util.Log
 import java.util.Locale
@@ -222,7 +223,7 @@ class StreamedProvider : MainAPI() {
             val rewrittenM3u8 = rewrittenLines.joinToString("\n")
             Log.d("StreamedExtractor", "Rewritten M3U8:\n$rewrittenM3u8")
 
-            // Pass to Cloudstream using newExtractorLink
+            // Pass to Cloudstream
             callback.invoke(
                 newExtractorLink(
                     source = "Streamed",
