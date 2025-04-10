@@ -39,7 +39,8 @@ subprojects {
     }
 
     android {
-        compileSdkVersion(35) // Corrected to compileSdkVersion
+        namespace = "ben.smith53.${project.name.lowercase()}" // Dynamic namespace per subproject
+        compileSdkVersion(35)
 
         defaultConfig {
             minSdk = 21
@@ -63,8 +64,8 @@ subprojects {
         }
 
         buildTypes {
-            getByName("release") { // Corrected buildTypes syntax
-                isMinifyEnabled = false // Corrected to isMinifyEnabled
+            getByName("release") {
+                isMinifyEnabled = false
                 proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             }
         }
@@ -87,5 +88,5 @@ subprojects {
 }
 
 tasks.register<Delete>("clean") {
-    delete(buildDir) // Updated to use buildDir directly, avoiding deprecated getter
+    delete(project.layout.buildDirectory) // Modern approach to avoid deprecation warning
 }
