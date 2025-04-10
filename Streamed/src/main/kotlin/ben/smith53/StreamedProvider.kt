@@ -3,10 +3,11 @@ package ben.smith53
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
-import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
 import android.util.Log
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.newExtractorLink
 import java.net.URLEncoder
 import java.util.Base64
 import java.util.Locale
@@ -225,11 +226,12 @@ class StreamedExtractor {
                 source = "Streamed",
                 name = "$source Stream $streamNo",
                 url = dataUri,
-                referer = embedReferer,
-                quality = Qualities.Unknown.value,
-                type = ExtractorLinkType.M3U8,
-                headers = m3u8Headers
-            )
+                type = ExtractorLinkType.M3U8
+            ) {
+                this.referer = embedReferer
+                this.quality = Qualities.Unknown.value
+                this.headers = m3u8Headers
+            }
         )
         Log.d("StreamedExtractor", "M3U8 data URI added: $dataUri")
         return true
