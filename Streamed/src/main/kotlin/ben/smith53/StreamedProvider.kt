@@ -3,10 +3,11 @@ package ben.smith53
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
+import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
-import android.util.Log
-import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.SubtitleFile
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import android.util.Log
 import java.util.Locale
 
 class StreamedProvider : MainAPI() {
@@ -20,7 +21,7 @@ class StreamedProvider : MainAPI() {
     private val fetchUrl = "https://embedstreams.top/fetch"
     private val baseUrl = "https://rr.buytommy.top"
     private val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
-    private val proxyUrl = "https://corsproxy.io/?url=" // Free proxy service
+    private val proxyUrl = "https://corsproxy.io/?url="
 
     private val baseHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
@@ -203,7 +204,7 @@ class StreamedProvider : MainAPI() {
             val m3u8Content = m3u8Response.text
             Log.d("StreamedExtractor", "Proxied M3U8:\n$m3u8Content")
 
-            // Rewrite segments to use proxy
+            // Rewrite segments
             val rewrittenLines = m3u8Content.split("\n").map { line ->
                 when {
                     line.startsWith("#EXT-X-KEY") && "URI=" in line -> {
@@ -221,7 +222,7 @@ class StreamedProvider : MainAPI() {
             val rewrittenM3u8 = rewrittenLines.joinToString("\n")
             Log.d("StreamedExtractor", "Rewritten M3U8:\n$rewrittenM3u8")
 
-            // Pass to Cloudstream
+            // Pass to Cloudstream using newExtractorLink
             callback.invoke(
                 newExtractorLink(
                     source = "Streamed",
