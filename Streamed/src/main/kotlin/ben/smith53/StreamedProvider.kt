@@ -3,11 +3,10 @@ package ben.smith53
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
-import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
 import android.util.Log
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.newExtractorLink
 import java.net.URLEncoder
 import java.util.Base64
 import java.util.Locale
@@ -44,7 +43,7 @@ class StreamedProvider : MainAPI() {
         val rawList = app.get(request.data).text
         val listJson = parseJson<List<Match>>(rawList)
         
-        val list = listJson.filter { match -> match.matchSources.isNotEmpty() }.map { match ->
+        val list = listJson.filter { match -> match.matchSources.isNotEmpty() }.mapNotNull { match ->
             val url = "$mainUrl/watch/${match.id}"
             newLiveSearchResponse(
                 name = match.title,
@@ -53,7 +52,7 @@ class StreamedProvider : MainAPI() {
             ) {
                 this.posterUrl = "$mainUrl${match.posterPath ?: "/api/images/poster/fallback.webp"}"
             }
-        }.filterNotNull()
+        }
 
         return newHomePageResponse(
             list = listOf(HomePageList(request.name, list, isHorizontalImages = true)),
@@ -90,7 +89,7 @@ class StreamedProvider : MainAPI() {
             for (streamNo in 1..maxStreams) {
                 val streamUrl = "$mainUrl/watch/$matchId/$source/$streamNo"
                 Log.d("StreamedProvider", "Processing stream URL: $streamUrl")
-                if (extractor.getUrl(streamUrl, match诸多Id, source, streamNo, subtitleCallback, callback)) {
+                if (extractor.getUrl(streamUrl, matchId, source, streamNo, subtitleCallback, callback)) {
                     success = true
                 }
             }
@@ -120,7 +119,7 @@ class StreamedExtractor {
         "Referer" to "https://embedstreams.top/",
         "Accept" to "*/*",
         "Origin" to "https://embedstreams.top",
-        "Accept-Encoding" to "identity" // Avoid compression issues
+        "Accept-Encoding" to "identity"
     )
 
     suspend fun getUrl(
@@ -133,7 +132,6 @@ class StreamedExtractor {
     ): Boolean {
         Log.d("StreamedExtractor", "Starting extraction for: $streamUrl")
 
-        // Step 1: Fetch stream page for cookies
         val streamResponse = try {
             app.get(streamUrl, headers = baseHeaders, timeout = 15)
         } catch (e: Exception) {
@@ -143,7 +141,6 @@ class StreamedExtractor {
         val cookies = streamResponse.cookies
         Log.d("StreamedExtractor", "Stream cookies: $cookies")
 
-        // Step 2: POST to fetch encrypted string
         val postData = mapOf(
             "source" to source,
             "id" to matchId,
@@ -167,7 +164,6 @@ class StreamedExtractor {
         }
         Log.d("StreamedExtractor", "Encrypted response: $encryptedResponse")
 
-        // Step 3: Decrypt using Deno service
         val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
         val decryptPostData = mapOf("encrypted" to encryptedResponse)
         val decryptResponse = try {
@@ -177,10 +173,11 @@ class StreamedExtractor {
             Log.e("StreamedExtractor", "Decryption request failed: ${e.message}")
             return false
         }
-        val decryptedPath = decryptResponse?.get("decrypted") ?: return false.also { Log.e("StreamedExtractor", "Decryption failed or no 'decrypted' key") }
+        val decryptedPath = decryptResponse?.get("decrypted") ?: return false.also {
+            Log.e("StreamedExtractor", "Decryption failed or no 'decrypted' key")
+        }
         Log.d("StreamedExtractor", "Decrypted path: $decryptedPath")
 
-        // Step 4: Construct and fetch M3U8 URL through proxy
         val m3u8Url = "https://rr.buytommy.top$decryptedPath"
         val proxiedM3u8Url = "$proxyBase${URLEncoder.encode(m3u8Url, "UTF-8")}"
         val m3u8Headers = baseHeaders + mapOf("Referer" to embedReferer)
@@ -200,7 +197,6 @@ class StreamedExtractor {
         val m3u8Content = m3u8Response.text
         Log.d("StreamedExtractor", "Original M3U8 content: $m3u8Content")
 
-        // Step 5: Rewrite M3U8 content
         val rewrittenLines = m3u8Content.split("\n").map { line ->
             when {
                 line.startsWith("#EXT-X-KEY") && "URI=" in line -> {
@@ -223,19 +219,17 @@ class StreamedExtractor {
         val rewrittenM3u8Content = rewrittenLines.joinToString("\n")
         Log.d("StreamedExtractor", "Rewritten M3U8 content: $rewrittenM3u8Content")
 
-        // Step 6: Encode as data URI and provide to Cloudstream3
         val dataUri = "data:application/vnd.apple.mpegurl;base64,${Base64.getEncoder().encodeToString(rewrittenM3u8Content.toByteArray())}"
         callback.invoke(
             newExtractorLink(
                 source = "Streamed",
                 name = "$source Stream $streamNo",
                 url = dataUri,
-                type = ExtractorLinkType.M3U8
-            ) {
-                this.referer = embedReferer
-                this.quality = Qualities.Unknown.value
-                this.headers = m3u8Headers
-            }
+                referer = embedReferer,
+                quality = Qualities.Unknown.value,
+                type = ExtractorLinkType.M3U8,
+                headers = m3u8Headers
+            )
         )
         Log.d("StreamedExtractor", "M3U8 data URI added: $dataUri")
         return true
