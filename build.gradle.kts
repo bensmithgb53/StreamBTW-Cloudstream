@@ -11,7 +11,7 @@ buildscript {
     dependencies {
         classpath("com.android.tools.build:gradle:8.6.0")
         classpath("com.github.recloudstream:gradle:-SNAPSHOT")
-        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:2.1.0")
+        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.10") // Downgrade to match Cloudstream3 stability
     }
 }
 
@@ -38,9 +38,10 @@ subprojects {
 
     android {
         namespace = "ben.smith53"
+        compileSdk = 35
+
         defaultConfig {
             minSdk = 21
-            compileSdkVersion(35)
             targetSdk = 35
         }
 
@@ -52,10 +53,18 @@ subprojects {
         tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
             kotlinOptions {
                 jvmTarget = "1.8"
-                freeCompilerArgs = freeCompilerArgs +
-                        "-Xno-call-assertions" +
-                        "-Xno-param-assertions" +
-                        "-Xno-receiver-assertions"
+                freeCompilerArgs = freeCompilerArgs + listOf(
+                    "-Xno-call-assertions",
+                    "-Xno-param-assertions",
+                    "-Xno-receiver-assertions"
+                )
+            }
+        }
+
+        buildTypes {
+            release {
+                minifyEnabled = false
+                proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             }
         }
     }
@@ -64,14 +73,17 @@ subprojects {
         val apk by configurations
         val implementation by configurations
 
+        // Cloudstream3 for both runtime (apk) and compile-time (implementation)
         apk("com.lagradost:cloudstream3:pre-release")
+        implementation("com.lagradost:cloudstream3:pre-release")
 
-        implementation(kotlin("stdlib"))
+        // Kotlin and other dependencies
+        implementation(kotlin("stdlib", "1.9.10"))
         implementation("com.github.Blatzar:NiceHttp:0.4.11")
         implementation("org.jsoup:jsoup:1.18.1")
         implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.16.0")
         implementation("com.fasterxml.jackson.core:jackson-databind:2.16.0")
-        implementation("org.brotli:dec:0.1.2") // Ensure this is correct
+        implementation("org.brotli:dec:0.1.2")
     }
 }
 
