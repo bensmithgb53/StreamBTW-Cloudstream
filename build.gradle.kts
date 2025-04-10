@@ -40,7 +40,7 @@ subprojects {
 
     android {
         namespace = "ben.smith53.${project.name.lowercase()}" // Dynamic namespace for multi-module
-        compileSdkVersion(35) // Moved from defaultConfig to top-level for AGP 8.6.0
+        compileSdkVersion(35)
 
         defaultConfig {
             minSdk = 21
@@ -75,19 +75,17 @@ subprojects {
         val apk by configurations
         val implementation by configurations
 
-        // Use a stable Cloudstream3 version instead of pre-release
-        apk("com.lagradost:cloudstream3:3.2.2")
-        implementation("com.lagradost:cloudstream3:3.2.2") // Added for compile-time access
+        apk("com.lagradost:cloudstream3:3.2.2") // Stable version
+        implementation("com.lagradost:cloudstream3:3.2.2") // Compile-time access
 
         implementation(kotlin("stdlib", "1.9.10"))
         implementation("com.github.Blatzar:NiceHttp:0.4.11")
         implementation("org.jsoup:jsoup:1.18.1")
         implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.16.0")
         implementation("com.fasterxml.jackson.core:jackson-databind:2.16.0")
-        implementation("org.brotli:dec:0.1.2") // Added back for completeness
     }
 }
 
 tasks.register<Delete>("clean") {
-    delete(project.layout.buildDirectory) // Updated to avoid deprecation warning
+    delete(project.layout.buildDirectory) // Modern API
 }
