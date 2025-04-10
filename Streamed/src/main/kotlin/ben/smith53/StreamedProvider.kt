@@ -171,51 +171,72 @@ class StreamedProvider : MainAPI() {
             // Decrypt via Deno server
             val decryptPostData = mapOf("encrypted" to encryptedResponse)
             val decryptResponse = try {
-                app.post(decryptUrl, json = decryptPostData, headers = mapOf("Content-Type" to "application/json"))
-                    .parsedSafe<Map<String, String>>()
+                val response = app.post(decryptUrl, json = decryptPostData, headers = mapOf("Content-Type" to "application/json"))
+                Log.d("StreamedExtractor", "Decrypt response code: ${response.code}, body: ${response.text}")
+                response.parsedSafe<Map<String, String>>()
             } catch (e: Exception) {
                 Log.e("StreamedExtractor", "Decryption failed: ${e.message}")
                 return false
             }
             val decryptedPath = decryptResponse?.get("decrypted") ?: return false.also {
-                Log.e("StreamedExtractor", "No decrypted path")
+                Log.e("StreamedExtractor", "No decrypted path in response: $decryptResponse")
             }
             Log.d("StreamedExtractor", "Decrypted path: $decryptedPath")
 
-            // Proxy the M3U8 URL
+            // Construct M3U8 URL
             val m3u8Url = "$baseUrl$decryptedPath"
             val proxiedM3u8Url = "$proxyUrl$m3u8Url"
             val m3u8Headers = baseHeaders + mapOf(
                 "Cookie" to cookies.entries.joinToString("; ") { "${it.key}=${it.value}" },
                 "Referer" to embedReferer
             )
+            Log.d("StreamedExtractor", "Raw M3U8 URL: $m3u8Url")
+            Log.d("StreamedExtractor", "Proxied M3U8 URL: $proxiedM3u8Url")
 
-            // Fetch proxied M3U8
+            // Fetch M3U8
             val m3u8Response = try {
-                app.get(proxiedM3u8Url, headers = m3u8Headers, timeout = 15)
+                val response = app.get(m3u8Url, headers = m3u8Headers, timeout = 15)
+                Log.d("StreamedExtractor", "M3U8 fetch: Code ${response.code}, Content: ${response.text.take(100)}")
+                response
             } catch (e: Exception) {
-                Log.e("StreamedExtractor", "Proxied M3U8 fetch failed: ${e.message}")
+                Log.e("StreamedExtractor", "M3U8 fetch failed: ${e.message}")
                 return false
             }
+
             if (m3u8Response.code != 200 || !m3u8Response.text.startsWith("#EXTM3U")) {
-                Log.e("StreamedExtractor", "Invalid proxied M3U8: Code ${m3u8Response.code}, Content: ${m3u8Response.text.take(100)}")
+                Log.e("StreamedExtractor", "Invalid M3U8: Code ${m3u8Response.code}, Content: ${m3u8Response.text.take(100)}")
                 return false
             }
 
             val m3u8Content = m3u8Response.text
-            Log.d("StreamedExtractor", "Proxied M3U8:\n$m3u8Content")
+            Log.d("StreamedExtractor", "Raw M3U8:\n$m3u8Content")
 
-            // Rewrite segments
+            // Rewrite M3U8: Resolve .js URLs through proxy
             val rewrittenLines = m3u8Content.split("\n").map { line ->
                 when {
                     line.startsWith("#EXT-X-KEY") && "URI=" in line -> {
                         val uri = line.split("URI=\"")[1].split("\"")[0]
-                        val newUri = "$proxyUrl$baseUrl$uri"
+                        val newUri = if (uri.startsWith("http")) "$proxyUrl$uri" else "$proxyUrl$baseUrl$uri"
+                        Log.d("StreamedExtractor", "Rewriting key URI: $uri -> $newUri")
                         line.replace(uri, newUri)
                     }
-                    line.startsWith("https://") -> {
-                        val originalUrl = line.trim()
-                        "$proxyUrl$originalUrl"
+                    line.endsWith(".js") -> {
+                        val jsUrl = line.trim()
+                        val proxiedJsUrl = jsUrl // Already proxied in the raw M3U8
+                        try {
+                            val jsResponse = app.get(proxiedJsUrl, headers = m3u8Headers, timeout = 15)
+                            Log.d("StreamedExtractor", "Fetched .js URL: $proxiedJsUrl, Code: ${jsResponse.code}")
+                            if (jsResponse.code == 200) {
+                                // Assume the proxy returns the video segment URL directly
+                                proxiedJsUrl // Keep as-is if proxy resolves it
+                            } else {
+                                Log.e("StreamedExtractor", "Failed to resolve .js URL: $proxiedJsUrl, Code: ${jsResponse.code}")
+                                line // Fallback to original if unresolvable
+                            }
+                        } catch (e: Exception) {
+                            Log.e("StreamedExtractor", "Error fetching .js URL: $proxiedJsUrl, ${e.message}")
+                            line // Fallback to original
+                        }
                     }
                     else -> line
                 }
