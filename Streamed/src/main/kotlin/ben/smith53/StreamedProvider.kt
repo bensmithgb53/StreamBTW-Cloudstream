@@ -8,6 +8,8 @@ import com.lagradost.cloudstream3.utils.Qualities
 import android.util.Log
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import java.net.URLEncoder
+import java.util.Base64
 import java.util.Locale
 
 class StreamedProvider : MainAPI() {
@@ -88,7 +90,7 @@ class StreamedProvider : MainAPI() {
             for (streamNo in 1..maxStreams) {
                 val streamUrl = "$mainUrl/watch/$matchId/$source/$streamNo"
                 Log.d("StreamedProvider", "Processing stream URL: $streamUrl")
-                if (extractor.getUrl(streamUrl, matchId, source, streamNo, subtitleCallback, callback)) {
+                if (extractor.getUrl(streamUrl, match诸多Id, source, streamNo, subtitleCallback, callback)) {
                     success = true
                 }
             }
@@ -112,8 +114,10 @@ class StreamedProvider : MainAPI() {
 
 class StreamedExtractor {
     private val fetchUrl = "https://embedstreams.top/fetch"
+    private val proxyBase = "https://corsproxy.io/?" // Free CORS proxy
     private val baseHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
+        "Referer" to "https://embedstreams.top/",
         "Accept" to "*/*",
         "Origin" to "https://embedstreams.top",
         "Accept-Encoding" to "identity" // Avoid compression issues
@@ -129,7 +133,7 @@ class StreamedExtractor {
     ): Boolean {
         Log.d("StreamedExtractor", "Starting extraction for: $streamUrl")
 
-        // Fetch stream page for cookies
+        // Step 1: Fetch stream page for cookies
         val streamResponse = try {
             app.get(streamUrl, headers = baseHeaders, timeout = 15)
         } catch (e: Exception) {
@@ -139,7 +143,7 @@ class StreamedExtractor {
         val cookies = streamResponse.cookies
         Log.d("StreamedExtractor", "Stream cookies: $cookies")
 
-        // POST to fetch encrypted string
+        // Step 2: POST to fetch encrypted string
         val postData = mapOf(
             "source" to source,
             "id" to matchId,
@@ -155,6 +159,7 @@ class StreamedExtractor {
         val encryptedResponse = try {
             val response = app.post(fetchUrl, headers = fetchHeaders, json = postData, timeout = 15)
             Log.d("StreamedExtractor", "Fetch response code: ${response.code}")
+            if (response.code != 200) return false
             response.text
         } catch (e: Exception) {
             Log.e("StreamedExtractor", "Fetch failed: ${e.message}")
@@ -162,11 +167,11 @@ class StreamedExtractor {
         }
         Log.d("StreamedExtractor", "Encrypted response: $encryptedResponse")
 
-        // Decrypt using Deno
+        // Step 3: Decrypt using Deno service
         val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
         val decryptPostData = mapOf("encrypted" to encryptedResponse)
         val decryptResponse = try {
-            app.post(decryptUrl, json = decryptPostData, headers = mapOf("Content-Type" to "application/json"))
+            app.post(decryptUrl, json = decryptPostData, headers = mapOf("Content-Type" to "application/json"), timeout = 15)
                 .parsedSafe<Map<String, String>>()
         } catch (e: Exception) {
             Log.e("StreamedExtractor", "Decryption request failed: ${e.message}")
@@ -175,48 +180,64 @@ class StreamedExtractor {
         val decryptedPath = decryptResponse?.get("decrypted") ?: return false.also { Log.e("StreamedExtractor", "Decryption failed or no 'decrypted' key") }
         Log.d("StreamedExtractor", "Decrypted path: $decryptedPath")
 
-        // Construct M3U8 URL with embed referer
+        // Step 4: Construct and fetch M3U8 URL through proxy
         val m3u8Url = "https://rr.buytommy.top$decryptedPath"
+        val proxiedM3u8Url = "$proxyBase${URLEncoder.encode(m3u8Url, "UTF-8")}"
         val m3u8Headers = baseHeaders + mapOf("Referer" to embedReferer)
 
-        // Fetch and potentially rewrite M3U8 content (proxy-like behavior)
-        try {
-            val m3u8Response = app.get(m3u8Url, headers = m3u8Headers, timeout = 15)
-            if (m3u8Response.code == 200) {
-                Log.d("StreamedExtractor", "M3U8 fetched successfully: $m3u8Url")
-                callback.invoke(
-                    newExtractorLink(
-                        source = "Streamed",
-                        name = "$source Stream $streamNo",
-                        url = m3u8Url,
-                        type = ExtractorLinkType.M3U8
-                    ) {
-                        this.referer = embedReferer
-                        this.quality = Qualities.Unknown.value
-                        this.headers = m3u8Headers
-                    }
-                )
-                return true
-            } else {
-                Log.e("StreamedExtractor", "M3U8 fetch failed with code: ${m3u8Response.code}")
-                return false
-            }
+        val m3u8Response = try {
+            app.get(proxiedM3u8Url, headers = m3u8Headers, timeout = 15)
         } catch (e: Exception) {
-            Log.e("StreamedExtractor", "M3U8 fetch failed: ${e.message}")
-            // Add link anyway as fallback
-            callback.invoke(
-                newExtractorLink(
-                    source = "Streamed",
-                    name = "$source Stream $streamNo",
-                    url = m3u8Url,
-                    type = ExtractorLinkType.M3U8
-                ) {
-                    this.referer = embedReferer
-                    this.quality = Qualities.Unknown.value
-                    this.headers = m3u8Headers
-                }
-            )
-            return true // Return true to indicate a link was provided, even if it might not work
+            Log.e("StreamedExtractor", "Proxied M3U8 fetch failed: ${e.message}")
+            return false
         }
+
+        if (m3u8Response.code != 200) {
+            Log.e("StreamedExtractor", "Proxied M3U8 fetch failed with code: ${m3u8Response.code}")
+            return false
+        }
+
+        val m3u8Content = m3u8Response.text
+        Log.d("StreamedExtractor", "Original M3U8 content: $m3u8Content")
+
+        // Step 5: Rewrite M3U8 content
+        val rewrittenLines = m3u8Content.split("\n").map { line ->
+            when {
+                line.startsWith("#EXT-X-KEY") && "URI=" in line -> {
+                    val originalKeyUri = line.split("URI=\"")[1].split("\"")[0]
+                    val proxiedKeyUri = "$proxyBase${URLEncoder.encode(originalKeyUri, "UTF-8")}"
+                    line.replace(originalKeyUri, proxiedKeyUri)
+                }
+                line.startsWith("https://") -> {
+                    val originalUrl = line.trim()
+                    val proxiedUrl = if (originalUrl.contains("rr.buytommy.top")) {
+                        "$proxyBase${URLEncoder.encode(originalUrl.replace(".js", ".ts"), "UTF-8")}"
+                    } else {
+                        "$proxyBase${URLEncoder.encode(originalUrl.replace(".ts", ".js"), "UTF-8")}"
+                    }
+                    proxiedUrl
+                }
+                else -> line
+            }
+        }
+        val rewrittenM3u8Content = rewrittenLines.joinToString("\n")
+        Log.d("StreamedExtractor", "Rewritten M3U8 content: $rewrittenM3u8Content")
+
+        // Step 6: Encode as data URI and provide to Cloudstream3
+        val dataUri = "data:application/vnd.apple.mpegurl;base64,${Base64.getEncoder().encodeToString(rewrittenM3u8Content.toByteArray())}"
+        callback.invoke(
+            newExtractorLink(
+                source = "Streamed",
+                name = "$source Stream $streamNo",
+                url = dataUri,
+                type = ExtractorLinkType.M3U8
+            ) {
+                this.referer = embedReferer
+                this.quality = Qualities.Unknown.value
+                this.headers = m3u8Headers
+            }
+        )
+        Log.d("StreamedExtractor", "M3U8 data URI added: $dataUri")
+        return true
     }
 }
