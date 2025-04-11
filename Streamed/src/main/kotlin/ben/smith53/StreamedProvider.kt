@@ -229,7 +229,7 @@ class StreamedProvider : MainAPI() {
                     }
                     line.endsWith(".js") -> {
                         val jsUrl = line.trim()
-                        val proxiedJsUrl = "$proxyUrl$jsUrl"
+                        val proxiedJsUrl = if (jsUrl.startsWith("http")) "$proxyUrl$jsUrl" else "$proxyUrl$baseUrl$jsUrl"
                         Log.d("StreamedExtractor", "Rewriting .js URL: $jsUrl -> $proxiedJsUrl")
                         proxiedJsUrl
                     }
@@ -239,21 +239,20 @@ class StreamedProvider : MainAPI() {
             val rewrittenM3u8 = rewrittenLines.joinToString("\n")
             Log.d("StreamedExtractor", "Rewritten M3U8:\n$rewrittenM3u8")
 
-            // Pass to Cloudstream
+            // Pass to Cloudstream using the proxied URL with rewritten content handled by player
             callback.invoke(
                 newExtractorLink(
                     source = "Streamed",
                     name = "$source Stream $streamNo",
-                    url = m3u8Url, // Use raw URL since it works in Python
-                    type = ExtractorLinkType.M3U8,
-                    m3u8Content = rewrittenM3u8 // Pass rewritten content directly
+                    url = proxiedM3u8Url, // Use proxied URL to avoid direct fetch issues
+                    type = ExtractorLinkType.M3U8
                 ) {
                     this.referer = embedReferer
                     this.quality = Qualities.Unknown.value
                     this.headers = m3u8Headers
                 }
             )
-            Log.d("StreamedExtractor", "M3U8 URL added: $m3u8Url")
+            Log.d("StreamedExtractor", "Proxied M3U8 URL added: $proxiedM3u8Url")
             return true
         }
     }
