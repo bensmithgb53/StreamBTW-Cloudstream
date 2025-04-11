@@ -22,7 +22,7 @@ class StreamedProvider : MainAPI() {
     private val fetchUrl = "https://embedstreams.top/fetch"
     private val baseUrl = "https://rr.buytommy.top"
     private val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
-    private val proxyUrl = "https://corsproxy.io/?url=" // Fallback: "https://api.allorigins.win/raw?url="
+    private val proxyUrl = "https://corsproxy.io/?url="
 
     private val baseHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
@@ -186,9 +186,10 @@ class StreamedProvider : MainAPI() {
             // Construct M3U8 URL
             val m3u8Url = "$baseUrl$decryptedPath"
             val proxiedM3u8Url = "$proxyUrl$m3u8Url"
-            val m3u8Headers = baseHeaders + mapOf(
-                "Cookie" to cookies.entries.joinToString("; ") { "${it.key}=${it.value}" },
-                "Referer" to embedReferer
+            val m3u8Headers = mapOf(
+                "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
+                "Referer" to embedReferer,
+                "Cookie" to cookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
             )
             Log.d("StreamedExtractor", "Raw M3U8 URL: $m3u8Url")
             Log.d("StreamedExtractor", "Proxied M3U8 URL: $proxiedM3u8Url")
@@ -197,22 +198,25 @@ class StreamedProvider : MainAPI() {
             val m3u8Response = try {
                 val rawResponse = app.get(m3u8Url, headers = m3u8Headers, timeout = 15)
                 Log.d("StreamedExtractor", "Raw M3U8 fetch: Code ${rawResponse.code}, Content: ${rawResponse.text.take(100)}")
-                rawResponse
+                if (rawResponse.code == 200 && rawResponse.text.startsWith("#EXTM3U")) {
+                    rawResponse
+                } else {
+                    throw Exception("Raw fetch failed: Code ${rawResponse.code}")
+                }
             } catch (e: Exception) {
                 Log.e("StreamedExtractor", "Raw M3U8 fetch failed: ${e.message}")
                 try {
                     val proxyResponse = app.get(proxiedM3u8Url, headers = m3u8Headers, timeout = 15)
                     Log.d("StreamedExtractor", "Proxied M3U8 fetch: Code ${proxyResponse.code}, Content: ${proxyResponse.text.take(100)}")
-                    proxyResponse
+                    if (proxyResponse.code == 200 && proxyResponse.text.startsWith("#EXTM3U")) {
+                        proxyResponse
+                    } else {
+                        throw Exception("Proxy fetch failed: Code ${proxyResponse.code}")
+                    }
                 } catch (e: Exception) {
                     Log.e("StreamedExtractor", "Proxied M3U8 fetch failed: ${e.message}")
                     return false
                 }
-            }
-
-            if (m3u8Response.code != 200 || !m3u8Response.text.startsWith("#EXTM3U")) {
-                Log.e("StreamedExtractor", "Invalid M3U8: Code ${m3u8Response.code}, Content: ${m3u8Response.text.take(100)}")
-                return false
             }
 
             val m3u8Content = m3u8Response.text
@@ -229,7 +233,7 @@ class StreamedProvider : MainAPI() {
                     }
                     line.endsWith(".js") -> {
                         val jsUrl = line.trim()
-                        val proxiedJsUrl = if (jsUrl.startsWith("http")) "$proxyUrl$jsUrl" else "$proxyUrl$baseUrl$jsUrl"
+                        val proxiedJsUrl = if (jsUrl.startsWith("http")) jsUrl else "$proxyUrl$baseUrl$jsUrl"
                         Log.d("StreamedExtractor", "Rewriting .js URL: $jsUrl -> $proxiedJsUrl")
                         proxiedJsUrl
                     }
@@ -239,12 +243,12 @@ class StreamedProvider : MainAPI() {
             val rewrittenM3u8 = rewrittenLines.joinToString("\n")
             Log.d("StreamedExtractor", "Rewritten M3U8:\n$rewrittenM3u8")
 
-            // Pass to Cloudstream using the proxied URL with rewritten content handled by player
+            // Pass to Cloudstream
             callback.invoke(
                 newExtractorLink(
                     source = "Streamed",
                     name = "$source Stream $streamNo",
-                    url = proxiedM3u8Url, // Use proxied URL to avoid direct fetch issues
+                    url = if (m3u8Response.url == m3u8Url) m3u8Url else proxiedM3u8Url,
                     type = ExtractorLinkType.M3U8
                 ) {
                     this.referer = embedReferer
@@ -252,7 +256,7 @@ class StreamedProvider : MainAPI() {
                     this.headers = m3u8Headers
                 }
             )
-            Log.d("StreamedExtractor", "Proxied M3U8 URL added: $proxiedM3u8Url")
+            Log.d("StreamedExtractor", "M3U8 URL added: ${if (m3u8Response.url == m3u8Url) m3u8Url else proxiedM3u8Url}")
             return true
         }
     }
