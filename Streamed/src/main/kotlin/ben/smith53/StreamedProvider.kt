@@ -18,12 +18,12 @@ class StreamedProvider : MainAPI() {
     override var supportedTypes = setOf(TvType.Live)
     override val hasMainPage = true
 
-    private val sources = listOf("alpha", "bravo", "charlie", "delta")
+    private val sources = listOf("alpha", "bravo", "charlie", "delta") // Exclude "admin"
     private val maxStreams = 3
     private val fetchUrl = "https://embedstreams.top/fetch"
     private val baseUrl = "https://rr.buytommy.top"
     private val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
-    private val proxyServerUrl = "http://10.96.181.205:8000"
+    private val proxyServerUrl = "https://owen-decrypt-79.deno.dev/"
 
     private val baseHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
@@ -96,21 +96,20 @@ class StreamedProvider : MainAPI() {
     ): Boolean {
         val matchId = data.substringAfterLast("/")
         val extractor = StreamedExtractor()
-        var success = false
+        var hasValidSource = false
 
         sources.forEach { source ->
             for (streamNo in 1..maxStreams) {
                 val streamUrl = "$mainUrl/watch/$matchId/$source/$streamNo"
                 Log.d("StreamedProvider", "Processing stream URL: $streamUrl")
                 if (extractor.getUrl(streamUrl, matchId, source, streamNo, subtitleCallback, callback)) {
-                    success = true
-                    break
+                    hasValidSource = true
+                    // No break here—continue to collect all sources
                 }
             }
-            if (success) return@forEach
         }
-        Log.d("StreamedProvider", "Overall success: $success")
-        return success
+        Log.d("StreamedProvider", "Overall success: $hasValidSource")
+        return hasValidSource
     }
 
     data class Match(
