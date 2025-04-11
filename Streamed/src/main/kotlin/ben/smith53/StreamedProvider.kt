@@ -17,12 +17,12 @@ class StreamedProvider : MainAPI() {
     override var supportedTypes = setOf(TvType.Live)
     override val hasMainPage = true
 
-    private val sources = listOf("admin", "alpha", "bravo", "charlie", "delta")
+    private val sources = listOf("alpha", "bravo", "charlie", "delta")
     private val maxStreams = 3
     private val fetchUrl = "https://embedstreams.top/fetch"
     private val baseUrl = "https://rr.buytommy.top"
     private val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
-    private val proxyUrl = "https://corsproxy.io/?url="
+    private val proxyUrl = "https://corsproxy.io/?url=" // Fallback: "https://api.allorigins.win/raw?url="
 
     private val baseHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
@@ -193,14 +193,21 @@ class StreamedProvider : MainAPI() {
             Log.d("StreamedExtractor", "Raw M3U8 URL: $m3u8Url")
             Log.d("StreamedExtractor", "Proxied M3U8 URL: $proxiedM3u8Url")
 
-            // Fetch M3U8
+            // Fetch M3U8 (try raw first, then proxy)
             val m3u8Response = try {
-                val response = app.get(m3u8Url, headers = m3u8Headers, timeout = 15)
-                Log.d("StreamedExtractor", "M3U8 fetch: Code ${response.code}, Content: ${response.text.take(100)}")
-                response
+                val rawResponse = app.get(m3u8Url, headers = m3u8Headers, timeout = 15)
+                Log.d("StreamedExtractor", "Raw M3U8 fetch: Code ${rawResponse.code}, Content: ${rawResponse.text.take(100)}")
+                rawResponse
             } catch (e: Exception) {
-                Log.e("StreamedExtractor", "M3U8 fetch failed: ${e.message}")
-                return false
+                Log.e("StreamedExtractor", "Raw M3U8 fetch failed: ${e.message}")
+                try {
+                    val proxyResponse = app.get(proxiedM3u8Url, headers = m3u8Headers, timeout = 15)
+                    Log.d("StreamedExtractor", "Proxied M3U8 fetch: Code ${proxyResponse.code}, Content: ${proxyResponse.text.take(100)}")
+                    proxyResponse
+                } catch (e: Exception) {
+                    Log.e("StreamedExtractor", "Proxied M3U8 fetch failed: ${e.message}")
+                    return false
+                }
             }
 
             if (m3u8Response.code != 200 || !m3u8Response.text.startsWith("#EXTM3U")) {
@@ -211,7 +218,7 @@ class StreamedProvider : MainAPI() {
             val m3u8Content = m3u8Response.text
             Log.d("StreamedExtractor", "Raw M3U8:\n$m3u8Content")
 
-            // Rewrite M3U8: Resolve .js URLs through proxy
+            // Rewrite M3U8: Proxy .js URLs
             val rewrittenLines = m3u8Content.split("\n").map { line ->
                 when {
                     line.startsWith("#EXT-X-KEY") && "URI=" in line -> {
@@ -222,21 +229,9 @@ class StreamedProvider : MainAPI() {
                     }
                     line.endsWith(".js") -> {
                         val jsUrl = line.trim()
-                        val proxiedJsUrl = jsUrl // Already proxied in the raw M3U8
-                        try {
-                            val jsResponse = app.get(proxiedJsUrl, headers = m3u8Headers, timeout = 15)
-                            Log.d("StreamedExtractor", "Fetched .js URL: $proxiedJsUrl, Code: ${jsResponse.code}")
-                            if (jsResponse.code == 200) {
-                                // Assume the proxy returns the video segment URL directly
-                                proxiedJsUrl // Keep as-is if proxy resolves it
-                            } else {
-                                Log.e("StreamedExtractor", "Failed to resolve .js URL: $proxiedJsUrl, Code: ${jsResponse.code}")
-                                line // Fallback to original if unresolvable
-                            }
-                        } catch (e: Exception) {
-                            Log.e("StreamedExtractor", "Error fetching .js URL: $proxiedJsUrl, ${e.message}")
-                            line // Fallback to original
-                        }
+                        val proxiedJsUrl = "$proxyUrl$jsUrl"
+                        Log.d("StreamedExtractor", "Rewriting .js URL: $jsUrl -> $proxiedJsUrl")
+                        proxiedJsUrl
                     }
                     else -> line
                 }
@@ -249,15 +244,16 @@ class StreamedProvider : MainAPI() {
                 newExtractorLink(
                     source = "Streamed",
                     name = "$source Stream $streamNo",
-                    url = proxiedM3u8Url,
-                    type = ExtractorLinkType.M3U8
+                    url = m3u8Url, // Use raw URL since it works in Python
+                    type = ExtractorLinkType.M3U8,
+                    m3u8Content = rewrittenM3u8 // Pass rewritten content directly
                 ) {
                     this.referer = embedReferer
                     this.quality = Qualities.Unknown.value
                     this.headers = m3u8Headers
                 }
             )
-            Log.d("StreamedExtractor", "Proxied M3U8 URL added: $proxiedM3u8Url")
+            Log.d("StreamedExtractor", "M3U8 URL added: $m3u8Url")
             return true
         }
     }
