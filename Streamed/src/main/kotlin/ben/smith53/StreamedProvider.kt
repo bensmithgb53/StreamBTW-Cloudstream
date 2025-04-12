@@ -58,22 +58,12 @@ class StreamedProvider : MainAPI() {
         
         val list = listJson.filter { match -> match.matchSources.isNotEmpty() }.map { match ->
             val url = "$mainUrl/watch/${match.id}"
-            val status = when {
-                match.isLive == true -> "LIVE"
-                match.startTime != null -> match.startTime
-                else -> null
-            }
-            val posterUrl = if (status != null) {
-                "$proxyServerUrl/poster?url=${URLEncoder.encode("$mainUrl${match.posterPath ?: "/api/images/poster/fallback.webp"}", "UTF-8")}&status=${URLEncoder.encode(status, "UTF-8")}"
-            } else {
-                "$mainUrl${match.posterPath ?: "/api/images/poster/fallback.webp"}"
-            }
             newLiveSearchResponse(
                 name = match.title,
                 url = url,
                 type = TvType.Live
             ) {
-                this.posterUrl = posterUrl
+                this.posterUrl = "$mainUrl${match.posterPath ?: "/api/images/poster/fallback.webp"}"
             }
         }.filterNotNull()
 
@@ -126,9 +116,7 @@ class StreamedProvider : MainAPI() {
         @JsonProperty("title") val title: String,
         @JsonProperty("poster") val posterPath: String? = null,
         @JsonProperty("popular") val popular: Boolean = false,
-        @JsonProperty("sources") val matchSources: ArrayList<MatchSource> = arrayListOf(),
-        @JsonProperty("isLive") val isLive: Boolean? = null, // Adjust based on actual API field
-        @JsonProperty("startTime") val startTime: String? = null // Adjust based on actual API field
+        @JsonProperty("sources") val matchSources: ArrayList<MatchSource> = arrayListOf()
     )
 
     data class MatchSource(
@@ -147,6 +135,7 @@ class StreamedProvider : MainAPI() {
         ): Boolean {
             Log.d("StreamedExtractor", "Starting extraction for: $streamUrl")
 
+            // Fetch stream page to get cookies
             val streamResponse = try {
                 app.get(streamUrl, headers = baseHeaders, timeout = 15)
             } catch (e: Exception) {
@@ -156,6 +145,7 @@ class StreamedProvider : MainAPI() {
             val cookies = streamResponse.cookies
             Log.d("StreamedExtractor", "Stream cookies: $cookies")
 
+            // Fetch encrypted string
             val postData = mapOf(
                 "source" to source,
                 "id" to matchId,
@@ -169,7 +159,7 @@ class StreamedProvider : MainAPI() {
             )
             val encryptedResponse = try {
                 val response = app.post(fetchUrl, headers = fetchHeaders, json = postData, timeout = 15)
-                Log.d("StreamedExtractor", "Fetch response code: ${response.code}")
+                Log.d("StreamedExtractor", "Fetch response code: ${response.code}, headers: ${response.headers}")
                 response.text
             } catch (e: Exception) {
                 Log.e("StreamedExtractor", "Fetch failed: ${e.message}")
@@ -177,6 +167,7 @@ class StreamedProvider : MainAPI() {
             }
             Log.d("StreamedExtractor", "Encrypted response: $encryptedResponse")
 
+            // Decrypt via Deno server
             val decryptPostData = mapOf("encrypted" to encryptedResponse)
             val decryptResponse = try {
                 val response = app.post(decryptUrl, json = decryptPostData, headers = mapOf("Content-Type" to "application/json"))
@@ -191,15 +182,23 @@ class StreamedProvider : MainAPI() {
             }
             Log.d("StreamedExtractor", "Decrypted path: $decryptedPath")
 
+            // Construct proxy M3U8 URL with cookies and token (if present)
             val m3u8Url = "$baseUrl$decryptedPath"
             val encodedM3u8Url = URLEncoder.encode(m3u8Url, "UTF-8")
-            val proxyM3u8Url = "$proxyServerUrl/playlist.m3u8?url=$encodedM3u8Url"
+            val encodedCookies = URLEncoder.encode(cookies.entries.joinToString("; ") { "${it.key}=${it.value}" }, "UTF-8")
+            // Check for token in fetch response headers (e.g., Authorization)
+            val token = fetchHeaders["Authorization"]?.let { URLEncoder.encode(it, "UTF-8") } ?: ""
+            val proxyM3u8Url = buildString {
+                append("$proxyServerUrl/playlist.m3u8?url=$encodedM3u8Url&cookies=$encodedCookies")
+                if (token.isNotEmpty()) append("&token=$token")
+            }
             val m3u8Headers = mapOf(
                 "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
                 "Referer" to embedReferer
             )
             Log.d("StreamedExtractor", "Proxy M3U8 URL: $proxyM3u8Url")
 
+            // Fetch M3U8 from proxy
             val m3u8Response = try {
                 val response = app.get(proxyM3u8Url, headers = m3u8Headers, timeout = 15)
                 Log.d("StreamedExtractor", "Proxy M3U8 fetch: Code ${response.code}, Content: ${response.text.take(100)}")
@@ -212,6 +211,7 @@ class StreamedProvider : MainAPI() {
             val m3u8Content = m3u8Response.text
             Log.d("StreamedExtractor", "Proxy M3U8:\n$m3u8Content")
 
+            // Pass to Cloudstream
             callback.invoke(
                 newExtractorLink(
                     source = "Streamed",
