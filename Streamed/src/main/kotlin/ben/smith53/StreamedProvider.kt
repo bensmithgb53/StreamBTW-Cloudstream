@@ -1,6 +1,7 @@
 package ben.smith53
 
 import com.fasterxml.jackson.annotation.JsonProperty
+import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
@@ -179,7 +180,7 @@ class StreamedExtractor {
         // Construct proxied M3U8 URL
         val m3u8Url = "https://rr.buytommy.top$decryptedPath"
         val proxiedUrl = try {
-            "$proxyUrl?url=${URmediaplayer.URLEncoder.encode(m3u8Url, "UTF-8")}"
+            "$proxyUrl?url=${URLEncoder.encode(m3u8Url, "UTF-8")}"
         } catch (e: Exception) {
             Log.e("StreamedExtractor", "URL encoding failed: ${e.message}")
             return false
