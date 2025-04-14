@@ -23,7 +23,7 @@ class StreamedProvider : MainAPI() {
     private val fetchUrl = "https://embedstreams.top/fetch"
     private val baseUrl = "https://rr.buytommy.top"
     private val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
-    private val proxyServerUrl = "http://10.96.181.205:8000"
+    private val proxyServerUrl = "http://10.96.181.205:8000" // Your local IP
 
     private val baseHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
@@ -198,7 +198,7 @@ class StreamedProvider : MainAPI() {
             val m3u8Response = try {
                 val response = app.get(proxyM3u8Url, headers = m3u8Headers, timeout = 15)
                 Log.d("StreamedExtractor", "Proxy M3U8 fetch: Code ${response.code}, Content: ${response.text.take(100)}")
-                if (response.code == 200 && response.text.startsWith("#EXTM3U")) response else throw Exception("Invalid M3U8: ${response.text.take(100)}")
+                if (response.code == 200 && response.text.startsWith("#EXTM3U")) response else throw Exception("Invalid M3U8")
             } catch (e: Exception) {
                 Log.e("StreamedExtractor", "Proxy M3U8 fetch failed: ${e.message}")
                 return false
