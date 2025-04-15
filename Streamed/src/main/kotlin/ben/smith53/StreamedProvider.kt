@@ -113,7 +113,7 @@ class StreamedProvider : MainAPI() {
 
 class StreamedExtractor {
     private val fetchUrl = "https://embedstreams.top/fetch"
-    private val proxyUrl = "https://decrypt-q1uk.onrender.com/playlist.m3u8"
+    private val proxyUrl = "http://localhost:8000/playlist.m3u8"
     private val baseHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
         "Content-Type" to "application/json"
@@ -172,19 +172,14 @@ class StreamedExtractor {
             Log.e("StreamedExtractor", "Decryption request failed: ${e.message}")
             return false
         }
-        val decryptedPath = decryptResponse?.get("decrypted") ?: return false.also {
-            Log.e("StreamedExtractor", "Decryption failed or no 'decrypted' key")
-        }
+        val decryptedPath = decryptResponse?.get("decrypted") ?: return false.also { Log.e("StreamedExtractor", "Decryption failed or no 'decrypted' key") }
         Log.d("StreamedExtractor", "Decrypted path: $decryptedPath")
 
-        // Construct proxied M3U8 URL
+        // Construct M3U8 URL and proxy it
         val m3u8Url = "https://rr.buytommy.top$decryptedPath"
-        val proxiedUrl = try {
-            "$proxyUrl?url=${URLEncoder.encode(m3u8Url, "UTF-8")}"
-        } catch (e: Exception) {
-            Log.e("StreamedExtractor", "URL encoding failed: ${e.message}")
-            return false
-        }
+        val encodedM3u8Url = URLEncoder.encode(m3u8Url, "UTF-8")
+        val proxiedUrl = "$proxyUrl?url=$encodedM3u8Url"
+
         try {
             callback.invoke(
                 newExtractorLink(
@@ -201,7 +196,7 @@ class StreamedExtractor {
             Log.d("StreamedExtractor", "Proxied M3U8 URL added: $proxiedUrl")
             return true
         } catch (e: Exception) {
-            Log.e("StreamedExtractor", "Extractor link creation failed: ${e.message}")
+            Log.e("StreamedExtractor", "Proxy failed: ${e.message}")
             return false
         }
     }
