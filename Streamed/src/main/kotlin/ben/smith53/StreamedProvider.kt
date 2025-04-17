@@ -133,8 +133,8 @@ class StreamedExtractor {
 
     private suspend fun fetchCookies(): String? {
         try {
-            val response = app.post(cookieUrl, headers = baseHeaders, data = "", timeout = 15)
-            val cookies = response.headers.getAll("set-cookie") ?: return null
+            val response = app.post(cookieUrl, headers = baseHeaders, json = emptyMap(), timeout = 15)
+            val cookies = response.headers.values("set-cookie") ?: return null
             val cookieDict = mutableMapOf(
                 "ddg8_" to null,
                 "ddg10_" to null,
@@ -144,10 +144,13 @@ class StreamedExtractor {
             cookies.forEach { cookie ->
                 cookie.split(";").forEach { part ->
                     if ("=" in part) {
-                        var (name, value) = part.split("=", limit = 2)
-                        name = name.trim()
-                        if (name.startsWith("__ddg")) name = name.substring(2)
-                        if (name in cookieDict) cookieDict[name] = value.trim()
+                        val split = part.split("=", limit = 2)
+                        val name = split[0].trim()
+                        val value = split.getOrNull(1)?.trim() ?: ""
+                        val normalizedName = if (name.startsWith("__ddg")) name.substring(2) else name
+                        if (normalizedName in cookieDict) {
+                            cookieDict[normalizedName] = value
+                        }
                     }
                 }
             }
