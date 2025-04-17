@@ -135,7 +135,7 @@ class StreamedExtractor {
         try {
             val response = app.post(cookieUrl, headers = baseHeaders, json = emptyMap(), timeout = 15)
             val cookies = response.headers.values("set-cookie") ?: return null
-            val cookieDict = mutableMapOf(
+            val cookieDict: MutableMap<String, String?> = mutableMapOf(
                 "ddg8_" to null,
                 "ddg10_" to null,
                 "ddg9_" to null,
@@ -156,7 +156,7 @@ class StreamedExtractor {
             }
             val cookieList = mutableListOf<String>()
             listOf("ddg8_", "ddg10_", "ddg9_", "ddg1_").forEach { key ->
-                cookieDict[key]?.let { cookieList.add("$key=$it") }
+                cookieDict[key]?.let { value -> cookieList.add("$key=$value") }
             }
             val cookieString = cookieList.joinToString("; ")
             Log.d("StreamedExtractor", "Fetched cookies: $cookieString")
@@ -177,7 +177,7 @@ class StreamedExtractor {
     ): Boolean {
         Log.d("StreamedExtractor", "Starting extraction for: $streamUrl")
 
-        // Fetch cookies from fishy.streamed.su/api/event for this specific M3U8
+        // Fetch fresh cookies for this M3U8
         val cookies = fetchCookies() ?: run {
             Log.e("StreamedExtractor", "No cookies fetched")
             return false
