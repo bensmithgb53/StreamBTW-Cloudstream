@@ -19,6 +19,7 @@ class StreamedProvider : MainAPI() {
 
     private val sources = listOf("alpha", "bravo", "charlie", "delta")
     private val maxStreams = 3
+    private val cookieUrl = "https://fishy.streamed.su/api/event"
 
     override val mainPage = mainPageOf(
         "$mainUrl/api/matches/live/popular" to "Popular",
@@ -113,11 +114,55 @@ class StreamedProvider : MainAPI() {
 
 class StreamedExtractor {
     private val fetchUrl = "https://embedstreams.top/fetch"
-    private val baseHeaders = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
-        "Content-Type" to "application/json"
-    )
+    private val cookieUrl = "https://fishy.streamed.su/api/event"
     private val proxyUrl = "http://localhost:8000/playlist.m3u8"
+    private val baseHeaders = mapOf(
+        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
+        "Referer" to "https://embedstreams.top/",
+        "Origin" to "https://embedstreams.top",
+        "Accept" to "*/*",
+        "Accept-Encoding" to "identity",
+        "Accept-Language" to "en-GB,en-US;q=0.9,en;q=0.8",
+        "Sec-Ch-Ua" to "\"Not A(Brand\";v=\"8\", \"Chromium\";v=\"132\"",
+        "Sec-Ch-Ua-Mobile" to "?1",
+        "Sec-Ch-Ua-Platform" to "\"Android\"",
+        "Sec-Fetch-Dest" to "empty",
+        "Sec-Fetch-Mode" to "cors",
+        "Sec-Fetch-Site" to "cross-site"
+    )
+
+    private suspend fun fetchCookies(): String? {
+        try {
+            val response = app.post(cookieUrl, headers = baseHeaders, data = "", timeout = 15)
+            val cookies = response.headers.getAll("set-cookie") ?: return null
+            val cookieDict = mutableMapOf(
+                "ddg8_" to null,
+                "ddg10_" to null,
+                "ddg9_" to null,
+                "ddg1_" to null
+            )
+            cookies.forEach { cookie ->
+                cookie.split(";").forEach { part ->
+                    if ("=" in part) {
+                        var (name, value) = part.split("=", limit = 2)
+                        name = name.trim()
+                        if (name.startsWith("__ddg")) name = name.substring(2)
+                        if (name in cookieDict) cookieDict[name] = value.trim()
+                    }
+                }
+            }
+            val cookieList = mutableListOf<String>()
+            listOf("ddg8_", "ddg10_", "ddg9_", "ddg1_").forEach { key ->
+                cookieDict[key]?.let { cookieList.add("$key=$it") }
+            }
+            val cookieString = cookieList.joinToString("; ")
+            Log.d("StreamedExtractor", "Fetched cookies: $cookieString")
+            return if (cookieString.isNotEmpty()) cookieString else null
+        } catch (e: Exception) {
+            Log.e("StreamedExtractor", "Failed to fetch cookies: ${e.message}")
+            return null
+        }
+    }
 
     suspend fun getUrl(
         streamUrl: String,
@@ -129,15 +174,11 @@ class StreamedExtractor {
     ): Boolean {
         Log.d("StreamedExtractor", "Starting extraction for: $streamUrl")
 
-        // Fetch stream page for cookies
-        val streamResponse = try {
-            app.get(streamUrl, headers = baseHeaders, timeout = 15)
-        } catch (e: Exception) {
-            Log.e("StreamedExtractor", "Stream page fetch failed: ${e.message}")
+        // Fetch cookies from fishy.streamed.su/api/event
+        val cookies = fetchCookies() ?: run {
+            Log.e("StreamedExtractor", "No cookies fetched")
             return false
         }
-        val cookies = streamResponse.cookies
-        Log.d("StreamedExtractor", "Stream cookies: $cookies")
 
         // POST to fetch encrypted string
         val postData = mapOf(
@@ -148,7 +189,7 @@ class StreamedExtractor {
         val embedReferer = "https://embedstreams.top/embed/$source/$matchId/$streamNo"
         val fetchHeaders = baseHeaders + mapOf(
             "Referer" to streamUrl,
-            "Cookie" to cookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
+            "Cookie" to cookies
         )
         Log.d("StreamedExtractor", "Fetching with data: $postData and headers: $fetchHeaders")
 
@@ -172,14 +213,15 @@ class StreamedExtractor {
             Log.e("StreamedExtractor", "Decryption request failed: ${e.message}")
             return false
         }
-        val decryptedPath = decryptResponse?.get("decrypted") ?: return false.also { Log.e("StreamedExtractor", "Decryption failed or no 'decrypted' key") }
+        val decryptedPath = decryptResponse?.get("decrypted") ?: return false.also {
+            Log.e("StreamedExtractor", "Decryption failed or no 'decrypted' key")
+        }
         Log.d("StreamedExtractor", "Decrypted path: $decryptedPath")
 
         // Construct M3U8 URL and proxy URL with cookies
         val m3u8Url = "https://rr.buytommy.top$decryptedPath"
         val encodedM3u8Url = URLEncoder.encode(m3u8Url, "UTF-8")
-        val cookieString = cookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
-        val encodedCookies = URLEncoder.encode(cookieString, "UTF-8")
+        val encodedCookies = URLEncoder.encode(cookies, "UTF-8")
         val proxiedUrl = "$proxyUrl?url=$encodedM3u8Url&cookies=$encodedCookies"
         try {
             callback.invoke(
