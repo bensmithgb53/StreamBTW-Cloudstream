@@ -131,36 +131,26 @@ class StreamedExtractor {
         "Content-Type" to "application/json"
     )
 
-    private suspend fun fetchCookies(): String? {
+    suspend fun getCookies(): String? {
         try {
-            val response = app.post(cookieUrl, headers = baseHeaders, json = emptyMap(), timeout = 15)
-            val cookies = response.headers.values("set-cookie") ?: return null
-            val cookieDict: MutableMap<String, String?> = mutableMapOf(
-                "ddg8_" to null,
-                "ddg10_" to null,
-                "ddg9_" to null,
-                "ddg1_" to null
+            val response = app.post(
+                cookieUrl,
+                headers = baseHeaders + mapOf("Accept" to "text/plain"),
+                json = mapOf("event" to "pageview"),
+                timeout = 15
             )
-            cookies.forEach { cookie ->
-                cookie.split(";").forEach { part ->
-                    if ("=" in part) {
-                        val split = part.split("=", limit = 2)
-                        val name = split[0].trim()
-                        val value = split.getOrNull(1)?.trim() ?: ""
-                        val normalizedName = if (name.startsWith("__ddg")) name.substring(2) else name
-                        if (normalizedName in cookieDict) {
-                            cookieDict[normalizedName] = value
-                        }
-                    }
-                }
-            }
-            val cookieList = mutableListOf<String>()
-            listOf("ddg8_", "ddg10_", "ddg9_", "ddg1_").forEach { key ->
-                cookieDict[key]?.let { value -> cookieList.add("$key=$value") }
-            }
-            val cookieString = cookieList.joinToString("; ")
-            Log.d("StreamedExtractor", "Fetched cookies: $cookieString")
-            return if (cookieString.isNotEmpty()) cookieString else null
+            val cookies = response.cookies
+            Log.d("StreamedExtractor", "Raw cookies: $cookies")
+            
+            // Extract specific cookies in the required order
+            val cookieMap = cookies.entries.associate { it.key to it.value }
+            val requiredCookies = listOf("ddg8_", "ddg10_", "ddg9_", "ddg1_")
+            val formattedCookies = requiredCookies.mapNotNull { key ->
+                cookieMap[key]?.let { value -> "${key.removePrefix("__")}=$value" }
+            }.joinToString("; ")
+            
+            Log.d("StreamedExtractor", "Formatted cookies: $formattedCookies")
+            return if (formattedCookies.isNotEmpty()) formattedCookies else null
         } catch (e: Exception) {
             Log.e("StreamedExtractor", "Failed to fetch cookies: ${e.message}")
             return null
@@ -177,9 +167,9 @@ class StreamedExtractor {
     ): Boolean {
         Log.d("StreamedExtractor", "Starting extraction for: $streamUrl")
 
-        // Fetch fresh cookies for this M3U8
-        val cookies = fetchCookies() ?: run {
-            Log.e("StreamedExtractor", "No cookies fetched")
+        // Fetch cookies
+        val cookies = getCookies() ?: run {
+            Log.e("StreamedExtractor", "No cookies retrieved")
             return false
         }
 
