@@ -128,7 +128,8 @@ class StreamedExtractor {
         "Sec-Fetch-Dest" to "empty",
         "Sec-Fetch-Mode" to "cors",
         "Sec-Fetch-Site" to "cross-site",
-        "Content-Type" to "application/json"
+        "Content-Type" to "application/json",
+        "X-Requested-With" to "XMLHttpRequest"
     )
 
     suspend fun getCookies(): String? {
@@ -142,11 +143,11 @@ class StreamedExtractor {
             val cookies = response.cookies
             Log.d("StreamedExtractor", "Raw cookies: $cookies")
             
-            // Extract specific cookies in the required order
-            val cookieMap = cookies.entries.associate { it.key to it.value }
+            // Extract specific cookies in the required order, removing __ prefixes
+            val cookieMap = cookies.entries.associate { it.key.removePrefix("__") to it.value }
             val requiredCookies = listOf("ddg8_", "ddg10_", "ddg9_", "ddg1_")
             val formattedCookies = requiredCookies.mapNotNull { key ->
-                cookieMap[key]?.let { value -> "${key.removePrefix("__")}=$value" }
+                cookieMap[key]?.let { value -> "$key=$value" }
             }.joinToString("; ")
             
             Log.d("StreamedExtractor", "Formatted cookies: $formattedCookies")
