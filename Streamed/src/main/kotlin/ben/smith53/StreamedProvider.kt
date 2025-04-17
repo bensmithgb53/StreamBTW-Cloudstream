@@ -8,6 +8,7 @@ import com.lagradost.cloudstream3.utils.Qualities
 import android.util.Log
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import java.net.URLEncoder
 import java.util.Locale
 
 class StreamedProvider : MainAPI() {
@@ -16,9 +17,8 @@ class StreamedProvider : MainAPI() {
     override var supportedTypes = setOf(TvType.Live)
     override val hasMainPage = true
 
-    private val sources = listOf("admin", "alpha", "bravo", "charlie", "delta")
+    private val sources = listOf("alpha", "bravo", "charlie", "delta")
     private val maxStreams = 3
-    private val proxyUrl = "http://localhost:8000/fetch"
 
     override val mainPage = mainPageOf(
         "$mainUrl/api/matches/live/popular" to "Popular",
@@ -42,7 +42,7 @@ class StreamedProvider : MainAPI() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val rawList = app.get(request.data).text
         val listJson = parseJson<List<Match>>(rawList)
-        
+
         val list = listJson.filter { match -> match.matchSources.isNotEmpty() }.map { match ->
             val url = "$mainUrl/watch/${match.id}"
             newLiveSearchResponse(
@@ -114,33 +114,53 @@ class StreamedProvider : MainAPI() {
 class StreamedExtractor {
     private val fetchUrl = "https://embedstreams.top/fetch"
     private val cookieUrl = "https://fishy.streamed.su/api/event"
-    private val proxyUrl = "http://localhost:8000/fetch"
+    private val proxyUrl = "http://localhost:8000/playlist.m3u8"
     private val baseHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
-        "Content-Type" to "application/json",
+        "Referer" to "https://embedstreams.top/",
         "Origin" to "https://embedstreams.top",
-        "Referer" to "https://embedstreams.top/"
+        "Accept" to "*/*",
+        "Accept-Encoding" to "identity",
+        "Accept-Language" to "en-GB,en-US;q=0.9,en;q=0.8",
+        "Sec-Ch-Ua" to "\"Not A(Brand\";v=\"8\", \"Chromium\";v=\"132\"",
+        "Sec-Ch-Ua-Mobile" to "?1",
+        "Sec-Ch-Ua-Platform" to "\"Android\"",
+        "Sec-Fetch-Dest" to "empty",
+        "Sec-Fetch-Mode" to "cors",
+        "Sec-Fetch-Site" to "cross-site",
+        "Content-Type" to "application/json"
     )
 
-    suspend fun getCookies(): String? {
+    private suspend fun fetchCookies(): String? {
         try {
-            val response = app.post(
-                cookieUrl,
-                headers = baseHeaders + mapOf("Accept" to "text/plain"),
-                json = mapOf("event" to "pageview")
+            val response = app.post(cookieUrl, headers = baseHeaders, json = emptyMap(), timeout = 15)
+            val cookies = response.headers.values("set-cookie") ?: return null
+            val cookieDict = mutableMapOf(
+                "ddg8_" to null,
+                "ddg10_" to null,
+                "ddg9_" to null,
+                "ddg1_" to null
             )
-            val cookies = response.cookies
-            Log.d("StreamedExtractor", "Raw cookies: $cookies")
-            
-            // Extract specific cookies in the required order
-            val cookieMap = cookies.entries.associate { it.key to it.value }
-            val requiredCookies = listOf("ddg8_", "ddg10_", "ddg9_", "ddg1_")
-            val formattedCookies = requiredCookies.mapNotNull { key ->
-                cookieMap[key]?.let { value -> "${key.removePrefix("__")}=$value" }
-            }.joinToString("; ")
-            
-            Log.d("StreamedExtractor", "Formatted cookies: $formattedCookies")
-            return if (formattedCookies.isNotEmpty()) formattedCookies else null
+            cookies.forEach { cookie ->
+                cookie.split(";").forEach { part ->
+                    if ("=" in part) {
+                        val split = part.split("=", limit = 2)
+                        val name = split[0].trim()
+                        val value = split.getOrNull(1)?.trim() ?: ""
+                        val normalizedName = if (name.startsWith("__ddg")) name.substring(2) else name
+                        if (normalizedName in cookieDict) {
+                            cookieDict[normalizedName] = value
+                        }
+                    }
+                }
+            }
+            val cookieList = mutableListOf<String>()
+            listOf("ddg8_", "ddg10_", "ddg9_", "ddg1_").forEach { key ->
+                cookieDict[key]?.let { cookieList.add("$key=$it") }
+            }
+            val cookieString = cookieList.joinToString("; ")
+            Log.d("StreamedExtractor", "Fetched cookies: $cookieString")
+            return if (cookieString.isNotEmpty()) cookieString else null
         } catch (e: Exception) {
             Log.e("StreamedExtractor", "Failed to fetch cookies: ${e.message}")
             return null
@@ -157,9 +177,9 @@ class StreamedExtractor {
     ): Boolean {
         Log.d("StreamedExtractor", "Starting extraction for: $streamUrl")
 
-        // Fetch cookies
-        val cookies = getCookies() ?: run {
-            Log.e("StreamedExtractor", "No cookies retrieved")
+        // Fetch cookies from fishy.streamed.su/api/event for this specific M3U8
+        val cookies = fetchCookies() ?: run {
+            Log.e("StreamedExtractor", "No cookies fetched")
             return false
         }
 
@@ -196,45 +216,33 @@ class StreamedExtractor {
             Log.e("StreamedExtractor", "Decryption request failed: ${e.message}")
             return false
         }
-        val decryptedPath = decryptResponse?.get("decrypted") ?: return false.also { Log.e("StreamedExtractor", "Decryption failed or no 'decrypted' key") }
+        val decryptedPath = decryptResponse?.get("decrypted") ?: return false.also {
+            Log.e("StreamedExtractor", "Decryption failed or no 'decrypted' key")
+        }
         Log.d("StreamedExtractor", "Decrypted path: $decryptedPath")
 
-        // Construct M3U8 URL
+        // Construct M3U8 URL and proxy URL with fresh cookies
         val m3u8Url = "https://rr.buytommy.top$decryptedPath"
-
-        // Send to localhost proxy
-        val proxyPostData = mapOf(
-            "m3u8Url" to m3u8Url,
-            "cookies" to cookies
-        )
+        val encodedM3u8Url = URLEncoder.encode(m3u8Url, "UTF-8")
+        val encodedCookies = URLEncoder.encode(cookies, "UTF-8")
+        val proxiedUrl = "$proxyUrl?url=$encodedM3u8Url&cookies=$encodedCookies"
         try {
-            val proxyResponse = app.post(
-                proxyUrl,
-                headers = baseHeaders,
-                json = proxyPostData,
-                timeout = 15
+            callback.invoke(
+                newExtractorLink(
+                    source = "Streamed",
+                    name = "$source Stream $streamNo",
+                    url = proxiedUrl,
+                    type = ExtractorLinkType.M3U8
+                ) {
+                    this.referer = embedReferer
+                    this.quality = Qualities.Unknown.value
+                    this.headers = baseHeaders
+                }
             )
-            if (proxyResponse.code == 200) {
-                callback.invoke(
-                    newExtractorLink(
-                        source = "Streamed",
-                        name = "$source Stream $streamNo",
-                        url = "http://localhost:8000/playlist.m3u8",
-                        type = ExtractorLinkType.M3U8
-                    ) {
-                        this.referer = embedReferer
-                        this.quality = Qualities.Unknown.value
-                        this.headers = baseHeaders
-                    }
-                )
-                Log.d("StreamedExtractor", "Proxy M3U8 URL added: http://localhost:8000/playlist.m3u8")
-                return true
-            } else {
-                Log.e("StreamedExtractor", "Proxy request failed with code: ${proxyResponse.code}")
-                return false
-            }
+            Log.d("StreamedExtractor", "Proxied M3U8 URL added: $proxiedUrl")
+            return true
         } catch (e: Exception) {
-            Log.e("StreamedExtractor", "Proxy request failed: ${e.message}")
+            Log.e("StreamedExtractor", "Failed to add proxied URL: ${e.message}")
             return false
         }
     }
