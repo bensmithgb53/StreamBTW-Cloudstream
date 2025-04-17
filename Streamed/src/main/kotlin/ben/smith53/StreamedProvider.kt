@@ -246,4 +246,4 @@ class StreamedExtractor {
             return false
         }
     }
-}.
+}
