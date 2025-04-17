@@ -227,7 +227,10 @@ class StreamedExtractor {
                 ) {
                     this.referer = embedReferer
                     this.quality = Qualities.Unknown.value
-                    this.headers = baseHeaders
+                    this.headers = baseHeaders + mapOf(
+                        "Cookie" to cookies,
+                        "Accept" to "application/vnd.apple.mpegurl"
+                    )
                 }
             )
             Log.d("StreamedExtractor", "Proxied M3U8 URL added: $proxiedUrl")
