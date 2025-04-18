@@ -9,9 +9,11 @@ import android.util.Log
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import okhttp3.Interceptor
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.Response
+import okhttp3.ResponseBody.Companion.toResponseBody
+import java.io.File
 import java.net.URLEncoder
 import java.util.Locale
 import java.util.regex.Pattern
@@ -204,13 +206,39 @@ class StreamedExtractor {
         }
         Log.d("StreamedExtractor", "Decrypted path: $decryptedPath")
 
-        // Construct M3U8 URL
+        // Fetch and rewrite M3U8
         val m3u8Url = "https://rr.buytommy.top$decryptedPath"
+        val request = Request.Builder()
+            .url(m3u8Url)
+            .addHeader("Cookie", cookies)
+            .addHeader("User-Agent", baseHeaders["User-Agent"]!!)
+            .addHeader("Referer", baseHeaders["Referer"]!!)
+            .addHeader("Accept", "application/vnd.apple.mpegurl")
+            .build()
+        val m3u8Response = try {
+            client.newCall(request).execute()
+        } catch (e: Exception) {
+            Log.e("StreamedExtractor", "Failed to fetch M3U8: ${e.message}")
+            return false
+        }
+        if (!m3u8Response.isSuccessful) {
+            Log.e("StreamedExtractor", "M3U8 fetch failed: ${m3u8Response.code}")
+            return false
+        }
+        val m3u8Content = m3u8Response.body?.string() ?: return false
+        Log.d("StreamedExtractor", "Fetched M3U8:\n$m3u8Content")
+
+        // Save rewritten M3U8 to a temporary file
+        val tempFile = File.createTempFile("streamed", ".m3u8")
+        tempFile.writeText(m3u8Content) // Interceptor rewrites content
+        val tempM3u8Url = tempFile.toURI().toString()
+
+        // Create ExtractorLink
         try {
             val extractorLink = newExtractorLink(
                 source = "Streamed",
                 name = "$source Stream $streamNo",
-                url = m3u8Url,
+                url = tempM3u8Url,
                 type = ExtractorLinkType.M3U8
             ) {
                 this.referer = embedReferer
@@ -220,14 +248,17 @@ class StreamedExtractor {
                     "Accept" to "application/vnd.apple.mpegurl,video/mp2t",
                     "Range" to "bytes=0-"
                 )
-                Log.d("StreamedExtractor", "ExtractorLink created with URL: $m3u8Url, Headers: ${this.headers}")
+                Log.d("StreamedExtractor", "ExtractorLink created with URL: $tempM3u8Url, Headers: ${this.headers}")
             }
             callback.invoke(extractorLink)
-            Log.d("StreamedExtractor", "M3U8 URL added: $m3u8Url")
+            Log.d("StreamedExtractor", "M3U8 URL added: $tempM3u8Url")
             return true
         } catch (e: Exception) {
             Log.e("StreamedExtractor", "Failed to add M3U8 URL: ${e.message}")
+            tempFile.delete()
             return false
+        } finally {
+            tempFile.deleteOnExit()
         }
     }
 }
@@ -242,8 +273,13 @@ class M3U8Interceptor : Interceptor {
         val url = request.url.toString()
         Log.d("M3U8Interceptor", "Intercepting request: $url")
 
-        // Proceed with the request
-        val response = chain.proceed(request)
+        // Add headers to bypass CORS
+        val newRequest = request.newBuilder()
+            .addHeader("Origin", "https://embedstreams.top")
+            .addHeader("Referer", "https://embedstreams.top/")
+            .build()
+
+        val response = chain.proceed(newRequest)
         val contentType = response.header("Content-Type") ?: "application/octet-stream"
 
         // Handle M3U8 responses
