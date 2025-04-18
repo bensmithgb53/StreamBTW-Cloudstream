@@ -40,38 +40,53 @@ class StreamedProvider : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val rawList = app.get(request.data).text
-        val listJson = parseJson<List<Match>>(rawList)
+        Log.d("StreamedProvider", "Fetching main page: ${request.data}")
+        try {
+            val rawList = app.get(request.data).text
+            val listJson = parseJson<List<Match>>(rawList)
+            Log.d("StreamedProvider", "Parsed ${listJson.size} matches")
 
-        val list = listJson.filter { match -> match.matchSources.isNotEmpty() }.map { match ->
-            val url = "$mainUrl/watch/${match.id}"
-            newLiveSearchResponse(
-                name = match.title,
-                url = url,
-                type = TvType.Live
-            ) {
-                this.posterUrl = "$mainUrl${match.posterPath ?: "/api/images/poster/fallback.webp"}"
-            }
-        }.filterNotNull()
+            val list = listJson.filter { match -> match.matchSources.isNotEmpty() }.map { match ->
+                val url = "$mainUrl/watch/${match.id}"
+                newLiveSearchResponse(
+                    name = match.title,
+                    url = url,
+                    type = TvType.Live
+                ) {
+                    this.posterUrl = "$mainUrl${match.posterPath ?: "/api/images/poster/fallback.webp"}"
+                }
+            }.filterNotNull()
+            Log.d("StreamedProvider", "Returning ${list.size} filtered matches")
 
-        return newHomePageResponse(
-            list = listOf(HomePageList(request.name, list, isHorizontalImages = true)),
-            hasNext = false
-        )
+            return newHomePageResponse(
+                list = listOf(HomePageList(request.name, list, isHorizontalImages = true)),
+                hasNext = false
+            )
+        } catch (e: Exception) {
+            Log.e("StreamedProvider", "Main page fetch failed: ${e.stackTraceToString()}")
+            throw e
+        }
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val matchId = url.substringAfterLast("/")
-        val title = matchId.replace("-", " ")
-            .replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.ROOT) else it.toString() }
-            .replace(Regex("-\\d+$"), "")
-        val posterUrl = "$mainUrl/api/images/poster/$matchId.webp"
-        return newLiveStreamLoadResponse(
-            name = title,
-            url = url,
-            dataUrl = url
-        ) {
-            this.posterUrl = posterUrl
+        Log.d("StreamedProvider", "Loading URL: $url")
+        try {
+            val matchId = url.substringAfterLast("/")
+            val title = matchId.replace("-", " ")
+                .replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.ROOT) else it.toString() }
+                .replace(Regex("-\\d+$"), "")
+            val posterUrl = "$mainUrl/api/images/poster/$matchId.webp"
+            Log.d("StreamedProvider", "Loaded title: $title, poster: $posterUrl")
+            return newLiveStreamLoadResponse(
+                name = title,
+                url = url,
+                dataUrl = url
+            ) {
+                this.posterUrl = posterUrl
+            }
+        } catch (e: Exception) {
+            Log.e("StreamedProvider", "Load failed: ${e.stackTraceToString()}")
+            throw e
         }
     }
 
@@ -81,20 +96,35 @@ class StreamedProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val matchId = data.substringAfterLast("/")
-        val extractor = StreamedExtractor()
-        var success = false
+        Log.d("StreamedProvider", "Starting loadLinks for data: $data")
+        try {
+            val matchId = data.substringAfterLast("/")
+            Log.d("StreamedProvider", "Match ID: $matchId")
+            val extractor = StreamedExtractor()
+            var success = false
 
-        sources.forEach { source ->
-            for (streamNo in 1..maxStreams) {
-                val streamUrl = "$mainUrl/watch/$matchId/$source/$streamNo"
-                Log.d("StreamedProvider", "Processing stream URL: $streamUrl")
-                if (extractor.getUrl(streamUrl, matchId, source, streamNo, subtitleCallback, callback)) {
-                    success = true
+            sources.forEach { source ->
+                for (streamNo in 1..maxStreams) {
+                    val streamUrl = "$mainUrl/watch/$matchId/$source/$streamNo"
+                    Log.d("StreamedProvider", "Processing stream URL: $streamUrl")
+                    try {
+                        if (extractor.getUrl(streamUrl, matchId, source, streamNo, subtitleCallback, callback)) {
+                            success = true
+                            Log.d("StreamedProvider", "Successfully processed stream: $streamUrl")
+                        } else {
+                            Log.w("StreamedProvider", "Failed to process stream: $streamUrl")
+                        }
+                    } catch (e: Exception) {
+                        Log.e("StreamedProvider", "Error processing stream $streamUrl: ${e.stackTraceToString()}")
+                    }
                 }
             }
+            Log.d("StreamedProvider", "loadLinks completed, success: $success")
+            return success
+        } catch (e: Exception) {
+            Log.e("StreamedProvider", "loadLinks failed: ${e.stackTraceToString()}")
+            return false
         }
-        return success
     }
 
     data class Match(
@@ -115,6 +145,7 @@ class StreamedExtractor {
     private val fetchUrl = "https://embedstreams.top/fetch"
     private val cookieUrl = "https://fishy.streamed.su/api/event"
     private val proxyUrl = "https://mersin-proxy.onrender.com/playlist.m3u8"
+    private val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
     private val baseHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
         "Referer" to "https://embedstreams.top/",
@@ -130,20 +161,24 @@ class StreamedExtractor {
         "Sec-Fetch-Site" to "cross-site",
         "Content-Type" to "application/json",
         "X-Requested-With" to "XMLHttpRequest",
-        "Connection" to "keep-alive"
+        "Connection" to "keep-alive",
+        "X-Forwarded-For" to "127.0.0.1"
     )
 
     suspend fun getCookies(): String? {
+        Log.d("StreamedExtractor", "Step 1: Attempting to fetch cookies from: $cookieUrl")
         try {
-            val response = app.post(cookieUrl, json = mapOf("event" to "pageview"), headers = baseHeaders)
+            val response = app.post(cookieUrl, json = mapOf("event" to "pageview"), headers = baseHeaders, timeout = 15)
+            Log.d("StreamedExtractor", "Cookie response code: ${response.code}, headers: ${response.headers}")
             val cookies = response.headers["set-cookie"]?.split(",")?.joinToString("; ") {
                 it.split(";")[0].trim()
             }
-            Log.d("StreamedExtractor", "Fetched cookies: $cookies")
-            return cookies ?: run {
+            if (cookies.isNullOrEmpty()) {
                 Log.w("StreamedExtractor", "No cookies received, using hardcoded fallback")
-                "ddg8_=c16XuMgCExmUPpzo; ddg10_=1744925426; ddg9_=82.46.16.114; ddg1_=dl3M1u9zODCU65fvl7YM"
+                return "ddg8_=c16XuMgCExmUPpzo; ddg10_=1744925426; ddg9_=82.46.16.114; ddg1_=dl3M1u9zODCU65fvl7YM"
             }
+            Log.d("StreamedExtractor", "Fetched cookies: $cookies")
+            return cookies
         } catch (e: Exception) {
             Log.e("StreamedExtractor", "Cookie fetch failed: ${e.stackTraceToString()}")
             return "ddg8_=c16XuMgCExmUPpzo; ddg10_=1744925426; ddg9_=82.46.16.114; ddg1_=dl3M1u9zODCU65fvl7YM"
@@ -158,16 +193,18 @@ class StreamedExtractor {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        Log.d("StreamedExtractor", "Starting extraction for: $streamUrl")
-
-        // Fetch cookies
+        Log.d("StreamedExtractor", "Starting extraction for: $streamUrl, matchId: $matchId, source: $source, streamNo: $streamNo")
+        
+        // Step 1: Fetch cookies
+        Log.d("StreamedExtractor", "Step 1: Fetching cookies")
         val cookies = getCookies() ?: run {
             Log.e("StreamedExtractor", "Failed to retrieve cookies")
             return false
         }
         Log.d("StreamedExtractor", "Cookies: $cookies")
 
-        // POST to fetch encrypted string
+        // Step 2: POST to fetch encrypted string
+        Log.d("StreamedExtractor", "Step 2: Fetching encrypted string")
         val postData = mapOf(
             "source" to source,
             "id" to matchId,
@@ -176,15 +213,16 @@ class StreamedExtractor {
         val embedReferer = "https://embedstreams.top/embed/$source/$matchId/$streamNo"
         val fetchHeaders = baseHeaders + mapOf(
             "Referer" to streamUrl,
-            "Cookie" to cookies
+            "Cookie" to cookies,
+            "Accept" to "application/json"
         )
         Log.d("StreamedExtractor", "Fetching with data: $postData and headers: $fetchHeaders")
 
         val encryptedResponse = try {
-            val response = app.post(fetchUrl, headers = fetchHeaders, json = postData, timeout = 15)
+            val response = app.post(fetchUrl, headers = fetchHeaders, json = postData, timeout = 30)
             Log.d("StreamedExtractor", "Fetch response code: ${response.code}, body: ${response.text}")
             if (response.code != 200) {
-                Log.e("StreamedExtractor", "Fetch failed with code: ${response.code}")
+                Log.e("StreamedExtractor", "Fetch failed with code: ${response.code}, message: ${response.message}")
                 return false
             }
             response.text
@@ -198,14 +236,14 @@ class StreamedExtractor {
         }
         Log.d("StreamedExtractor", "Encrypted response: $encryptedResponse")
 
-        // Decrypt using Deno
-        val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
+        // Step 3: Decrypt using Deno
+        Log.d("StreamedExtractor", "Step 3: Decrypting response")
         val decryptPostData = mapOf("encrypted" to encryptedResponse)
         val decryptResponse = try {
-            val response = app.post(decryptUrl, json = decryptPostData, headers = mapOf("Content-Type" to "application/json"))
-            Log.d("StreamedExtractor", "Decrypt response: ${response.text}")
-            if (response.code != 200) {
-                Log.e("StreamedExtractor", "Decryption failed with code: ${response.code}")
+            val response = app.post(decryptUrl, json = decryptPostData, headers = mapOf("Content-Type" to "application/json"), timeout = 30)
+            Log.d("StreamedExtractor", "Decrypt response code: ${response.code}, body: ${response.text}")
+            if (response.code != 200 || response.text.isEmpty()) {
+                Log.e("StreamedExtractor", "Invalid decryption response: code=${response.code}, body=${response.text}")
                 return false
             }
             response.parsedSafe<Map<String, String>>()
@@ -219,7 +257,8 @@ class StreamedExtractor {
         }
         Log.d("StreamedExtractor", "Decrypted path: $decryptedPath")
 
-        // Construct M3U8 URL and proxy URL with cookies
+        // Step 4: Construct and invoke proxy URL
+        Log.d("StreamedExtractor", "Step 4: Constructing proxy URL")
         val m3u8Url = "https://rr.buytommy.top$decryptedPath"
         val encodedM3u8Url = URLEncoder.encode(m3u8Url, "UTF-8")
         val encodedCookies = URLEncoder.encode(cookies, "UTF-8")
