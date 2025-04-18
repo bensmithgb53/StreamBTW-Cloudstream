@@ -12,6 +12,7 @@ import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
 import okhttp3.ResponseBody.Companion.toResponseBody
 import java.io.File
 import java.net.URLEncoder
@@ -131,7 +132,7 @@ class StreamedExtractor {
         "Accept" to "*/*",
         "Accept-Encoding" to "identity",
         "Accept-Language" to "en-GB,en-US;q=0.9,en;q=0.8",
-        "Sec-Ch-Ua" to "\"Not A(Brand\";v=\"8\", \"Chromium\";v=\"132\"",
+        "Sec-Ch-Ua" to "\"Not A(Brand	\";v=\"8\", \"Chromium\";v=\"132\"",
         "Sec-Ch-Ua-Mobile" to "?1",
         "Sec-Ch-Ua-Platform" to "\"Android\"",
         "Sec-Fetch-Dest" to "empty",
