@@ -8,16 +8,8 @@ import com.lagradost.cloudstream3.utils.Qualities
 import android.util.Log
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
-import okhttp3.Interceptor
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.Response
-import okhttp3.ResponseBody.Companion.toResponseBody
-import java.io.File
 import java.net.URLEncoder
 import java.util.Locale
-import java.util.regex.Pattern
 
 class StreamedProvider : MainAPI() {
     override var mainUrl = "https://streamed.su"
@@ -50,7 +42,7 @@ class StreamedProvider : MainAPI() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val rawList = app.get(request.data).text
         val listJson = parseJson<List<Match>>(rawList)
-        
+
         val list = listJson.filter { match -> match.matchSources.isNotEmpty() }.map { match ->
             val url = "$mainUrl/watch/${match.id}"
             newLiveSearchResponse(
@@ -122,9 +114,7 @@ class StreamedProvider : MainAPI() {
 class StreamedExtractor {
     private val fetchUrl = "https://embedstreams.top/fetch"
     private val cookieUrl = "https://fishy.streamed.su/api/event"
-    private val baseM3u8Url = "https://rr.buytommy.top"
-    private val segmentBaseUrl = "https://p2-panel.streamed.su"
-
+    private val proxyUrl = "https://mersin-proxy.onrender.com/playlist.m3u8"
     private val baseHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
         "Referer" to "https://embedstreams.top/",
@@ -132,7 +122,7 @@ class StreamedExtractor {
         "Accept" to "*/*",
         "Accept-Encoding" to "identity",
         "Accept-Language" to "en-GB,en-US;q=0.9,en;q=0.8",
-        "Sec-Ch-Ua" to "\"Not A(Brand	\";v=\"8\", \"Chromium\";v=\"132\"",
+        "Sec-Ch-Ua" to "\"Not A(Brand\";v=\"8\", \"Chromium\";v=\"132\"",
         "Sec-Ch-Ua-Mobile" to "?1",
         "Sec-Ch-Ua-Platform" to "\"Android\"",
         "Sec-Fetch-Dest" to "empty",
@@ -143,14 +133,21 @@ class StreamedExtractor {
         "Connection" to "keep-alive"
     )
 
-    // Custom OkHttp client with interceptor
-    private val client = OkHttpClient.Builder()
-        .addInterceptor(M3U8Interceptor())
-        .build()
-
     suspend fun getCookies(): String? {
-        // Hardcode cookies for testing
-        return "ddg8_=c16XuMgCExmUPpzo; ddg10_=1744925426; ddg9_=82.46.16.114; ddg1_=dl3M1u9zODCU65fvl7YM"
+        try {
+            val response = app.post(cookieUrl, json = mapOf("event" to "pageview"), headers = baseHeaders)
+            val cookies = response.headers["set-cookie"]?.split(",")?.joinToString("; ") {
+                it.split(";")[0].trim()
+            }
+            Log.d("StreamedExtractor", "Fetched cookies: $cookies")
+            return cookies ?: run {
+                Log.w("StreamedExtractor", "No cookies received, using hardcoded fallback")
+                "ddg8_=c16XuMgCExmUPpzo; ddg10_=1744925426; ddg9_=82.46.16.114; ddg1_=dl3M1u9zODCU65fvl7YM"
+            }
+        } catch (e: Exception) {
+            Log.e("StreamedExtractor", "Cookie fetch failed: ${e.stackTraceToString()}")
+            return "ddg8_=c16XuMgCExmUPpzo; ddg10_=1744925426; ddg9_=82.46.16.114; ddg1_=dl3M1u9zODCU65fvl7YM"
+        }
     }
 
     suspend fun getUrl(
@@ -165,9 +162,10 @@ class StreamedExtractor {
 
         // Fetch cookies
         val cookies = getCookies() ?: run {
-            Log.e("StreamedExtractor", "No cookies retrieved")
+            Log.e("StreamedExtractor", "Failed to retrieve cookies")
             return false
         }
+        Log.d("StreamedExtractor", "Cookies: $cookies")
 
         // POST to fetch encrypted string
         val postData = mapOf(
@@ -184,10 +182,18 @@ class StreamedExtractor {
 
         val encryptedResponse = try {
             val response = app.post(fetchUrl, headers = fetchHeaders, json = postData, timeout = 15)
-            Log.d("StreamedExtractor", "Fetch response code: ${response.code}")
+            Log.d("StreamedExtractor", "Fetch response code: ${response.code}, body: ${response.text}")
+            if (response.code != 200) {
+                Log.e("StreamedExtractor", "Fetch failed with code: ${response.code}")
+                return false
+            }
             response.text
         } catch (e: Exception) {
-            Log.e("StreamedExtractor", "Fetch failed: ${e.message}")
+            Log.e("StreamedExtractor", "Fetch failed: ${e.stackTraceToString()}")
+            return false
+        }
+        if (encryptedResponse.isEmpty()) {
+            Log.e("StreamedExtractor", "Empty encrypted response")
             return false
         }
         Log.d("StreamedExtractor", "Encrypted response: $encryptedResponse")
@@ -196,147 +202,55 @@ class StreamedExtractor {
         val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
         val decryptPostData = mapOf("encrypted" to encryptedResponse)
         val decryptResponse = try {
-            app.post(decryptUrl, json = decryptPostData, headers = mapOf("Content-Type" to "application/json"))
-                .parsedSafe<Map<String, String>>()
+            val response = app.post(decryptUrl, json = decryptPostData, headers = mapOf("Content-Type" to "application/json"))
+            Log.d("StreamedExtractor", "Decrypt response: ${response.text}")
+            if (response.code != 200) {
+                Log.e("StreamedExtractor", "Decryption failed with code: ${response.code}")
+                return false
+            }
+            response.parsedSafe<Map<String, String>>()
         } catch (e: Exception) {
-            Log.e("StreamedExtractor", "Decryption request failed: ${e.message}")
+            Log.e("StreamedExtractor", "Decryption request failed: ${e.stackTraceToString()}")
             return false
         }
-        val decryptedPath = decryptResponse?.get("decrypted") ?: return false.also {
-            Log.e("StreamedExtractor", "Decryption failed or no 'decrypted' key")
+        val decryptedPath = decryptResponse?.get("decrypted") ?: run {
+            Log.e("StreamedExtractor", "Decryption failed or no 'decrypted' key: $decryptResponse")
+            return false
         }
         Log.d("StreamedExtractor", "Decrypted path: $decryptedPath")
 
-        // Fetch and rewrite M3U8
+        // Construct M3U8 URL and proxy URL with cookies
         val m3u8Url = "https://rr.buytommy.top$decryptedPath"
-        val request = Request.Builder()
-            .url(m3u8Url)
-            .addHeader("Cookie", cookies)
-            .addHeader("User-Agent", baseHeaders["User-Agent"]!!)
-            .addHeader("Referer", baseHeaders["Referer"]!!)
-            .addHeader("Accept", "application/vnd.apple.mpegurl")
-            .build()
-        val m3u8Response = try {
-            client.newCall(request).execute()
-        } catch (e: Exception) {
-            Log.e("StreamedExtractor", "Failed to fetch M3U8: ${e.message}")
-            return false
-        }
-        if (!m3u8Response.isSuccessful) {
-            Log.e("StreamedExtractor", "M3U8 fetch failed: ${m3u8Response.code}")
-            return false
-        }
-        val m3u8Content = m3u8Response.body?.string() ?: return false
-        Log.d("StreamedExtractor", "Fetched M3U8:\n$m3u8Content")
+        val encodedM3u8Url = URLEncoder.encode(m3u8Url, "UTF-8")
+        val encodedCookies = URLEncoder.encode(cookies, "UTF-8")
+        val proxiedUrl = "$proxyUrl?url=$encodedM3u8Url&cookies=$encodedCookies"
+        Log.d("StreamedExtractor", "Proxied URL: $proxiedUrl")
 
-        // Save rewritten M3U8 to a temporary file
-        val tempFile = File.createTempFile("streamed", ".m3u8")
-        tempFile.writeText(m3u8Content) // Interceptor rewrites content
-        val tempM3u8Url = tempFile.toURI().toString()
-
-        // Create ExtractorLink
         try {
-            val extractorLink = newExtractorLink(
-                source = "Streamed",
-                name = "$source Stream $streamNo",
-                url = tempM3u8Url,
-                type = ExtractorLinkType.M3U8
-            ) {
-                this.referer = embedReferer
-                this.quality = Qualities.Unknown.value
-                this.headers = baseHeaders + mapOf(
-                    "Cookie" to cookies,
-                    "Accept" to "application/vnd.apple.mpegurl,video/mp2t",
-                    "Range" to "bytes=0-"
-                )
-                Log.d("StreamedExtractor", "ExtractorLink created with URL: $tempM3u8Url, Headers: ${this.headers}")
-            }
-            callback.invoke(extractorLink)
-            Log.d("StreamedExtractor", "M3U8 URL added: $tempM3u8Url")
+            callback.invoke(
+                newExtractorLink(
+                    source = "Streamed",
+                    name = "$source Stream $streamNo",
+                    url = proxiedUrl,
+                    type = ExtractorLinkType.M3U8
+                ) {
+                    this.referer = embedReferer
+                    this.quality = Qualities.Unknown.value
+                    this.headers = baseHeaders + mapOf(
+                        "Cookie" to cookies,
+                        "Accept" to "application/vnd.apple.mpegurl,video/mp2t",
+                        "Range" to "bytes=0-",
+                        "Origin" to "https://embedstreams.top",
+                        "Access-Control-Request-Method" to "GET"
+                    )
+                    Log.d("StreamedExtractor", "ExtractorLink created with URL: $proxiedUrl, Headers: ${this.headers}")
+                }
+            )
+            Log.d("StreamedExtractor", "Proxied M3U8 URL added: $proxiedUrl")
             return true
         } catch (e: Exception) {
-            Log.e("StreamedExtractor", "Failed to add M3U8 URL: ${e.message}")
-            tempFile.delete()
+            Log.e("StreamedExtractor", "Failed to add proxied URL: ${e.stackTraceToString()}")
             return false
-        } finally {
-            tempFile.deleteOnExit()
         }
-    }
-}
-
-// OkHttp Interceptor to rewrite M3U8 and fix Content-Type
-class M3U8Interceptor : Interceptor {
-    private val segmentPattern = Pattern.compile("https://corsproxy\\.io/\\?url=https://p2-panel\\.streamed\\.su/[^\\s]+\\.js")
-    private val keyPattern = Pattern.compile("/alpha/key/[^\"]+")
-
-    override fun intercept(chain: Interceptor.Chain): Response {
-        val request = chain.request()
-        val url = request.url.toString()
-        Log.d("M3U8Interceptor", "Intercepting request: $url")
-
-        // Add headers to bypass CORS
-        val newRequest = request.newBuilder()
-            .addHeader("Origin", "https://embedstreams.top")
-            .addHeader("Referer", "https://embedstreams.top/")
-            .build()
-
-        val response = chain.proceed(newRequest)
-        val contentType = response.header("Content-Type") ?: "application/octet-stream"
-
-        // Handle M3U8 responses
-        if (url.endsWith(".m3u8") && contentType.contains("application/vnd.apple.mpegurl")) {
-            val body = response.body?.string() ?: return response
-            Log.d("M3U8Interceptor", "Original M3U8:\n$body")
-
-            // Rewrite M3U8
-            val rewrittenBody = rewriteM3u8(body)
-            Log.d("M3U8Interceptor", "Rewritten M3U8:\n$rewrittenBody")
-
-            // Return modified response
-            return response.newBuilder()
-                .body(rewrittenBody.toResponseBody("application/vnd.apple.mpegurl".toMediaType()))
-                .build()
-        }
-
-        // Fix Content-Type for segments
-        if (url.endsWith(".ts") || url.contains("p2-panel.streamed.su")) {
-            Log.d("M3U8Interceptor", "Fixing Content-Type for segment: $url")
-            return response.newBuilder()
-                .header("Content-Type", "video/mp2t")
-                .build()
-        }
-
-        return response
-    }
-
-    private fun rewriteM3u8(m3u8: String): String {
-        val lines = m3u8.split("\n")
-        val rewrittenLines = lines.map { line ->
-            var modifiedLine = line
-
-            // Rewrite key URLs
-            if (line.startsWith("#EXT-X-KEY")) {
-                val matcher = keyPattern.matcher(line)
-                if (matcher.find()) {
-                    val keyUrl = matcher.group()
-                    val newKeyUrl = "https://rr.buytommy.top$keyUrl"
-                    modifiedLine = line.replace(keyUrl, newKeyUrl)
-                    Log.d("M3U8Interceptor", "Rewrote key: $keyUrl -> $newKeyUrl")
-                }
-            }
-
-            // Rewrite segment URLs
-            val matcher = segmentPattern.matcher(line)
-            if (matcher.find()) {
-                val segmentUrl = matcher.group()
-                val newSegmentUrl = segmentUrl.replace("https://corsproxy.io/?url=", "")
-                    .replace(".js", ".ts")
-                modifiedLine = newSegmentUrl
-                Log.d("M3U8Interceptor", "Rewrote segment: $segmentUrl -> $newSegmentUrl")
-            }
-
-            modifiedLine
-        }
-        return rewrittenLines.joinToString("\n")
     }
 }
