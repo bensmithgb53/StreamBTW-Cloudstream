@@ -129,33 +129,13 @@ class StreamedExtractor {
         "Sec-Fetch-Mode" to "cors",
         "Sec-Fetch-Site" to "cross-site",
         "Content-Type" to "application/json",
-        "X-Requested-With" to "XMLHttpRequest"
+        "X-Requested-With" to "XMLHttpRequest",
+        "Connection" to "keep-alive"
     )
 
     suspend fun getCookies(): String? {
-        try {
-            val response = app.post(
-                cookieUrl,
-                headers = baseHeaders + mapOf("Accept" to "text/plain"),
-                json = mapOf("event" to "pageview"),
-                timeout = 15
-            )
-            val cookies = response.cookies
-            Log.d("StreamedExtractor", "Raw cookies: $cookies")
-            
-            // Extract specific cookies in the required order, removing __ prefixes
-            val cookieMap = cookies.entries.associate { it.key.removePrefix("__") to it.value }
-            val requiredCookies = listOf("ddg8_", "ddg10_", "ddg9_", "ddg1_")
-            val formattedCookies = requiredCookies.mapNotNull { key ->
-                cookieMap[key]?.let { value -> "$key=$value" }
-            }.joinToString("; ")
-            
-            Log.d("StreamedExtractor", "Formatted cookies: $formattedCookies")
-            return if (formattedCookies.isNotEmpty()) formattedCookies else null
-        } catch (e: Exception) {
-            Log.e("StreamedExtractor", "Failed to fetch cookies: ${e.message}")
-            return null
-        }
+        // Hardcode cookies for testing
+        return "ddg8_=c16XuMgCExmUPpzo; ddg10_=1744925426; ddg9_=82.46.16.114; ddg1_=dl3M1u9zODCU65fvl7YM"
     }
 
     suspend fun getUrl(
@@ -229,7 +209,8 @@ class StreamedExtractor {
                     this.quality = Qualities.Unknown.value
                     this.headers = baseHeaders + mapOf(
                         "Cookie" to cookies,
-                        "Accept" to "application/vnd.apple.mpegurl"
+                        "Accept" to "application/vnd.apple.mpegurl,video/mp2t",
+                        "Range" to "bytes=0-"
                     )
                 }
             )
