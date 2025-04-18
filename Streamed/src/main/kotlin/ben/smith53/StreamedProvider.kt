@@ -8,8 +8,13 @@ import com.lagradost.cloudstream3.utils.Qualities
 import android.util.Log
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import okhttp3.Interceptor
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
 import java.net.URLEncoder
 import java.util.Locale
+import java.util.regex.Pattern
 
 class StreamedProvider : MainAPI() {
     override var mainUrl = "https://streamed.su"
@@ -114,7 +119,9 @@ class StreamedProvider : MainAPI() {
 class StreamedExtractor {
     private val fetchUrl = "https://embedstreams.top/fetch"
     private val cookieUrl = "https://fishy.streamed.su/api/event"
-    private val proxyUrl = "http://localhost:8000/playlist.m3u8"
+    private val baseM3u8Url = "https://rr.buytommy.top"
+    private val segmentBaseUrl = "https://p2-panel.streamed.su"
+
     private val baseHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
         "Referer" to "https://embedstreams.top/",
@@ -133,8 +140,10 @@ class StreamedExtractor {
         "Connection" to "keep-alive"
     )
 
-    private val cache = mutableMapOf<String, CachedResponse>()
-    private data class CachedResponse(val extractorLink: ExtractorLink, val timestamp: Long)
+    // Custom OkHttp client with interceptor
+    private val client = OkHttpClient.Builder()
+        .addInterceptor(M3U8Interceptor())
+        .build()
 
     suspend fun getCookies(): String? {
         // Hardcode cookies for testing
@@ -150,15 +159,6 @@ class StreamedExtractor {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         Log.d("StreamedExtractor", "Starting extraction for: $streamUrl")
-
-        // Check cache
-        val cacheKey = "$source-$matchId-$streamNo"
-        val cachedResponse = cache[cacheKey]
-        if (cachedResponse != null && System.currentTimeMillis() - cachedResponse.timestamp < 10_000) {
-            Log.d("StreamedExtractor", "Using cached ExtractorLink for $streamUrl")
-            callback.invoke(cachedResponse.extractorLink)
-            return true
-        }
 
         // Fetch cookies
         val cookies = getCookies() ?: run {
@@ -185,7 +185,6 @@ class StreamedExtractor {
             response.text
         } catch (e: Exception) {
             Log.e("StreamedExtractor", "Fetch failed: ${e.message}")
-            cache.remove(cacheKey) // Clear cache on error
             return false
         }
         Log.d("StreamedExtractor", "Encrypted response: $encryptedResponse")
@@ -198,25 +197,20 @@ class StreamedExtractor {
                 .parsedSafe<Map<String, String>>()
         } catch (e: Exception) {
             Log.e("StreamedExtractor", "Decryption request failed: ${e.message}")
-            cache.remove(cacheKey) // Clear cache on error
             return false
         }
         val decryptedPath = decryptResponse?.get("decrypted") ?: return false.also {
             Log.e("StreamedExtractor", "Decryption failed or no 'decrypted' key")
-            cache.remove(cacheKey) // Clear cache on error
         }
         Log.d("StreamedExtractor", "Decrypted path: $decryptedPath")
 
-        // Construct M3U8 URL and proxy URL with cookies
+        // Construct M3U8 URL
         val m3u8Url = "https://rr.buytommy.top$decryptedPath"
-        val encodedM3u8Url = URLEncoder.encode(m3u8Url, "UTF-8")
-        val encodedCookies = URLEncoder.encode(cookies, "UTF-8")
-        val proxiedUrl = "$proxyUrl?url=$encodedM3u8Url&cookies=$encodedCookies"
         try {
             val extractorLink = newExtractorLink(
                 source = "Streamed",
                 name = "$source Stream $streamNo",
-                url = proxiedUrl,
+                url = m3u8Url,
                 type = ExtractorLinkType.M3U8
             ) {
                 this.referer = embedReferer
@@ -226,16 +220,86 @@ class StreamedExtractor {
                     "Accept" to "application/vnd.apple.mpegurl,video/mp2t",
                     "Range" to "bytes=0-"
                 )
-                Log.d("StreamedExtractor", "ExtractorLink created with URL: $proxiedUrl, Headers: ${this.headers}")
+                Log.d("StreamedExtractor", "ExtractorLink created with URL: $m3u8Url, Headers: ${this.headers}")
             }
             callback.invoke(extractorLink)
-            cache[cacheKey] = CachedResponse(extractorLink, System.currentTimeMillis())
-            Log.d("StreamedExtractor", "Proxied M3U8 URL added and cached: $proxiedUrl")
+            Log.d("StreamedExtractor", "M3U8 URL added: $m3u8Url")
             return true
         } catch (e: Exception) {
-            Log.e("StreamedExtractor", "Failed to add proxied URL: ${e.message}")
-            cache.remove(cacheKey) // Clear cache on error
+            Log.e("StreamedExtractor", "Failed to add M3U8 URL: ${e.message}")
             return false
         }
+    }
+}
+
+// OkHttp Interceptor to rewrite M3U8 and fix Content-Type
+class M3U8Interceptor : Interceptor {
+    private val segmentPattern = Pattern.compile("https://corsproxy\\.io/\\?url=https://p2-panel\\.streamed\\.su/[^\\s]+\\.js")
+    private val keyPattern = Pattern.compile("/alpha/key/[^\"]+")
+
+    override fun intercept(chain: Interceptor.Chain): Response {
+        val request = chain.request()
+        val url = request.url.toString()
+        Log.d("M3U8Interceptor", "Intercepting request: $url")
+
+        // Proceed with the request
+        val response = chain.proceed(request)
+        val contentType = response.header("Content-Type") ?: "application/octet-stream"
+
+        // Handle M3U8 responses
+        if (url.endsWith(".m3u8") && contentType.contains("application/vnd.apple.mpegurl")) {
+            val body = response.body?.string() ?: return response
+            Log.d("M3U8Interceptor", "Original M3U8:\n$body")
+
+            // Rewrite M3U8
+            val rewrittenBody = rewriteM3u8(body)
+            Log.d("M3U8Interceptor", "Rewritten M3U8:\n$rewrittenBody")
+
+            // Return modified response
+            return response.newBuilder()
+                .body(rewrittenBody.toResponseBody("application/vnd.apple.mpegurl".toMediaType()))
+                .build()
+        }
+
+        // Fix Content-Type for segments
+        if (url.endsWith(".ts") || url.contains("p2-panel.streamed.su")) {
+            Log.d("M3U8Interceptor", "Fixing Content-Type for segment: $url")
+            return response.newBuilder()
+                .header("Content-Type", "video/mp2t")
+                .build()
+        }
+
+        return response
+    }
+
+    private fun rewriteM3u8(m3u8: String): String {
+        val lines = m3u8.split("\n")
+        val rewrittenLines = lines.map { line ->
+            var modifiedLine = line
+
+            // Rewrite key URLs
+            if (line.startsWith("#EXT-X-KEY")) {
+                val matcher = keyPattern.matcher(line)
+                if (matcher.find()) {
+                    val keyUrl = matcher.group()
+                    val newKeyUrl = "https://rr.buytommy.top$keyUrl"
+                    modifiedLine = line.replace(keyUrl, newKeyUrl)
+                    Log.d("M3U8Interceptor", "Rewrote key: $keyUrl -> $newKeyUrl")
+                }
+            }
+
+            // Rewrite segment URLs
+            val matcher = segmentPattern.matcher(line)
+            if (matcher.find()) {
+                val segmentUrl = matcher.group()
+                val newSegmentUrl = segmentUrl.replace("https://corsproxy.io/?url=", "")
+                    .replace(".js", ".ts")
+                modifiedLine = newSegmentUrl
+                Log.d("M3U8Interceptor", "Rewrote segment: $segmentUrl -> $newSegmentUrl")
+            }
+
+            modifiedLine
+        }
+        return rewrittenLines.joinToString("\n")
     }
 }
