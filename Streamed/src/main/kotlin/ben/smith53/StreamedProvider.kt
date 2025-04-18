@@ -133,6 +133,9 @@ class StreamedExtractor {
         "Connection" to "keep-alive"
     )
 
+    private val cache = mutableMapOf<String, CachedResponse>()
+    private data class CachedResponse(val extractorLink: ExtractorLink, val timestamp: Long)
+
     suspend fun getCookies(): String? {
         // Hardcode cookies for testing
         return "ddg8_=c16XuMgCExmUPpzo; ddg10_=1744925426; ddg9_=82.46.16.114; ddg1_=dl3M1u9zODCU65fvl7YM"
@@ -147,6 +150,15 @@ class StreamedExtractor {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         Log.d("StreamedExtractor", "Starting extraction for: $streamUrl")
+
+        // Check cache
+        val cacheKey = "$source-$matchId-$streamNo"
+        val cachedResponse = cache[cacheKey]
+        if (cachedResponse != null && System.currentTimeMillis() - cachedResponse.timestamp < 10_000) {
+            Log.d("StreamedExtractor", "Using cached ExtractorLink for $streamUrl")
+            callback.invoke(cachedResponse.extractorLink)
+            return true
+        }
 
         // Fetch cookies
         val cookies = getCookies() ?: run {
@@ -173,6 +185,7 @@ class StreamedExtractor {
             response.text
         } catch (e: Exception) {
             Log.e("StreamedExtractor", "Fetch failed: ${e.message}")
+            cache.remove(cacheKey) // Clear cache on error
             return false
         }
         Log.d("StreamedExtractor", "Encrypted response: $encryptedResponse")
@@ -185,10 +198,12 @@ class StreamedExtractor {
                 .parsedSafe<Map<String, String>>()
         } catch (e: Exception) {
             Log.e("StreamedExtractor", "Decryption request failed: ${e.message}")
+            cache.remove(cacheKey) // Clear cache on error
             return false
         }
         val decryptedPath = decryptResponse?.get("decrypted") ?: return false.also {
             Log.e("StreamedExtractor", "Decryption failed or no 'decrypted' key")
+            cache.remove(cacheKey) // Clear cache on error
         }
         Log.d("StreamedExtractor", "Decrypted path: $decryptedPath")
 
@@ -198,27 +213,28 @@ class StreamedExtractor {
         val encodedCookies = URLEncoder.encode(cookies, "UTF-8")
         val proxiedUrl = "$proxyUrl?url=$encodedM3u8Url&cookies=$encodedCookies"
         try {
-            callback.invoke(
-                newExtractorLink(
-                    source = "Streamed",
-                    name = "$source Stream $streamNo",
-                    url = proxiedUrl,
-                    type = ExtractorLinkType.M3U8
-                ) {
-                    this.referer = embedReferer
-                    this.quality = Qualities.Unknown.value
-                    this.headers = baseHeaders + mapOf(
-                        "Cookie" to cookies,
-                        "Accept" to "application/vnd.apple.mpegurl,video/mp2t",
-                        "Range" to "bytes=0-"
-                    )
-                    Log.d("StreamedExtractor", "ExtractorLink created with URL: $proxiedUrl, Headers: ${this.headers}")
-                }
-            )
-            Log.d("StreamedExtractor", "Proxied M3U8 URL added: $proxiedUrl")
+            val extractorLink = newExtractorLink(
+                source = "Streamed",
+                name = "$source Stream $streamNo",
+                url = proxiedUrl,
+                type = ExtractorLinkType.M3U8
+            ) {
+                this.referer = embedReferer
+                this.quality = Qualities.Unknown.value
+                this.headers = baseHeaders + mapOf(
+                    "Cookie" to cookies,
+                    "Accept" to "application/vnd.apple.mpegurl,video/mp2t",
+                    "Range" to "bytes=0-"
+                )
+                Log.d("StreamedExtractor", "ExtractorLink created with URL: $proxiedUrl, Headers: ${this.headers}")
+            }
+            callback.invoke(extractorLink)
+            cache[cacheKey] = CachedResponse(extractorLink, System.currentTimeMillis())
+            Log.d("StreamedExtractor", "Proxied M3U8 URL added and cached: $proxiedUrl")
             return true
         } catch (e: Exception) {
             Log.e("StreamedExtractor", "Failed to add proxied URL: ${e.message}")
+            cache.remove(cacheKey) // Clear cache on error
             return false
         }
     }
