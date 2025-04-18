@@ -192,7 +192,7 @@ class StreamedExtractor {
         }
         Log.d("StreamedExtractor", "Decrypted path: $decryptedPath")
 
-        // Construct M3U8 URL and proxy URL with fresh cookies
+        // Construct M3U8 URL and proxy URL with cookies
         val m3u8Url = "https://rr.buytommy.top$decryptedPath"
         val encodedM3u8Url = URLEncoder.encode(m3u8Url, "UTF-8")
         val encodedCookies = URLEncoder.encode(cookies, "UTF-8")
@@ -212,6 +212,7 @@ class StreamedExtractor {
                         "Accept" to "application/vnd.apple.mpegurl,video/mp2t",
                         "Range" to "bytes=0-"
                     )
+                    Log.d("StreamedExtractor", "ExtractorLink created with URL: $proxiedUrl, Headers: ${this.headers}")
                 }
             )
             Log.d("StreamedExtractor", "Proxied M3U8 URL added: $proxiedUrl")
