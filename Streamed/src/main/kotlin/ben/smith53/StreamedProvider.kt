@@ -6,15 +6,18 @@ import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
 import android.util.Log
-import com.lagradost.cloudstream3.network.POST // Make sure POST is imported if you use app.post directly
+// REMOVED: import com.lagradost.cloudstream3.network.POST // Not used directly, app.post is used
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
+// ADDED Imports for required utility functions and data classes
 import com.lagradost.cloudstream3.utils.newHomePageResponse
 import com.lagradost.cloudstream3.utils.newLiveSearchResponse
 import com.lagradost.cloudstream3.utils.newLiveStreamLoadResponse
+import com.lagradost.cloudstream3.MainPageData // Import needed for mainPage override
+import com.lagradost.cloudstream3.HomePageList // Import needed for newHomePageResponse
 import java.net.URLEncoder
 import java.util.Locale
-import java.util.regex.Pattern // For cookie parsing (though less used now)
+// import java.util.regex.Pattern // Keep if needed elsewhere, not strictly for cookie formatting now
 
 class StreamedProvider : MainAPI() {
     // Provider Metadata
@@ -27,24 +30,24 @@ class StreamedProvider : MainAPI() {
     private val sources = listOf("alpha", "bravo", "charlie", "delta") // Add more if needed
     private val maxStreams = 3 // Max streams per source to check
 
-    // Main Page Categories
-    override val mainPage = mainPageOf(
-        "$mainUrl/api/matches/live/popular" to "Popular Live",
-        "$mainUrl/api/matches/football" to "Football",
-        "$mainUrl/api/matches/baseball" to "Baseball",
-        "$mainUrl/api/matches/american-football" to "American Football",
-        "$mainUrl/api/matches/hockey" to "Hockey",
-        "$mainUrl/api/matches/basketball" to "Basketball",
-        "$mainUrl/api/matches/motor-sports" to "Motor Sports",
-        "$mainUrl/api/matches/fight" to "Fight",
-        "$mainUrl/api/matches/tennis" to "Tennis",
-        "$mainUrl/api/matches/rugby" to "Rugby",
-        "$mainUrl/api/matches/golf" to "Golf",
-        "$mainUrl/api/matches/billiards" to "Billiards",
-        "$mainUrl/api/matches/afl" to "AFL",
-        "$mainUrl/api/matches/darts" to "Darts",
-        "$mainUrl/api/matches/cricket" to "Cricket",
-        "$mainUrl/api/matches/other" to "Other"
+    // --- CORRECTED mainPage definition ---
+    override val mainPage = listOf(
+        MainPageData("Popular Live", "$mainUrl/api/matches/live/popular"),
+        MainPageData("Football", "$mainUrl/api/matches/football"),
+        MainPageData("Baseball", "$mainUrl/api/matches/baseball"),
+        MainPageData("American Football", "$mainUrl/api/matches/american-football"),
+        MainPageData("Hockey", "$mainUrl/api/matches/hockey"),
+        MainPageData("Basketball", "$mainUrl/api/matches/basketball"),
+        MainPageData("Motor Sports", "$mainUrl/api/matches/motor-sports"),
+        MainPageData("Fight", "$mainUrl/api/matches/fight"),
+        MainPageData("Tennis", "$mainUrl/api/matches/tennis"),
+        MainPageData("Rugby", "$mainUrl/api/matches/rugby"),
+        MainPageData("Golf", "$mainUrl/api/matches/golf"),
+        MainPageData("Billiards", "$mainUrl/api/matches/billiards"),
+        MainPageData("AFL", "$mainUrl/api/matches/afl"),
+        MainPageData("Darts", "$mainUrl/api/matches/darts"),
+        MainPageData("Cricket", "$mainUrl/api/matches/cricket"),
+        MainPageData("Other", "$mainUrl/api/matches/other")
     )
 
     // Fetch and parse main page listings
@@ -55,6 +58,7 @@ class StreamedProvider : MainAPI() {
              app.get(request.data, headers = headers)
         } catch (e: Exception) {
              Log.e("StreamedProvider", "Failed to fetch main page GET request: ${request.data} - Error: ${e.message}", e)
+             // Return an empty response on error
              return newHomePageResponse(request.name, emptyList())
         }
 
@@ -74,6 +78,7 @@ class StreamedProvider : MainAPI() {
             // Ensure match ID exists
             val matchId = match.id ?: return@mapNotNull null
             val url = "$mainUrl/watch/$matchId" // Internal URL used for loading details later
+            // Use CORRECTED newLiveSearchResponse
             newLiveSearchResponse(
                 name = match.title,
                 url = url,
@@ -85,9 +90,16 @@ class StreamedProvider : MainAPI() {
             }
         }
 
+        // Use CORRECTED newHomePageResponse structure
         return newHomePageResponse(
-            list = listOf(HomePageList(request.name, list, isHorizontalImages = true)),
-            hasNext = false
+            list = listOf(
+                HomePageList(
+                    name = request.name,
+                    list = list,
+                    isHorizontalImages = true // Parameter belongs inside HomePageList
+                )
+            ),
+            hasNext = false // Assuming no pagination for these API endpoints
         )
     }
 
@@ -102,13 +114,14 @@ class StreamedProvider : MainAPI() {
         // Assuming poster structure based on previous observation
         val posterUrl = "$mainUrl/api/images/poster/$matchId.webp"
 
+        // Use CORRECTED newLiveStreamLoadResponse call
         return newLiveStreamLoadResponse(
             name = title,
-            url = url, // Keep the internal URL
-            apiName = this.name // Use the provider name
+            url = url, // Pass the URL, loadLinks will receive this as 'data'
+            type = TvType.Live // Explicitly set type
+            // REMOVED apiName, REMOVED dataUrl (it's passed as main parameter to loadLinks)
         ) {
             this.posterUrl = posterUrl
-            // dataUrl = url // Pass the URL to loadLinks if needed, but it's already the 'data' parameter
         }
     }
 
@@ -194,7 +207,7 @@ class StreamedExtractor {
         // Referer and Origin are context-dependent
     )
 
-    // --- MODIFIED: Function to fetch and format cookies in a SPECIFIC order ---
+    // Function to fetch and format cookies in a SPECIFIC order
     private suspend fun fetchAndFormatCookies(referer: String): String? {
         Log.d("StreamedExtractor", "Attempting to fetch cookies from $cookieUrl with referer $referer")
         // Define the EXACT required cookie names in the desired order
@@ -211,7 +224,7 @@ class StreamedExtractor {
             )
             val payload = mapOf("event" to "pageview") // Payload required by the endpoint
 
-            // Perform the POST request
+            // Perform the POST request using app.post
             val response = app.post(
                 cookieUrl,
                 headers = cookieHeaders,
@@ -264,6 +277,7 @@ class StreamedExtractor {
             var allRequiredFound = true
             for (cookieName in requiredCookieOrder) {
                 // Handle potential leading underscore if server sends "_ddgX_" but required is "ddgX_"
+                // Look for the exact name, the name without potential underscore, or with underscore prepended
                 val cookieValue = parsedCookiesMap[cookieName] ?: parsedCookiesMap[cookieName.removePrefix("_")] ?: parsedCookiesMap["_${cookieName}"]
 
                 if (cookieValue != null) {
@@ -329,8 +343,8 @@ class StreamedExtractor {
             "Sec-Fetch-Site" to "same-origin" // Fetch is same-origin to embed referer
         )
         Log.d("StreamedExtractor", "Fetching encrypted path from $fetchUrl")
-        // Logd("StreamedExtractor", "Fetch Headers: $fetchHeaders") // Uncomment carefully (contains cookies)
-        // Logd("StreamedExtractor", "Fetch Data: $postData")
+        // Log.d("StreamedExtractor", "Fetch Headers: $fetchHeaders") // Uncomment carefully (contains cookies)
+        // Log.d("StreamedExtractor", "Fetch Data: $postData")
 
         val encryptedResponse = try {
             val response = app.post(fetchUrl, headers = fetchHeaders, json = postData, timeout = 25)
@@ -381,18 +395,17 @@ class StreamedExtractor {
 
         // 5. Invoke Callback with the Proxy Link
         try {
+            // Use CORRECTED newExtractorLink call
             callback.invoke(
                 newExtractorLink(
-                    source = "Streamed", // Use provider name or a custom source name
+                    source = "Streamed (Proxy)", // Use the provider's name for source consistency
                     name = "$source Stream $streamNo", // Descriptive name for the link
                     url = proxiedUrl, // The URL pointing to the Python proxy
-                    referer = embedReferer, // Important: Player should use this when requesting proxiedUrl
                     type = ExtractorLinkType.M3U8 // Type hint for the player
+                    // REMOVED referer from top-level parameters
                 ) {
-                    this.quality = Qualities.Unknown.value // Quality is usually unknown for live streams initially
-                    // No headers needed here for the proxy itself, auth is in the URL.
-                    // Headers might be needed if the *player* requires specific headers to talk to the proxy,
-                    // but usually User-Agent and Referer passed via newExtractorLink are sufficient.
+                    this.quality = Qualities.Unknown.value
+                    this.referer = embedReferer // Set referer INSIDE the lambda block
                 }
             )
             Log.i("StreamedExtractor", "Successfully added ExtractorLink for $source/$streamNo")
@@ -404,6 +417,4 @@ class StreamedExtractor {
     }
 }
 
-// Helper function for creating main page sections easily
-fun mainPageOf(vararg pairs: Pair<String, String>) =
-    pairs.map { MainPageRequest(it.second, it.first) }
+// REMOVED mainPageOf helper function as it's no longer used/correct for the current mainPage definition
