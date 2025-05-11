@@ -21,7 +21,7 @@ class StreamedProvider : MainAPI() {
     override val hasMainPage = true
 
     private val sources = listOf("admin", "alpha", "bravo", "charlie", "delta")
-    private private val maxStreams = 3
+    private val maxStreams = 3
 
     override val mainPage = mainPageOf(
         "$mainUrl/api/matches/live/popular" to "Popular",
@@ -131,7 +131,6 @@ class StreamedMediaExtractor {
         source: String,
         streamNo: Int,
         subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (Extractor+',1
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         Log.d("StreamedMediaExtractor", "Starting extraction for: $streamUrl")
