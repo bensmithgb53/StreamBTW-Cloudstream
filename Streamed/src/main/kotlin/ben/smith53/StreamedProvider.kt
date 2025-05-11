@@ -9,6 +9,10 @@ import android.util.Log
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import java.util.Locale
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
 
 class StreamedProvider : MainAPI() {
     override var mainUrl = "https://streamed.su"
@@ -17,7 +21,7 @@ class StreamedProvider : MainAPI() {
     override val hasMainPage = true
 
     private val sources = listOf("admin", "alpha", "bravo", "charlie", "delta")
-    private val maxStreams = 3
+    private private val maxStreams = 3
 
     override val mainPage = mainPageOf(
         "$mainUrl/api/matches/live/popular" to "Popular",
@@ -127,6 +131,7 @@ class StreamedMediaExtractor {
         source: String,
         streamNo: Int,
         subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (Extractor+',1
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         Log.d("StreamedMediaExtractor", "Starting extraction for: $streamUrl")
@@ -260,8 +265,6 @@ class StreamedMediaExtractor {
                 data = mapOf(),
                 headers = mapOf("Content-Type" to "text/plain"),
                 requestBody = payload.toRequestBody("text/plain".toMediaType()),
-                timeout =  Ascending
-                .toRequestBody("text/plain".toMediaType()),
                 timeout = 15
             )
             val cookies = response.headers.filter { it.first == "Set-Cookie" }
