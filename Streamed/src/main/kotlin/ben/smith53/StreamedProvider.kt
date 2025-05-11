@@ -1,10 +1,10 @@
 package ben.smith53
 
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.network.CloudflareKiller
+import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
+import com.lagradost.cloudstream3.network.CloudflareKiller
 import kotlinx.serialization.Serializable
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -40,12 +40,13 @@ class StreamedProvider : MainAPI() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val apiUrl = request.data
         Log.d("StreamedProvider", "Fetching main page: $apiUrl")
-        val matches = app.get(apiUrl, headers = CloudflareKiller().getCookieHeaders(apiUrl)).parsedSafe<List<Match>>()
+        val matches = app.get(apiUrl, headers = CloudflareKiller().getCookieHeaders(apiUrl).toMap()).parsedSafe<List<Match>>()
         Log.d("StreamedProvider", "Parsed ${matches?.size ?: 0} matches")
         val home = matches?.mapNotNull {
-            newMovieSearchResponse(
+            newLiveSearchResponse(
                 name = it.title,
                 url = "$mainUrl/watch/${it.id}",
+                apiName = this.name,
                 type = TvType.Live
             ) {
                 this.posterUrl = it.thumbnail
@@ -57,12 +58,13 @@ class StreamedProvider : MainAPI() {
     override suspend fun search(query: String): List<SearchResponse> {
         val apiUrl = "$mainUrl/api/matches?search=$query"
         Log.d("StreamedProvider", "Searching with: $apiUrl")
-        val matches = app.get(apiUrl, headers = CloudflareKiller().getCookieHeaders(apiUrl)).parsedSafe<List<Match>>()
+        val matches = app.get(apiUrl, headers = CloudflareKiller().getCookieHeaders(apiUrl).toMap()).parsedSafe<List<Match>>()
         Log.d("StreamedProvider", "Found ${matches?.size ?: 0} search results")
         return matches?.mapNotNull {
-            newMovieSearchResponse(
+            newLiveSearchResponse(
                 name = it.title,
                 url = "$mainUrl/watch/${it.id}",
+                apiName = this.name,
                 type = TvType.Live
             ) {
                 this.posterUrl = it.thumbnail
@@ -77,11 +79,11 @@ class StreamedProvider : MainAPI() {
         val match = app.get(apiUrl).parsedSafe<List<Match>>()?.firstOrNull()
             ?: throw ErrorLoadingException("Failed to load match data")
         Log.d("StreamedProvider", "Loaded match: ${match.title}")
-        return newMovieLoadResponse(
+        return newLiveStreamLoadResponse(
             name = match.title,
             url = url,
-            dataUrl = match.id,
-            type = TvType.Live
+            apiName = this.name,
+            dataUrl = match.id
         ) {
             this.posterUrl = match.thumbnail
         }
@@ -197,7 +199,7 @@ class StreamedMediaExtractor {
         Log.d("StreamedMediaExtractor", "Fetching with data: $postData and headers: $fetchHeaders")
 
         val encryptedResponse = try {
-            val response = app.post(fetchUrl, headers = fetchHeaders, json = postData, timeout = 15)
+            val response = app.post(fetchUrl, headers = fetchHeaders, json = postData.toJson(), timeout = 15)
             Log.d("StreamedMediaExtractor", "Fetch response code: ${response.code} for source: $source, streamNo: $streamNo")
             response.text.also {
                 Log.d("StreamedMediaExtractor", "Encrypted response length: ${it.length}, first 100 chars: ${it.take(100)}")
@@ -211,7 +213,7 @@ class StreamedMediaExtractor {
         // Decrypt using Deno
         val decryptPostData = mapOf("encrypted" to encryptedResponse)
         val decryptResponse = try {
-            app.post(decryptUrl, json = decryptPostData, headers = mapOf("Content-Type" to "application/json"))
+            app.post(decryptUrl, json = decryptPostData.toJson(), headers = mapOf("Content-Type" to "application/json"))
                 .parsedSafe<Map<String, String>>()
         } catch (e: Exception) {
             Log.e("StreamedMediaExtractor", "Decryption request failed for source: $source, streamNo: $streamNo: ${e.message}")
@@ -238,16 +240,15 @@ class StreamedMediaExtractor {
                 Log.d("StreamedMediaExtractor", "M3U8 test response code: ${testResponse.code} for $testUrl")
                 if (testResponse.code == 200) {
                     callback.invoke(
-                        newExtractorLink(
+                        ExtractorLink(
                             source = "Streamed",
                             name = "$source Stream $streamNo",
                             url = testUrl,
-                            type = ExtractorLinkType.M3U8
-                        ) {
-                            this.referer = embedReferer
-                            this.quality = Qualities.Unknown.value
-                            this.headers = m3u8Headers
-                        }
+                            referer = embedReferer,
+                            quality = Qualities.Unknown.value,
+                            headers = m3u8Headers,
+                            isM3u8 = true
+                        )
                     )
                     Log.d("StreamedMediaExtractor", "M3U8 URL added: $testUrl")
                     success = true
