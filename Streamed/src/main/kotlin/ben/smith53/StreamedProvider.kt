@@ -49,7 +49,6 @@ class StreamedProvider : MainAPI() {
             newLiveSearchResponse(
                 name = match.title,
                 url = url,
-                apiName = this.name,
                 type = TvType.Live
             ) {
                 this.posterUrl = "$mainUrl${match.posterPath ?: "/api/images/poster/fallback.webp"}"
@@ -68,7 +67,6 @@ class StreamedProvider : MainAPI() {
         return newLiveStreamLoadResponse(
             name = title,
             url = url,
-            apiName = this.name,
             dataUrl = url
         ) {
             this.posterUrl = posterUrl
