@@ -49,16 +49,14 @@ class StreamedProvider : MainAPI() {
             newLiveSearchResponse(
                 name = match.title,
                 url = url,
+                apiName = this.name,
                 type = TvType.Live
             ) {
                 this.posterUrl = "$mainUrl${match.posterPath ?: "/api/images/poster/fallback.webp"}"
             }
-        }.filterNotNull()
+        }
 
-        return newHomePageResponse(
-            list = listOf(HomePageList(request.name, list, isHorizontalImages = true)),
-            hasNext = false
-        )
+        return newHomePageResponse(request.name, list)
     }
 
     override suspend fun load(url: String): LoadResponse {
@@ -70,6 +68,7 @@ class StreamedProvider : MainAPI() {
         return newLiveStreamLoadResponse(
             name = title,
             url = url,
+            apiName = this.name,
             dataUrl = url
         ) {
             this.posterUrl = posterUrl
@@ -115,7 +114,7 @@ class StreamedProvider : MainAPI() {
 class StreamedExtractor {
     private val fetchUrl = "https://embedstreams.top/fetch"
     private val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
-    private val eventUrl = "https://fishy.streamed.su/api/event"
+    private val eventUrl = chicks[0]
     private val baseHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
         "Accept" to "*/*",
@@ -236,7 +235,6 @@ class StreamedExtractor {
             val m3u8Headers = baseHeaders + mapOf(
                 "Referer" to embedReferer,
                 "Cookie" to cookieHeader
-                // Optional: "Range" to "bytes=0-" (enable if SIDX detected)
             )
             var retryDelay = 1000L
             for (attempt in 1..5) {
@@ -280,13 +278,13 @@ class StreamedExtractor {
         val rewrittenM3u8 = m3u8Content.lines().map { line ->
             when {
                 line.startsWith("#") -> line // Keep comments and metadata
-                line.startsWith("https://") && line.endsWith((".js", ".ts")) -> {
+                line.startsWith("https://") && (line.endsWith(".js") || line.endsWith(".ts")) -> {
                     // Rewrite .js to .ts
                     val newUrl = line.replace(".js", ".ts")
                     Log.d("StreamedExtractor", "Rewrote segment: $line -> $newUrl")
                     newUrl
                 }
-                line.startsWith("https://") && !line.endsWith((".ts", ".m3u8")) -> {
+                line.startsWith("https://") && (!line.endsWith(".ts") && !line.endsWith(".m3u8")) -> {
                     Log.w("StreamedExtractor", "Skipping invalid segment: $line")
                     "" // Skip non-.ts/.m3u8 URLs (e.g., .png)
                 }
@@ -327,5 +325,13 @@ class StreamedExtractor {
         }
 
         return true
+    }
+
+    companion object {
+        val chicks = listOf(
+            "https://fishy.streamed.su/api/event",
+            "https://fishy2.streamed.su/api/event",
+            "https://fishy3.streamed.su/api/event"
+        )
     }
 }
