@@ -20,8 +20,8 @@ class StreamedProvider : MainAPI() {
     override var supportedTypes = setOf(TvType.Live)
     override val hasMainPage = true
 
-    private val sources = listOf("admin", "alpha", "bravo", "charlie", "delta")
-    private val maxStreams = 3
+    private val sources = listOf("alpha", "bravo", "charlie", "delta", "echo", "foxtrot")
+    private val maxStreams = 4
 
     override val mainPage = mainPageOf(
         "$mainUrl/api/matches/live/popular" to "Popular",
