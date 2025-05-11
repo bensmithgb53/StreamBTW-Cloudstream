@@ -5,11 +5,9 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
-import android.util.Base64
 import android.util.Log
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
-import kotlinx.coroutines.delay
 import java.util.Locale
 
 class StreamedProvider : MainAPI() {
@@ -53,9 +51,12 @@ class StreamedProvider : MainAPI() {
             ) {
                 this.posterUrl = "$mainUrl${match.posterPath ?: "/api/images/poster/fallback.webp"}"
             }
-        }
+        }.filterNotNull()
 
-        return newHomePageResponse(request.name, list)
+        return newHomePageResponse(
+            list = listOf(HomePageList(request.name, list, isHorizontalImages = true)),
+            hasNext = false
+        )
     }
 
     override suspend fun load(url: String): LoadResponse {
@@ -80,7 +81,7 @@ class StreamedProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val matchId = data.substringAfterLast("/")
-        val extractor = StreamedExtractor()
+        val extractor = StreamedMediaExtractor() // Updated to new extractor
         var success = false
 
         sources.forEach { source ->
@@ -109,24 +110,16 @@ class StreamedProvider : MainAPI() {
     )
 }
 
-class StreamedExtractor {
+class StreamedMediaExtractor {
     private val fetchUrl = "https://embedstreams.top/fetch"
+    private val cookieUrl = "https://fishy.streamed.su/api/event"
     private val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
-    private val eventUrl = chicks[0]
     private val baseHeaders = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
-        "Accept" to "*/*",
-        "Accept-Encoding" to "gzip, deflate, br",
-        "Accept-Language" to "en-GB,en-US;q=0.9,en;q=0.8",
-        "Origin" to "https://streamed.su",
-        "Referer" to "https://streamed.su/",
-        "Sec-Ch-Ua" to "\"Not A(Brand\";v=\"8\", \"Chromium\";v=\"132\"",
-        "Sec-Ch-Ua-Mobile" to "?1",
-        "Sec-Ch-Ua-Platform" to "\"Android\"",
-        "Sec-Fetch-Dest" to "empty",
-        "Sec-Fetch-Mode" to "cors",
-        "Sec-Fetch-Site" to "same-site"
+        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+        "Content-Type" to "application/json"
     )
+    private val fallbackDomains = listOf("p2-panel.streamed.su", "streamed.su")
+    private val cookieCache = mutableMapOf<String, String>()
 
     suspend fun getUrl(
         streamUrl: String,
@@ -136,50 +129,37 @@ class StreamedExtractor {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        Log.d("StreamedExtractor", "Starting extraction for: $streamUrl")
+        Log.d("StreamedMediaExtractor", "Starting extraction for: $streamUrl")
 
-        // Fetch cookies from stream page
+        // Fetch stream page cookies
         val streamResponse = try {
             app.get(streamUrl, headers = baseHeaders, timeout = 15)
         } catch (e: Exception) {
-            Log.e("StreamedExtractor", "Stream page fetch failed: ${e.message}")
+            Log.e("StreamedMediaExtractor", "Stream page fetch failed: ${e.message}")
             return false
         }
         val streamCookies = streamResponse.cookies
-        Log.d("StreamedExtractor", "Stream page cookies: $streamCookies")
+        Log.d("StreamedMediaExtractor", "Stream cookies: $streamCookies")
 
-        // Fetch cookies from fishy.streamed.su/api/event
-        val fishyCookies = try {
-            val eventPayload = mapOf(
-                "n" to "pageview",
-                "u" to streamUrl,
-                "d" to "streamed.su",
-                "r" to "https://streamed.su/watch/$matchId"
-            )
-            val eventHeaders = baseHeaders + mapOf("Content-Type" to "text/plain")
-            val response = app.post(
-                eventUrl,
-                headers = eventHeaders,
-                json = eventPayload,
-                timeout = 15
-            )
-            response.cookies.also {
-                Log.d("StreamedExtractor", "Fishy.streamed.su cookies: $it")
-            }
-        } catch (e: Exception) {
-            Log.w("StreamedExtractor", "Failed to fetch cookies from fishy.streamed.su: ${e.message}")
-            emptyMap()
-        }
+        // Fetch event cookies
+        val eventCookies = fetchEventCookies(streamUrl, streamUrl)
+        Log.d("StreamedMediaExtractor", "Event cookies: $eventCookies")
 
         // Combine cookies
-        val allCookies = streamCookies + fishyCookies
-        val cookieHeader = allCookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
-        Log.d("StreamedExtractor", "Combined cookies: $cookieHeader")
-
-        // Verify required cookies
-        if (!allCookies.keys.containsAll(setOf("_ddg8_", "_ddg9_", "_ddg10_", "_ddg1_"))) {
-            Log.w("StreamedExtractor", "Missing required cookies: ${setOf("_ddg8_", "_ddg9_", "_ddg10_", "_ddg1_").minus(allCookies.keys)}")
+        val combinedCookies = buildString {
+            if (streamCookies.isNotEmpty()) {
+                append(streamCookies.entries.joinToString("; ") { "${it.key}=${it.value}" })
+            }
+            if (eventCookies.isNotEmpty()) {
+                if (isNotEmpty()) append("; ")
+                append(eventCookies)
+            }
         }
+        if (combinedCookies.isEmpty()) {
+            Log.e("StreamedMediaExtractor", "No cookies obtained")
+            return false
+        }
+        Log.d("StreamedMediaExtractor", "Combined cookies: $combinedCookies")
 
         // POST to fetch encrypted string
         val postData = mapOf(
@@ -190,20 +170,19 @@ class StreamedExtractor {
         val embedReferer = "https://embedstreams.top/embed/$source/$matchId/$streamNo"
         val fetchHeaders = baseHeaders + mapOf(
             "Referer" to streamUrl,
-            "Cookie" to cookieHeader,
-            "Content-Type" to "application/json"
+            "Cookie" to combinedCookies
         )
-        Log.d("StreamedExtractor", "Fetching with data: $postData and headers: $fetchHeaders")
+        Log.d("StreamedMediaExtractor", "Fetching with data: $postData and headers: $fetchHeaders")
 
         val encryptedResponse = try {
             val response = app.post(fetchUrl, headers = fetchHeaders, json = postData, timeout = 15)
-            Log.d("StreamedExtractor", "Fetch response code: ${response.code}")
+            Log.d("StreamedMediaExtractor", "Fetch response code: ${response.code}")
             response.text
         } catch (e: Exception) {
-            Log.e("StreamedExtractor", "Fetch failed: ${e.message}")
+            Log.e("StreamedMediaExtractor", "Fetch failed: ${e.message}")
             return false
         }
-        Log.d("StreamedExtractor", "Encrypted response: $encryptedResponse")
+        Log.d("StreamedMediaExtractor", "Encrypted response: $encryptedResponse")
 
         // Decrypt using Deno
         val decryptPostData = mapOf("encrypted" to encryptedResponse)
@@ -211,125 +190,92 @@ class StreamedExtractor {
             app.post(decryptUrl, json = decryptPostData, headers = mapOf("Content-Type" to "application/json"))
                 .parsedSafe<Map<String, String>>()
         } catch (e: Exception) {
-            Log.e("StreamedExtractor", "Decryption request failed: ${e.message}")
+            Log.e("StreamedMediaExtractor", "Decryption request failed: ${e.message}")
             return false
         }
         val decryptedPath = decryptResponse?.get("decrypted") ?: return false.also {
-            Log.e("StreamedExtractor", "Decryption failed or no 'decrypted' key")
+            Log.e("StreamedMediaExtractor", "Decryption failed or no 'decrypted' key")
         }
-        Log.d("StreamedExtractor", "Decrypted path: $decryptedPath")
+        Log.d("StreamedMediaExtractor", "Decrypted path: $decryptedPath")
 
-        // Construct M3U8 URL and try fallback domains
-        val baseM3u8Url = "https://rr.buytommy.top$decryptedPath"
-        val fallbackUrls = listOf(
-            baseM3u8Url,
-            baseM3u8Url.replace("rr.buytommy.top", "p2-panel.streamed.su"),
-            baseM3u8Url.replace("rr.buytommy.top", "streamed.su")
+        // Construct M3U8 URL
+        val m3u8Url = "https://rr.buytommy.top$decryptedPath"
+        val m3u8Headers = baseHeaders + mapOf(
+            "Referer" to embedReferer,
+            "Cookie" to combinedCookies
         )
-        var m3u8Content: String? = null
 
-        for (m3u8Url in fallbackUrls) {
-            Log.d("StreamedExtractor", "Attempting to fetch M3U8: $m3u8Url")
-            val m3u8Headers = baseHeaders + mapOf(
-                "Referer" to embedReferer,
-                "Cookie" to cookieHeader
-            )
-            var retryDelay = 1000L
-            for (attempt in 1..5) {
-                try {
-                    val response = app.get(m3u8Url, headers = m3u8Headers, timeout = 15)
-                    if (response.code == 200) {
-                        m3u8Content = response.text
-                        Log.d("StreamedExtractor", "M3U8 fetched successfully from $m3u8Url")
-                        break
-                    } else {
-                        Log.w("StreamedExtractor", "M3U8 fetch attempt $attempt failed with code: ${response.code}")
-                    }
-                } catch (e: Exception) {
-                    Log.w("StreamedExtractor", "M3U8 fetch attempt $attempt failed: ${e.message}")
-                    if (attempt < 5) {
-                        delay(retryDelay)
-                        retryDelay = (retryDelay * 2).coerceAtMost(4000L)
-                    }
+        // Test M3U8 with fallbacks
+        for (domain in listOf("rr.buytommy.top") + fallbackDomains) {
+            try {
+                val testUrl = m3u8Url.replace("rr.buytommy.top", domain)
+                val testResponse = app.get(testUrl, headers = m3u8Headers, timeout = 15)
+                if (testResponse.code == 200) {
+                    callback.invoke(
+                        newExtractorLink(
+                            source = "Streamed",
+                            name = "$source Stream $streamNo",
+                            url = testUrl,
+                            type = ExtractorLinkType.M3U8
+                        ) {
+                            this.referer = embedReferer
+                            this.quality = Qualities.Unknown.value
+                            this.headers = m3u8Headers
+                        }
+                    )
+                    Log.d("StreamedMediaExtractor", "M3U8 URL added: $testUrl")
+                    return true
+                } else {
+                    Log.w("StreamedMediaExtractor", "M3U8 test failed for $domain with code: ${testResponse.code}")
                 }
+            } catch (e: Exception) {
+                Log.e("StreamedMediaExtractor", "M3U8 test failed for $domain: ${e.message}")
             }
-            if (m3u8Content != null) break
         }
 
-        if (m3u8Content == null) {
-            Log.e("StreamedExtractor", "Failed to fetch M3U8 from all sources")
-            return false
-        }
-        Log.d("StreamedExtractor", "M3U8 content (first 200 chars): ${m3u8Content.take(200)}")
-
-        // Validate M3U8
-        if (!m3u8Content.contains("#EXTM3U") || !m3u8Content.contains("#EXTINF") || !m3u8Content.contains("#EXT-X-VERSION")) {
-            Log.e("StreamedExtractor", "Invalid M3U8 content: missing #EXTM3U, #EXTINF, or #EXT-X-VERSION")
-            return false
-        }
-        if (m3u8Content.lines().count { it.startsWith("#EXTINF") } < 1) {
-            Log.e("StreamedExtractor", "No fragments found in M3U8 (empty playlist)")
-            return false
-        }
-
-        // Rewrite M3U8 content
-        val rewrittenM3u8 = m3u8Content.lines().map { line ->
-            when {
-                line.startsWith("#") -> line // Keep comments and metadata
-                line.startsWith("https://") && (line.endsWith(".js") || line.endsWith(".ts")) -> {
-                    // Rewrite .js to .ts
-                    val newUrl = line.replace(".js", ".ts")
-                    Log.d("StreamedExtractor", "Rewrote segment: $line -> $newUrl")
-                    newUrl
-                }
-                line.startsWith("https://") && (!line.endsWith(".ts") && !line.endsWith(".m3u8")) -> {
-                    Log.w("StreamedExtractor", "Skipping invalid segment: $line")
-                    "" // Skip non-.ts/.m3u8 URLs (e.g., .png)
-                }
-                else -> line
-            }
-        }.joinToString("\n").trim()
-
-        // Validate rewritten M3U8
-        if (!rewrittenM3u8.lines().any { it.startsWith("https://") && it.endsWith(".ts") }) {
-            Log.e("StreamedExtractor", "No valid .ts segments in rewritten M3U8 (empty playlist)")
-            return false
-        }
-
-        // Encode M3U8 as data URI
-        val encodedM3u8 = Base64.encodeToString(rewrittenM3u8.toByteArray(), Base64.NO_WRAP)
-        val dataUri = "data:application/vnd.apple.mpegurl;base64,$encodedM3u8"
-        Log.d("StreamedExtractor", "Encoded M3U8 as data URI: ${dataUri.take(100)}...")
-
-        // Create ExtractorLink
+        // If tests fail, add link anyway (as in original)
         callback.invoke(
             newExtractorLink(
                 source = "Streamed",
                 name = "$source Stream $streamNo",
-                url = dataUri,
+                url = m3u8Url,
                 type = ExtractorLinkType.M3U8
             ) {
                 this.referer = embedReferer
                 this.quality = Qualities.Unknown.value
-                this.headers = baseHeaders + mapOf("Cookie" to cookieHeader)
+                this.headers = m3u8Headers
             }
         )
-        Log.d("StreamedExtractor", "ExtractorLink added for: $dataUri")
-
-        // Optional: Subtitle support (CEA-608 or TTML)
-        if (m3u8Content.contains("CLOSED-CAPTIONS") || m3u8Content.contains("SUBTITLES") || m3u8Content.contains("stpp.ttml.im1t")) {
-            Log.d("StreamedExtractor", "Subtitles detected (CEA-608 or TTML), parsing not implemented yet")
-            // subtitleCallback.invoke(SubtitleFile("en", "data:text/vtt;base64,..."))
-        }
-
+        Log.d("StreamedMediaExtractor", "M3U8 test failed but added anyway: $m3u8Url")
         return true
     }
 
-    companion object {
-        val chicks = listOf(
-            "https://fishy.streamed.su/api/event",
-            "https://fishy2.streamed.su/api/event",
-            "https://fishy3.streamed.su/api/event"
-        )
+    private suspend fun fetchEventCookies(pageUrl: String, referrer: String): String {
+        cookieCache[pageUrl]?.let { return it }
+
+        val payload = """{"n":"pageview","u":"$pageUrl","d":"streamed.su","r":"$referrer"}"""
+        try {
+            val response = app.post(
+                cookieUrl,
+                data = mapOf(),
+                headers = mapOf("Content-Type" to "text/plain"),
+                requestBody = payload.toRequestBody("text/plain".toMediaType()),
+                timeout =  Ascending
+                .toRequestBody("text/plain".toMediaType()),
+                timeout = 15
+            )
+            val cookies = response.headers.filter { it.first == "Set-Cookie" }
+                .map { it.second.split(";")[0] }
+            val formattedCookies = listOf("_ddg8_", "_ddg10_", "_ddg9_", "_ddg1_")
+                .mapNotNull { key -> cookies.find { it.startsWith(key) } }
+                .joinToString("; ")
+            if (formattedCookies.isNotEmpty()) {
+                cookieCache[pageUrl] = formattedCookies
+                return formattedCookies
+            }
+        } catch (e: Exception) {
+            Log.e("StreamedMediaExtractor", "Failed to fetch event cookies: ${e.message}")
+        }
+        return ""
     }
 }
