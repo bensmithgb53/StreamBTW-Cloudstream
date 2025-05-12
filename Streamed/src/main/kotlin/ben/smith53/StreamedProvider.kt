@@ -20,7 +20,7 @@ class StreamedProvider : MainAPI() {
     override var supportedTypes = setOf(TvType.Live)
     override val hasMainPage = true
 
-    private val sources = listOf("alpha", "bravo", "charlie", "delta", "echo", "foxtrot")
+    private val sources = listOf("alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "admin")
     private val maxStreams = 4
 
     override val mainPage = mainPageOf(
@@ -132,7 +132,8 @@ class StreamedMediaExtractor {
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
         "Content-Type" to "application/json"
     )
-    private val fallbackDomains = listOf("p2-panel.streamed.su", "streamed.su")
+    private val fallbackDomains = listOf("rr.buytommy.top", "p2-panel.streamed.su", "streamed.su")
+    private val adminDomain = "hipaf6u2j3pwygg.nice-flower.store"
     private val cookieCache = mutableMapOf<String, String>()
 
     suspend fun getUrl(
@@ -214,34 +215,38 @@ class StreamedMediaExtractor {
         }
         Log.d("StreamedMediaExtractor", "Decrypted path: $decryptedPath")
 
-        // Construct M3U8 URL
-        val m3u8Url = "https://rr.buytommy.top$decryptedPath"
+        // Construct M3U8 URL based on source
+        val isAdmin = source == "admin"
+        val m3u8Referer = if (isAdmin) "https://www.vidembed.re/" else embedReferer
+        val m3u8Domain = if (isAdmin) adminDomain else fallbackDomains[0] // Default to rr.buytommy.top for non-admin
+        var m3u8Url = "https://$m3u8Domain$decryptedPath"
         val m3u8Headers = baseHeaders + mapOf(
-            "Referer" to embedReferer,
+            "Referer" to m3u8Referer,
             "Cookie" to combinedCookies
         )
 
-        // Test M3U8 with fallbacks
+        // Test M3U8 with fallbacks (skip fallbacks for admin source)
         var success = false
-        for (domain in listOf("rr.buytommy.top") + fallbackDomains) {
+        val domainsToTest = if (isAdmin) listOf(adminDomain) else fallbackDomains
+        for (domain in domainsToTest) {
+            m3u8Url = "https://$domain$decryptedPath"
             try {
-                val testUrl = m3u8Url.replace("rr.buytommy.top", domain)
-                val testResponse = app.get(testUrl, headers = m3u8Headers, timeout = 15)
-                Log.d("StreamedMediaExtractor", "M3U8 test response code: ${testResponse.code} for $testUrl")
+                val testResponse = app.get(m3u8Url, headers = m3u8Headers, timeout = 15)
+                Log.d("StreamedMediaExtractor", "M3U8 test response code: ${testResponse.code} for $m3u8Url")
                 if (testResponse.code == 200) {
                     callback.invoke(
                         newExtractorLink(
                             source = "Streamed",
-                            name = "$source Stream $streamNo",
-                            url = testUrl,
+                            name = "$source Stream $streamNo${if (isAdmin) " (Admin)" else ""}",
+                            url = m3u8Url,
                             type = ExtractorLinkType.M3U8
                         ) {
-                            this.referer = embedReferer
+                            this.referer = m3u8Referer
                             this.quality = Qualities.Unknown.value
                             this.headers = m3u8Headers
                         }
                     )
-                    Log.d("StreamedMediaExtractor", "M3U8 URL added: $testUrl")
+                    Log.d("StreamedMediaExtractor", "M3U8 URL added: $m3u8Url")
                     success = true
                     break
                 } else {
@@ -258,11 +263,11 @@ class StreamedMediaExtractor {
             callback.invoke(
                 newExtractorLink(
                     source = "Streamed",
-                    name = "$source Stream $streamNo",
+                    name = "$source Stream $streamNo${if (isAdmin) " (Admin)" else ""}",
                     url = m3u8Url,
                     type = ExtractorLinkType.M3U8
                 ) {
-                    this.referer = embedReferer
+                    this.referer = m3u8Referer
                     this.quality = Qualities.Unknown.value
                     this.headers = m3u8Headers
                 }
