@@ -285,7 +285,7 @@ class StreamedMediaExtractor {
         val cacheKey = "endpoints-$streamUrl"
         val cached = endpointCache[cacheKey]
         if (cached != null) {
-            return cached.toEndpoints()
+            return Endpoints.fromString(cached)
         }
 
         try {
@@ -332,16 +332,18 @@ class StreamedMediaExtractor {
         val streamDomains: List<String>
     ) {
         override fun toString(): String = "$fetchUrl|$cookieUrl|$decryptUrl|${streamDomains.joinToString(",")}"
-        fun String.toEndpoints(): Endpoints? {
-            val parts = split("|")
-            return if (parts.size >= 4) {
-                Endpoints(
-                    parts[0],
-                    parts[1],
-                    parts[2],
-                    parts[3].split(",")
-                )
-            } else null
+        companion object {
+            fun fromString(value: String): Endpoints? {
+                val parts = value.split("|")
+                return if (parts.size >= 4) {
+                    Endpoints(
+                        parts[0],
+                        parts[1],
+                        parts[2],
+                        parts[3].split(",")
+                    )
+                } else null
+            }
         }
     }
 
