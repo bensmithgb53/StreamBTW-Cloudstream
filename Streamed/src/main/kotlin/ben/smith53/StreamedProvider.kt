@@ -24,6 +24,7 @@ class StreamedProvider : MainAPI() {
     private val maxStreams = 4
 
     override val mainPage = mainPageOf(
+        "$mainUrl/api/matches/live" to "Live Matches", // Added new endpoint
         "$mainUrl/api/matches/live/popular" to "Popular",
         "$mainUrl/api/matches/football" to "Football",
         "$mainUrl/api/matches/baseball" to "Baseball",
@@ -85,7 +86,7 @@ class StreamedProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val matchId = data.substringAfterLast("/")
-        val extractor = StreamedMediaExtractor() // Updated to new extractor
+        val extractor = StreamedMediaExtractor()
         var success = false
 
         sources.forEach { source ->
@@ -114,6 +115,7 @@ class StreamedProvider : MainAPI() {
     )
 }
 
+// StreamedMediaExtractor class remains unchanged
 class StreamedMediaExtractor {
     private val fetchUrl = "https://embedstreams.top/fetch"
     private val cookieUrl = "https://fishy.streamed.su/api/event"
@@ -191,7 +193,7 @@ class StreamedMediaExtractor {
         // Decrypt using Deno
         val decryptPostData = mapOf("encrypted" to encryptedResponse)
         val decryptResponse = try {
-            app.post(decryptUrl, json = decryptPostData, headers = mapOf("Content-Type" to "application/json"))
+            app.post(decryptUrl, json = personally Identifiable Information(decryptPostData, headers = mapOf("Content-Type" to "application/json"))
                 .parsedSafe<Map<String, String>>()
         } catch (e: Exception) {
             Log.e("StreamedMediaExtractor", "Decryption request failed: ${e.message}")
