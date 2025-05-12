@@ -46,7 +46,6 @@ class StreamedProvider : MainAPI() {
             newLiveSearchResponse(
                 name = it.title,
                 url = "$mainUrl/watch/${it.id}",
-                apiName = this.name,
                 type = TvType.Live
             ) {
                 this.posterUrl = it.thumbnail
@@ -64,7 +63,6 @@ class StreamedProvider : MainAPI() {
             newLiveSearchResponse(
                 name = it.title,
                 url = "$mainUrl/watch/${it.id}",
-                apiName = this.name,
                 type = TvType.Live
             ) {
                 this.posterUrl = it.thumbnail
@@ -82,7 +80,6 @@ class StreamedProvider : MainAPI() {
         return newLiveStreamLoadResponse(
             name = match.title,
             url = url,
-            apiName = this.name,
             dataUrl = match.id
         ) {
             this.posterUrl = match.thumbnail
@@ -240,14 +237,14 @@ class StreamedMediaExtractor {
                 Log.d("StreamedMediaExtractor", "M3U8 test response code: ${testResponse.code} for $testUrl")
                 if (testResponse.code == 200) {
                     callback.invoke(
-                        ExtractorLink(
+                        newExtractorLink(
                             source = "Streamed",
                             name = "$source Stream $streamNo",
                             url = testUrl,
                             referer = embedReferer,
                             quality = Qualities.Unknown.value,
-                            headers = m3u8Headers,
-                            isM3u8 = true
+                            isM3u8 = true,
+                            headers = m3u8Headers
                         )
                     )
                     Log.d("StreamedMediaExtractor", "M3U8 URL added: $testUrl")
