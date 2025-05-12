@@ -127,6 +127,7 @@ class StreamedMediaExtractor {
     )
     private val cookieCache = ConcurrentHashMap<String, String>()
     private val endpointCache = ConcurrentHashMap<String, String>()
+    private val fallbackDomains = listOf("rr.buytommy.top", "p2-panel.streamed.su", "streamed.su")
 
     suspend fun getUrl(
         streamUrl: String,
@@ -143,6 +144,7 @@ class StreamedMediaExtractor {
             Log.e("StreamedMediaExtractor", "Failed to discover endpoints for $streamUrl")
         }
         val (fetchUrl, cookieUrl, decryptUrl, streamDomains) = endpoints
+        Log.d("StreamedMediaExtractor", "Discovered endpoints: fetch=$fetchUrl, cookie=$cookieUrl, decrypt=$decryptUrl, domains=$streamDomains")
 
         // Fetch stream page cookies
         val streamResponse = try {
@@ -211,6 +213,10 @@ class StreamedMediaExtractor {
         }
         Log.d("StreamedMediaExtractor", "Decrypted path: $decryptedPath")
 
+        // Combine discovered domains with fallbacks
+        val allDomains = (streamDomains + fallbackDomains).distinct()
+        Log.d("StreamedMediaExtractor", "Testing M3U8 URLs with domains: $allDomains")
+
         // Construct and test M3U8 URLs
         val m3u8Headers = baseHeaders + mapOf(
             "Referer" to embedReferer,
@@ -219,10 +225,12 @@ class StreamedMediaExtractor {
         )
 
         var subtitleFound = false
-        for (domain in streamDomains) {
+        for (domain in allDomains) {
             val m3u8Url = "https://$domain$decryptedPath"
+            Log.d("StreamedMediaExtractor", "Testing M3U8 URL: $m3u8Url")
             try {
                 val testResponse = app.get(m3u8Url, headers = m3u8Headers, timeout = 15)
+                Log.d("StreamedMediaExtractor", "M3U8 response code: ${testResponse.code}")
                 if (testResponse.code == 200 && testResponse.text.contains("#EXTM3U")) {
                     // Extract subtitles
                     val subtitleRegex = Regex("#EXT-X-MEDIA:TYPE=SUBTITLES.*?URI=\"(.*?)\".*?LANGUAGE=\"(.*?)\"", RegexOption.IGNORE_CASE)
@@ -232,6 +240,7 @@ class StreamedMediaExtractor {
                         val absoluteSubtitleUrl = normalizeUrl(m3u8Url, subtitleUrl)
                         subtitleCallback.invoke(SubtitleFile(language, absoluteSubtitleUrl))
                         subtitleFound = true
+                        Log.d("StreamedMediaExtractor", "Subtitle found: $absoluteSubtitleUrl (lang: $language)")
                     }
 
                     // Add the M3U8 link
@@ -252,7 +261,7 @@ class StreamedMediaExtractor {
                             this.headers = m3u8Headers
                         }
                     )
-                    Log.d("StreamedMediaExtractor", "M3U8 URL added: $m3u8Url${if (subtitleFound) " with subtitles" else ""}")
+                    Log.d("StreamedMediaExtractor", "Valid M3U8 URL added: $m3u8Url${if (subtitleFound) " with subtitles" else ""}")
                     return true
                 } else {
                     Log.w("StreamedMediaExtractor", "M3U8 test failed for $domain with code: ${testResponse.code}")
@@ -262,8 +271,8 @@ class StreamedMediaExtractor {
             }
         }
 
-        // If tests fail, add link anyway (as in original)
-        val primaryDomain = streamDomains.firstOrNull() ?: "streamed.su"
+        // If tests fail, add link with primary fallback domain (as in original)
+        val primaryDomain = allDomains.firstOrNull() ?: "streamed.su"
         val m3u8Url = "https://$primaryDomain$decryptedPath"
         callback.invoke(
             newExtractorLink(
@@ -290,33 +299,50 @@ class StreamedMediaExtractor {
 
         try {
             val response = app.get(streamUrl, headers = baseHeaders, timeout = 15)
-            val doc = Jsoup.parse(response.text)
+            val pageContent = response.text
+            val doc = Jsoup.parse(pageContent)
+            Log.d("StreamedMediaExtractor", "Watch page fetched, content length: ${pageContent.length}")
 
             // Extract embed domain and fetch URL
             val embedScript = doc.select("script[src*='embed']").firstOrNull()
             val embedDomain = embedScript?.attr("src")?.let { URL(it).host } ?: "embedstreams.top"
             val fetchUrl = "https://$embedDomain/fetch"
+            Log.d("StreamedMediaExtractor", "Embed domain: $embedDomain, fetch URL: $fetchUrl")
 
             // Extract cookie URL
             val cookieRegex = Regex("""https?://[^/]+\.streamed\.su/api/event""")
-            val cookieUrl = cookieRegex.find(response.text)?.value ?: "https://fishy.streamed.su/api/event"
+            val cookieUrl = cookieRegex.find(pageContent)?.value ?: "https://fishy.streamed.su/api/event"
+            Log.d("StreamedMediaExtractor", "Cookie URL: $cookieUrl")
 
             // Extract decryption URL
-            val decryptRegex = Regex("""https?://[^\s"]+/decrypt""")
-            val decryptUrl = decryptRegex.find(response.text)?.value
-                ?: run {
-                    val embedUrl = streamUrl.replace("streamed.su/watch", "$embedDomain/embed")
-                    val embedResponse = app.get(embedUrl, headers = baseHeaders, timeout = 15)
-                    decryptRegex.find(embedResponse.text)?.value
-                        ?: "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
+            val decryptRegex = Regex("""https?://[^\s"']+/decrypt""")
+            var decryptUrl = decryptRegex.find(pageContent)?.value
+            if (decryptUrl == null) {
+                Log.w("StreamedMediaExtractor", "Decryption URL not found in watch page, trying embed page")
+                val embedUrl = streamUrl.replace("streamed.su/watch", "$embedDomain/embed")
+                val embedResponse = try {
+                    app.get(embedUrl, headers = baseHeaders, timeout = 15)
+                } catch (e: Exception) {
+                    Log.e("StreamedMediaExtractor", "Embed page fetch failed: ${e.message}")
+                    null
                 }
+                decryptUrl = embedResponse?.text?.let { decryptRegex.find(it)?.value }
+                    ?: "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
+            }
+            Log.d("StreamedMediaExtractor", "Decryption URL: $decryptUrl")
 
             // Extract stream domains
             val domainRegex = Regex("""https?://([^\s/"]+\.(?:top|su))/hls/""")
-            val streamDomains = domainRegex.findAll(response.text).map { it.groupValues[1] }.toList()
-                .ifEmpty { listOf(embedDomain, "streamed.su") }
+            val streamDomains = domainRegex.findAll(pageContent).map { it.groupValues[1] }.toList()
+            val finalDomains = if (streamDomains.isEmpty()) {
+                Log.w("StreamedMediaExtractor", "No stream domains found, using embed domain and default")
+                listOf(embedDomain, "streamed.su")
+            } else {
+                streamDomains
+            }
+            Log.d("StreamedMediaExtractor", "Stream domains: $finalDomains")
 
-            val endpoints = Endpoints(fetchUrl, cookieUrl, decryptUrl, streamDomains)
+            val endpoints = Endpoints(fetchUrl, cookieUrl, decryptUrl, finalDomains)
             endpointCache[cacheKey] = endpoints.toString()
             return endpoints
         } catch (e: Exception) {
@@ -340,7 +366,7 @@ class StreamedMediaExtractor {
                         parts[0],
                         parts[1],
                         parts[2],
-                        parts[3].split(",")
+                        parts[3].split(",").filter { it.isNotBlank() }
                     )
                 } else null
             }
@@ -364,6 +390,7 @@ class StreamedMediaExtractor {
             val formattedCookies = listOf("_ddg8_", "_ddg10_", "_ddg9_", "_ddg1_")
                 .mapNotNull { key -> cookies.find { it.startsWith(key) } }
                 .joinToString("; ")
+            Log.d("StreamedMediaExtractor", "Cookies fetched: $formattedCookies")
             if (formattedCookies.isNotEmpty()) {
                 cookieCache[pageUrl] = formattedCookies
                 return formattedCookies
