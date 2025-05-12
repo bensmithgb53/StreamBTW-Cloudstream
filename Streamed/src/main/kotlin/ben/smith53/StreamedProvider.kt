@@ -13,9 +13,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
-import org.jsoup.Jsoup
-import java.net.URL
-import java.util.concurrent.ConcurrentHashMap
 
 class StreamedProvider : MainAPI() {
     override var mainUrl = "https://streamed.su"
@@ -88,7 +85,7 @@ class StreamedProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val matchId = data.substringAfterLast("/")
-        val extractor = StreamedMediaExtractor()
+        val extractor = StreamedMediaExtractor() // Updated to new extractor
         var success = false
 
         sources.forEach { source ->
@@ -123,13 +120,10 @@ class StreamedMediaExtractor {
     private val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
     private val baseHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
-        "Accept" to "*/*",
-        "Accept-Encoding" to "gzip, deflate, br",
-        "Accept-Language" to "en-US,en;q=0.9",
         "Content-Type" to "application/json"
     )
-    private val fallbackDomains = listOf("rr.buytommy.top", "p2-panel.streamed.su", "streamed.su")
-    private val cookieCache = ConcurrentHashMap<String, String>()
+    private val fallbackDomains = listOf("p2-panel.streamed.su", "streamed.su")
+    private val cookieCache = mutableMapOf<String, String>()
 
     suspend fun getUrl(
         streamUrl: String,
@@ -140,11 +134,6 @@ class StreamedMediaExtractor {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         Log.d("StreamedMediaExtractor", "Starting extraction for: $streamUrl")
-
-        // Fetch additional stream domains dynamically
-        val dynamicDomains = discoverStreamDomains(streamUrl)
-        val allDomains = (fallbackDomains + dynamicDomains).distinct()
-        Log.d("StreamedMediaExtractor", "Using domains: $allDomains")
 
         // Fetch stream page cookies
         val streamResponse = try {
@@ -213,43 +202,24 @@ class StreamedMediaExtractor {
         }
         Log.d("StreamedMediaExtractor", "Decrypted path: $decryptedPath")
 
-        // Test M3U8 URLs with all domains
+        // Construct M3U8 URL
+        val m3u8Url = "https://rr.buytommy.top$decryptedPath"
         val m3u8Headers = baseHeaders + mapOf(
             "Referer" to embedReferer,
-            "Origin" to "https://embedstreams.top",
             "Cookie" to combinedCookies
         )
 
-        var subtitleFound = false
-        for (domain in allDomains) {
-            val m3u8Url = "https://$domain$decryptedPath"
-            Log.d("StreamedMediaExtractor", "Testing M3U8 URL: $m3u8Url")
+        // Test M3U8 with fallbacks
+        for (domain in listOf("rr.buytommy.top") + fallbackDomains) {
             try {
-                val testResponse = app.get(m3u8Url, headers = m3u8Headers, timeout = 15)
-                Log.d("StreamedMediaExtractor", "M3U8 response code: ${testResponse.code}")
-                if (testResponse.code == 200 && testResponse.text.contains("#EXTM3U")) {
-                    // Extract subtitles
-                    val subtitleRegex = Regex("#EXT-X-MEDIA:TYPE=SUBTITLES.*?URI=\"(.*?)\".*?LANGUAGE=\"(.*?)\"", RegexOption.IGNORE_CASE)
-                    subtitleRegex.findAll(testResponse.text).forEach { match ->
-                        val subtitleUrl = match.groupValues[1]
-                        val language = match.groupValues[2].ifEmpty { "English" }
-                        val absoluteSubtitleUrl = normalizeUrl(m3u8Url, subtitleUrl)
-                        subtitleCallback.invoke(SubtitleFile(language, absoluteSubtitleUrl))
-                        subtitleFound = true
-                        Log.d("StreamedMediaExtractor", "Subtitle found: $absoluteSubtitleUrl (lang: $language)")
-                    }
-
-                    // Add M3U8 link
-                    val streamName = if (testResponse.text.contains("#EXT-X-PROGRAM-DATE-TIME")) {
-                        "$source Stream $streamNo (Live)"
-                    } else {
-                        "$source Stream $streamNo"
-                    }
+                val testUrl = m3u8Url.replace("rr.buytommy.top", domain)
+                val testResponse = app.get(testUrl, headers = m3u8Headers, timeout = 15)
+                if (testResponse.code == 200) {
                     callback.invoke(
                         newExtractorLink(
                             source = "Streamed",
-                            name = streamName,
-                            url = m3u8Url,
+                            name = "$source Stream $streamNo",
+                            url = testUrl,
                             type = ExtractorLinkType.M3U8
                         ) {
                             this.referer = embedReferer
@@ -257,7 +227,7 @@ class StreamedMediaExtractor {
                             this.headers = m3u8Headers
                         }
                     )
-                    Log.d("StreamedMediaExtractor", "Valid M3U8 URL added: $m3u8Url${if (subtitleFound) " with subtitles" else ""}")
+                    Log.d("StreamedMediaExtractor", "M3U8 URL added: $testUrl")
                     return true
                 } else {
                     Log.w("StreamedMediaExtractor", "M3U8 test failed for $domain with code: ${testResponse.code}")
@@ -267,8 +237,7 @@ class StreamedMediaExtractor {
             }
         }
 
-        // If tests fail, add link with rr.buytommy.top (as in original)
-        val m3u8Url = "https://rr.buytommy.top$decryptedPath"
+        // If tests fail, add link anyway (as in original)
         callback.invoke(
             newExtractorLink(
                 source = "Streamed",
@@ -283,27 +252,6 @@ class StreamedMediaExtractor {
         )
         Log.d("StreamedMediaExtractor", "M3U8 test failed but added anyway: $m3u8Url")
         return true
-    }
-
-    private suspend fun discoverStreamDomains(streamUrl: String): List<String> {
-        try {
-            val response = app.get(streamUrl, headers = baseHeaders, timeout = 15)
-            val pageContent = response.text
-            Log.d("StreamedMediaExtractor", "Watch page fetched for domain discovery, content length: ${pageContent.length}")
-
-            // Extract stream domains
-            val domainRegex = Regex("""https?://([^\s/"]+\.(?:top|su|net|org))/hls/""")
-            val domains = domainRegex.findAll(pageContent).map { it.groupValues[1] }.toList()
-            if (domains.isEmpty()) {
-                Log.w("StreamedMediaExtractor", "No dynamic stream domains found")
-            } else {
-                Log.d("StreamedMediaExtractor", "Dynamic stream domains found: $domains")
-            }
-            return domains
-        } catch (e: Exception) {
-            Log.e("StreamedMediaExtractor", "Failed to discover stream domains: ${e.message}")
-            return emptyList()
-        }
     }
 
     private suspend fun fetchEventCookies(pageUrl: String, referrer: String): String {
@@ -323,7 +271,6 @@ class StreamedMediaExtractor {
             val formattedCookies = listOf("_ddg8_", "_ddg10_", "_ddg9_", "_ddg1_")
                 .mapNotNull { key -> cookies.find { it.startsWith(key) } }
                 .joinToString("; ")
-            Log.d("StreamedMediaExtractor", "Cookies fetched: $formattedCookies")
             if (formattedCookies.isNotEmpty()) {
                 cookieCache[pageUrl] = formattedCookies
                 return formattedCookies
@@ -332,22 +279,5 @@ class StreamedMediaExtractor {
             Log.e("StreamedMediaExtractor", "Failed to fetch event cookies: ${e.message}")
         }
         return ""
-    }
-
-    private fun normalizeUrl(baseUrl: String, relativeUrl: String): String {
-        if (relativeUrl.startsWith("http")) return relativeUrl
-        try {
-            val base = URL(baseUrl)
-            val basePath = base.path.substring(0, base.path.lastIndexOf('/') + 1)
-            val normalizedPath = if (relativeUrl.startsWith("/")) {
-                relativeUrl
-            } else {
-                "$basePath$relativeUrl"
-            }
-            return URL(base.protocol, base.host, base.port, normalizedPath).toString()
-        } catch (e: Exception) {
-            Log.e("StreamedMediaExtractor", "Failed to normalize URL: $relativeUrl with base $baseUrl", e)
-            return relativeUrl
-        }
     }
 }
