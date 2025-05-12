@@ -62,9 +62,8 @@ class StreamedProvider : MainAPI() {
         }.filterNotNull()
 
         return newHomePageResponse(
-            name = request.name,
-            list = list,
-            isHorizontalImages = true
+            list = listOf(HomePageList(request.name, list, isHorizontalImages = true)),
+            hasNext = false
         )
     }
 
@@ -77,6 +76,7 @@ class StreamedProvider : MainAPI() {
         return newLiveStreamLoadResponse(
             name = title,
             url = url,
+            apiName = this.name,
             dataUrl = url,
             contentRating = null // No specific content rating provided
         ) {
