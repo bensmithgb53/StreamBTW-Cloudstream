@@ -76,9 +76,8 @@ class StreamedProvider : MainAPI() {
         return newLiveStreamLoadResponse(
             name = title,
             url = url,
-            apiName = this.name,
             dataUrl = url,
-            contentRating = null // No specific content rating provided
+            type = TvType.Live
         ) {
             this.posterUrl = posterUrl
         }
