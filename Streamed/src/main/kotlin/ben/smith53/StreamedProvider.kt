@@ -252,9 +252,24 @@ class StreamedMediaExtractor {
             }
         }
 
+        // If tests fail, add link anyway to restore original behavior
         if (!success) {
-            Log.w("StreamedMediaExtractor", "All M3U8 tests failed for source: $source, streamNo: $streamNo, skipping unplayable URL: $m3u8Url")
+            Log.w("StreamedMediaExtractor", "All M3U8 tests failed for source: $source, streamNo: $streamNo, adding URL anyway: $m3u8Url")
+            callback.invoke(
+                newExtractorLink(
+                    source = "Streamed",
+                    name = "$source Stream $streamNo",
+                    url = m3u8Url,
+                    type = ExtractorLinkType.M3U8
+                ) {
+                    this.referer = embedReferer
+                    this.quality = Qualities.Unknown.value
+                    this.headers = m3u8Headers
+                }
+            )
+            success = true // Consider it a success to ensure loadLinks returns true
         }
+
         return success
     }
 
