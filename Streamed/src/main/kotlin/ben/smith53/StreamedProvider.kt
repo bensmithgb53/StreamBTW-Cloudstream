@@ -118,6 +118,9 @@ class StreamedProvider : MainAPI() {
 }
 
 class StreamedMediaExtractor {
+    private val fetchUrl = "https://embedstreams.top/fetch"
+    private val cookieUrl = "https://fishy.streamed.su/api/event"
+    private val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
     private val baseHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
         "Accept" to "*/*",
@@ -125,9 +128,8 @@ class StreamedMediaExtractor {
         "Accept-Language" to "en-US,en;q=0.9",
         "Content-Type" to "application/json"
     )
-    private val cookieCache = ConcurrentHashMap<String, String>()
-    private val endpointCache = ConcurrentHashMap<String, String>()
     private val fallbackDomains = listOf("rr.buytommy.top", "p2-panel.streamed.su", "streamed.su")
+    private val cookieCache = ConcurrentHashMap<String, String>()
 
     suspend fun getUrl(
         streamUrl: String,
@@ -139,12 +141,10 @@ class StreamedMediaExtractor {
     ): Boolean {
         Log.d("StreamedMediaExtractor", "Starting extraction for: $streamUrl")
 
-        // Discover endpoints dynamically
-        val endpoints = discoverEndpoints(streamUrl) ?: return false.also {
-            Log.e("StreamedMediaExtractor", "Failed to discover endpoints for $streamUrl")
-        }
-        val (fetchUrl, cookieUrl, decryptUrl, streamDomains) = endpoints
-        Log.d("StreamedMediaExtractor", "Discovered endpoints: fetch=$fetchUrl, cookie=$cookieUrl, decrypt=$decryptUrl, domains=$streamDomains")
+        // Fetch additional stream domains dynamically
+        val dynamicDomains = discoverStreamDomains(streamUrl)
+        val allDomains = (fallbackDomains + dynamicDomains).distinct()
+        Log.d("StreamedMediaExtractor", "Using domains: $allDomains")
 
         // Fetch stream page cookies
         val streamResponse = try {
@@ -157,7 +157,7 @@ class StreamedMediaExtractor {
         Log.d("StreamedMediaExtractor", "Stream cookies: $streamCookies")
 
         // Fetch event cookies
-        val eventCookies = fetchEventCookies(streamUrl, streamUrl, cookieUrl)
+        val eventCookies = fetchEventCookies(streamUrl, streamUrl)
         Log.d("StreamedMediaExtractor", "Event cookies: $eventCookies")
 
         // Combine cookies
@@ -182,7 +182,7 @@ class StreamedMediaExtractor {
             "id" to matchId,
             "streamNo" to streamNo.toString()
         )
-        val embedReferer = streamUrl.replace("streamed.su/watch", "${streamDomains.firstOrNull() ?: "embedstreams.top"}/embed")
+        val embedReferer = "https://embedstreams.top/embed/$source/$matchId/$streamNo"
         val fetchHeaders = baseHeaders + mapOf(
             "Referer" to streamUrl,
             "Cookie" to combinedCookies
@@ -199,7 +199,7 @@ class StreamedMediaExtractor {
         }
         Log.d("StreamedMediaExtractor", "Encrypted response: $encryptedResponse")
 
-        // Decrypt using discovered endpoint
+        // Decrypt using Deno
         val decryptPostData = mapOf("encrypted" to encryptedResponse)
         val decryptResponse = try {
             app.post(decryptUrl, json = decryptPostData, headers = mapOf("Content-Type" to "application/json"))
@@ -213,14 +213,10 @@ class StreamedMediaExtractor {
         }
         Log.d("StreamedMediaExtractor", "Decrypted path: $decryptedPath")
 
-        // Combine discovered domains with fallbacks
-        val allDomains = (streamDomains + fallbackDomains).distinct()
-        Log.d("StreamedMediaExtractor", "Testing M3U8 URLs with domains: $allDomains")
-
-        // Construct and test M3U8 URLs
+        // Test M3U8 URLs with all domains
         val m3u8Headers = baseHeaders + mapOf(
             "Referer" to embedReferer,
-            "Origin" to embedReferer.substringBeforeLast("/embed/"),
+            "Origin" to "https://embedstreams.top",
             "Cookie" to combinedCookies
         )
 
@@ -243,7 +239,7 @@ class StreamedMediaExtractor {
                         Log.d("StreamedMediaExtractor", "Subtitle found: $absoluteSubtitleUrl (lang: $language)")
                     }
 
-                    // Add the M3U8 link
+                    // Add M3U8 link
                     val streamName = if (testResponse.text.contains("#EXT-X-PROGRAM-DATE-TIME")) {
                         "$source Stream $streamNo (Live)"
                     } else {
@@ -271,9 +267,8 @@ class StreamedMediaExtractor {
             }
         }
 
-        // If tests fail, add link with primary fallback domain (as in original)
-        val primaryDomain = allDomains.firstOrNull() ?: "streamed.su"
-        val m3u8Url = "https://$primaryDomain$decryptedPath"
+        // If tests fail, add link with rr.buytommy.top (as in original)
+        val m3u8Url = "https://rr.buytommy.top$decryptedPath"
         callback.invoke(
             newExtractorLink(
                 source = "Streamed",
@@ -290,90 +285,28 @@ class StreamedMediaExtractor {
         return true
     }
 
-    private suspend fun discoverEndpoints(streamUrl: String): Endpoints? {
-        val cacheKey = "endpoints-$streamUrl"
-        val cached = endpointCache[cacheKey]
-        if (cached != null) {
-            return Endpoints.fromString(cached)
-        }
-
+    private suspend fun discoverStreamDomains(streamUrl: String): List<String> {
         try {
             val response = app.get(streamUrl, headers = baseHeaders, timeout = 15)
             val pageContent = response.text
-            val doc = Jsoup.parse(pageContent)
-            Log.d("StreamedMediaExtractor", "Watch page fetched, content length: ${pageContent.length}")
-
-            // Extract embed domain and fetch URL
-            val embedScript = doc.select("script[src*='embed']").firstOrNull()
-            val embedDomain = embedScript?.attr("src")?.let { URL(it).host } ?: "embedstreams.top"
-            val fetchUrl = "https://$embedDomain/fetch"
-            Log.d("StreamedMediaExtractor", "Embed domain: $embedDomain, fetch URL: $fetchUrl")
-
-            // Extract cookie URL
-            val cookieRegex = Regex("""https?://[^/]+\.streamed\.su/api/event""")
-            val cookieUrl = cookieRegex.find(pageContent)?.value ?: "https://fishy.streamed.su/api/event"
-            Log.d("StreamedMediaExtractor", "Cookie URL: $cookieUrl")
-
-            // Extract decryption URL
-            val decryptRegex = Regex("""https?://[^\s"']+/decrypt""")
-            var decryptUrl = decryptRegex.find(pageContent)?.value
-            if (decryptUrl == null) {
-                Log.w("StreamedMediaExtractor", "Decryption URL not found in watch page, trying embed page")
-                val embedUrl = streamUrl.replace("streamed.su/watch", "$embedDomain/embed")
-                val embedResponse = try {
-                    app.get(embedUrl, headers = baseHeaders, timeout = 15)
-                } catch (e: Exception) {
-                    Log.e("StreamedMediaExtractor", "Embed page fetch failed: ${e.message}")
-                    null
-                }
-                decryptUrl = embedResponse?.text?.let { decryptRegex.find(it)?.value }
-                    ?: "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
-            }
-            Log.d("StreamedMediaExtractor", "Decryption URL: $decryptUrl")
+            Log.d("StreamedMediaExtractor", "Watch page fetched for domain discovery, content length: ${pageContent.length}")
 
             // Extract stream domains
-            val domainRegex = Regex("""https?://([^\s/"]+\.(?:top|su))/hls/""")
-            val streamDomains = domainRegex.findAll(pageContent).map { it.groupValues[1] }.toList()
-            val finalDomains = if (streamDomains.isEmpty()) {
-                Log.w("StreamedMediaExtractor", "No stream domains found, using embed domain and default")
-                listOf(embedDomain, "streamed.su")
+            val domainRegex = Regex("""https?://([^\s/"]+\.(?:top|su|net|org))/hls/""")
+            val domains = domainRegex.findAll(pageContent).map { it.groupValues[1] }.toList()
+            if (domains.isEmpty()) {
+                Log.w("StreamedMediaExtractor", "No dynamic stream domains found")
             } else {
-                streamDomains
+                Log.d("StreamedMediaExtractor", "Dynamic stream domains found: $domains")
             }
-            Log.d("StreamedMediaExtractor", "Stream domains: $finalDomains")
-
-            val endpoints = Endpoints(fetchUrl, cookieUrl, decryptUrl, finalDomains)
-            endpointCache[cacheKey] = endpoints.toString()
-            return endpoints
+            return domains
         } catch (e: Exception) {
-            Log.e("StreamedMediaExtractor", "Failed to discover endpoints: ${e.message}", e)
-            return null
+            Log.e("StreamedMediaExtractor", "Failed to discover stream domains: ${e.message}")
+            return emptyList()
         }
     }
 
-    private data class Endpoints(
-        val fetchUrl: String,
-        val cookieUrl: String,
-        val decryptUrl: String,
-        val streamDomains: List<String>
-    ) {
-        override fun toString(): String = "$fetchUrl|$cookieUrl|$decryptUrl|${streamDomains.joinToString(",")}"
-        companion object {
-            fun fromString(value: String): Endpoints? {
-                val parts = value.split("|")
-                return if (parts.size >= 4) {
-                    Endpoints(
-                        parts[0],
-                        parts[1],
-                        parts[2],
-                        parts[3].split(",").filter { it.isNotBlank() }
-                    )
-                } else null
-            }
-        }
-    }
-
-    private suspend fun fetchEventCookies(pageUrl: String, referrer: String, cookieUrl: String): String {
+    private suspend fun fetchEventCookies(pageUrl: String, referrer: String): String {
         cookieCache[pageUrl]?.let { return it }
 
         val payload = """{"n":"pageview","u":"$pageUrl","d":"streamed.su","r":"$referrer"}"""
