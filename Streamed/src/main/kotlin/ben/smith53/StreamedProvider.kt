@@ -1,20 +1,25 @@
 package ben.smith53
 
+import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.AppUtils.toJson
+import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
-import com.lagradost.cloudstream3.network.CloudflareKiller
-import kotlinx.serialization.Serializable
+import android.util.Log
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.newExtractorLink
+import java.util.Locale
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
-import android.util.Log
 
 class StreamedProvider : MainAPI() {
     override var mainUrl = "https://streamed.su"
     override var name = "Streamed"
     override var supportedTypes = setOf(TvType.Live)
     override val hasMainPage = true
+
     private val sources = listOf("alpha", "bravo", "charlie", "delta", "echo", "foxtrot")
     private val maxStreams = 4
 
@@ -38,51 +43,38 @@ class StreamedProvider : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val apiUrl = request.data
-        Log.d("StreamedProvider", "Fetching main page: $apiUrl")
-        val matches = app.get(apiUrl, headers = CloudflareKiller().getCookieHeaders(apiUrl).toMap()).parsedSafe<List<Match>>()
-        Log.d("StreamedProvider", "Parsed ${matches?.size ?: 0} matches")
-        val home = matches?.mapNotNull {
+        val rawList = app.get(request.data).text
+        val listJson = parseJson<List<Match>>(rawList)
+        
+        val list = listJson.filter { match -> match.matchSources.isNotEmpty() }.map { match ->
+            val url = "$mainUrl/watch/${match.id}"
             newLiveSearchResponse(
-                name = it.title,
-                url = "$mainUrl/watch/${it.id}",
+                name = match.title,
+                url = url,
                 type = TvType.Live
             ) {
-                this.posterUrl = it.thumbnail
+                this.posterUrl = "$mainUrl${match.posterPath ?: "/api/images/poster/fallback.webp"}"
             }
-        } ?: emptyList()
-        return newHomePageResponse(request.name, home, hasNext = false)
-    }
+        }.filterNotNull()
 
-    override suspend fun search(query: String): List<SearchResponse> {
-        val apiUrl = "$mainUrl/api/matches?search=$query"
-        Log.d("StreamedProvider", "Searching with: $apiUrl")
-        val matches = app.get(apiUrl, headers = CloudflareKiller().getCookieHeaders(apiUrl).toMap()).parsedSafe<List<Match>>()
-        Log.d("StreamedProvider", "Found ${matches?.size ?: 0} search results")
-        return matches?.mapNotNull {
-            newLiveSearchResponse(
-                name = it.title,
-                url = "$mainUrl/watch/${it.id}",
-                type = TvType.Live
-            ) {
-                this.posterUrl = it.thumbnail
-            }
-        } ?: emptyList()
+        return newHomePageResponse(
+            list = listOf(HomePageList(request.name, list, isHorizontalImages = true)),
+            hasNext = false
+        )
     }
 
     override suspend fun load(url: String): LoadResponse {
         val matchId = url.substringAfterLast("/")
-        val apiUrl = "$mainUrl/api/matches/by-id/$matchId"
-        Log.d("StreamedProvider", "Loading match: $apiUrl")
-        val match = app.get(apiUrl).parsedSafe<List<Match>>()?.firstOrNull()
-            ?: throw ErrorLoadingException("Failed to load match data")
-        Log.d("StreamedProvider", "Loaded match: ${match.title}")
+        val title = matchId.replace("-", " ")
+            .replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.ROOT) else it.toString() }
+            .replace(Regex("-\\d+$"), "")
+        val posterUrl = "$mainUrl/api/images/poster/$matchId.webp"
         return newLiveStreamLoadResponse(
-            name = match.title,
+            name = title,
             url = url,
-            dataUrl = match.id
+            dataUrl = url
         ) {
-            this.posterUrl = match.thumbnail
+            this.posterUrl = posterUrl
         }
     }
 
@@ -97,11 +89,12 @@ class StreamedProvider : MainAPI() {
         var success = false
         Log.d("StreamedProvider", "Loading links for matchId: $matchId")
 
-        // Optional: Dynamic source filtering (uncomment if logs confirm need)
+        // Optional: Dynamic source filtering
         /*
-        val matchData = app.get("$mainUrl/api/matches/by-id/$matchId").parsedSafe<List<Match>>()?.firstOrNull()
-        val validSources = matchData?.matchSources?.map { it.sourceName } ?: sources
-        Log.d("StreamedProvider", "Valid sources: $validSources")
+        val rawMatch = app.get("$mainUrl/api/matches/by-id/$matchId").text
+        val match = parseJson<List<Match>>(rawMatch).firstOrNull()
+        val validSources = match?.matchSources?.map { it.sourceName }?.filter { it in sources } ?: sources
+        Log.d("StreamedProvider", "Valid sources for $matchId: $validSources")
         */
 
         sources.forEach { source ->
@@ -116,20 +109,20 @@ class StreamedProvider : MainAPI() {
         Log.d("StreamedProvider", "Load links success: $success")
         return success
     }
+
+    data class Match(
+        @JsonProperty("id") val id: String? = null,
+        @JsonProperty("title") val title: String,
+        @JsonProperty("poster") val posterPath: String? = null,
+        @JsonProperty("popular") val popular: Boolean = false,
+        @JsonProperty("sources") val matchSources: ArrayList<MatchSource> = arrayListOf()
+    )
+
+    data class MatchSource(
+        @JsonProperty("source") val sourceName: String,
+        @JsonProperty("id") val id: String
+    )
 }
-
-@Serializable
-data class Match(
-    val id: String,
-    val title: String,
-    val thumbnail: String? = null,
-    val matchSources: List<MatchSource> = emptyList()
-)
-
-@Serializable
-data class MatchSource(
-    val sourceName: String
-)
 
 class StreamedMediaExtractor {
     private val fetchUrl = "https://embedstreams.top/fetch"
@@ -196,7 +189,7 @@ class StreamedMediaExtractor {
         Log.d("StreamedMediaExtractor", "Fetching with data: $postData and headers: $fetchHeaders")
 
         val encryptedResponse = try {
-            val response = app.post(fetchUrl, headers = fetchHeaders, json = postData.toJson(), timeout = 15)
+            val response = app.post(fetchUrl, headers = fetchHeaders, json = postData, timeout = 15)
             Log.d("StreamedMediaExtractor", "Fetch response code: ${response.code} for source: $source, streamNo: $streamNo")
             response.text.also {
                 Log.d("StreamedMediaExtractor", "Encrypted response length: ${it.length}, first 100 chars: ${it.take(100)}")
@@ -210,7 +203,7 @@ class StreamedMediaExtractor {
         // Decrypt using Deno
         val decryptPostData = mapOf("encrypted" to encryptedResponse)
         val decryptResponse = try {
-            app.post(decryptUrl, json = decryptPostData.toJson(), headers = mapOf("Content-Type" to "application/json"))
+            app.post(decryptUrl, json = decryptPostData, headers = mapOf("Content-Type" to "application/json"))
                 .parsedSafe<Map<String, String>>()
         } catch (e: Exception) {
             Log.e("StreamedMediaExtractor", "Decryption request failed for source: $source, streamNo: $streamNo: ${e.message}")
@@ -241,11 +234,12 @@ class StreamedMediaExtractor {
                             source = "Streamed",
                             name = "$source Stream $streamNo",
                             url = testUrl,
-                            referer = embedReferer,
-                            quality = Qualities.Unknown.value,
-                            isM3u8 = true,
-                            headers = m3u8Headers
-                        )
+                            type = ExtractorLinkType.M3U8
+                        ) {
+                            this.referer = embedReferer
+                            this.quality = Qualities.Unknown.value
+                            this.headers = m3u8Headers
+                        }
                     )
                     Log.d("StreamedMediaExtractor", "M3U8 URL added: $testUrl")
                     success = true
@@ -258,6 +252,9 @@ class StreamedMediaExtractor {
             }
         }
 
+        if (!success) {
+            Log.w("StreamedMediaExtractor", "All M3U8 tests failed for source: $source, streamNo: $streamNo, skipping unplayable URL: $m3u8Url")
+        }
         return success
     }
 
