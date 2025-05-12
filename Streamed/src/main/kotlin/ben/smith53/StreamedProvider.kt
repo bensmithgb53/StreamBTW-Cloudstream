@@ -1,16 +1,14 @@
 package ben.smith53
 
 import com.fasterxml.jackson.annotation.JsonProperty
-import com.lagradira3.*
+import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
-import android.util.Log
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import java.util.Locale
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import android.util.Log
 import kotlinx.coroutines.delay
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -80,7 +78,7 @@ class StreamedProvider : MainAPI() {
             name = title,
             url = url,
             dataUrl = url,
-            contentRating = null // Add contentRating as required by new API
+            contentRating = null // No specific content rating provided
         ) {
             this.posterUrl = posterUrl
         }
