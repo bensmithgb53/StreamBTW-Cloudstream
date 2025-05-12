@@ -1,7 +1,7 @@
 package ben.smith53
 
 import com.fasterxml.jackson.annotation.JsonProperty
-import com.lagradost.cloudstream3.*
+import com.lagradira3.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
@@ -11,6 +11,7 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.delay
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 
@@ -52,26 +53,25 @@ class StreamedProvider : MainAPI() {
         }
 
         val list = listJson.filter { match -> match.matchSources.isNotEmpty() }.map { match ->
-            val url = "$mainUrl/watch/${match.id}"
+            val url = "$mainUrl/watch/${match.id}?sources=${match.matchSources.joinToString(",") { it.sourceName }}"
             newLiveSearchResponse(
                 name = match.title,
                 url = url,
                 type = TvType.Live
             ) {
                 this.posterUrl = "$mainUrl${match.posterPath ?: "/api/images/poster/fallback.webp"}"
-                // Store sources in metadata for use in loadLinks
-                this.metadata = match.matchSources.map { it.sourceName }
             }
         }.filterNotNull()
 
         return newHomePageResponse(
-            list = listOf(HomePageList(request.name, list, isHorizontalImages = true)),
-            hasNext = false
+            name = request.name,
+            list = list,
+            isHorizontalImages = true
         )
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val matchId = url.substringAfterLast("/")
+        val matchId = url.substringAfterLast("/").substringBefore("?")
         val title = matchId.replace("-", " ")
             .replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.ROOT) else it.toString() }
             .replace(Regex("-\\d+$"), "")
@@ -79,7 +79,8 @@ class StreamedProvider : MainAPI() {
         return newLiveStreamLoadResponse(
             name = title,
             url = url,
-            dataUrl = url
+            dataUrl = url,
+            contentRating = null // Add contentRating as required by new API
         ) {
             this.posterUrl = posterUrl
         }
@@ -91,26 +92,26 @@ class StreamedProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val matchId = data.substringAfterLast("/")
+        val matchId = data.substringAfterLast("/").substringBefore("?")
+        val sourcesParam = data.substringAfter("sources=", "").split(",").filter { it.isNotBlank() }
         val extractor = StreamedMediaExtractor()
         var success = false
 
-        // Fetch match details to get available sources
-        val matchDetailsUrl = "$mainUrl/api/matches/live"
-        val matchDetails = try {
-            val response = app.get(matchDetailsUrl).text
-            parseJson<List<Match>>(response).find { it.id == matchId }
-        } catch (e: Exception) {
-            Log.e("StreamedProvider", "Failed to fetch match details for $matchId: ${e.message}")
-            return false
+        // If sources are provided in the URL, use them; otherwise, fetch from API
+        val sources = if (sourcesParam.isNotEmpty()) {
+            sourcesParam
+        } else {
+            val matchDetailsUrl = "$mainUrl/api/matches/live"
+            try {
+                val response = app.get(matchDetailsUrl).text
+                val matchDetails = parseJson<List<Match>>(response).find { it.id == matchId }
+                matchDetails?.matchSources?.map { it.sourceName }?.distinct() ?: emptyList()
+            } catch (e: Exception) {
+                Log.e("StreamedProvider", "Failed to fetch match details for $matchId: ${e.message}")
+                return false
+            }
         }
 
-        if (matchDetails == null) {
-            Log.e("StreamedProvider", "Match $matchId not found in API response")
-            return false
-        }
-
-        val sources = matchDetails.matchSources.map { it.sourceName }.distinct()
         Log.d("StreamedProvider", "Available sources for $matchId: $sources")
 
         sources.forEach { source ->
@@ -147,7 +148,7 @@ class StreamedProvider : MainAPI() {
                     Log.e("StreamedProvider", "Failed to check source $source for $currentMatchId: ${e.message}")
                 }
                 // Add delay to avoid rate limits
-                kotlinx.coroutines.delay(500)
+                delay(500)
             }
         }
         Log.d("StreamedProvider", "LoadLinks completed with success=$success")
