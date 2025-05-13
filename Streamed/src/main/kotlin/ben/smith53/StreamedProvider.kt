@@ -14,113 +14,15 @@ import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 
-class StreamedProvider : MainAPI() {
-    override var mainUrl = "https://streamed.su"
-    override var name = "Streamed"
-    override var supportedTypes = setOf(TvType.Live)
-    override val hasMainPage = true
-
-    private val sources = listOf("alpha", "bravo", "charlie", "delta", "echo", "foxtrot")
-    private val maxStreams = 4
-
-    override val mainPage = mainPageOf(
-        "$mainUrl/api/matches/live/popular" to "Popular",
-        "$mainUrl/api/matches/football" to "Football",
-        "$mainUrl/api/matches/baseball" to "Baseball",
-        "$mainUrl/api/matches/american-football" to "American Football",
-        "$mainUrl/api/matches/hockey" to "Hockey",
-        "$mainUrl/api/matches/basketball" to "Basketball",
-        "$mainUrl/api/matches/motor-sports" to "Motor Sports",
-        "$mainUrl/api/matches/fight" to "Fight",
-        "$mainUrl/api/matches/tennis" to "Tennis",
-        "$mainUrl/api/matches/rugby" to "Rugby",
-        "$mainUrl/api/matches/golf" to "Golf",
-        "$mainUrl/api/matches/billiards" to "Billiards",
-        "$mainUrl/api/matches/afl" to "AFL",
-        "$mainUrl/api/matches/darts" to "Darts",
-        "$mainUrl/api/matches/cricket" to "Cricket",
-        "$mainUrl/api/matches/other" to "Other"
-    )
-
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val rawList = app.get(request.data).text
-        val listJson = parseJson<List<Match>>(rawList)
-        
-        val list = listJson.filter { match -> match.matchSources.isNotEmpty() }.map { match ->
-            val url = "$mainUrl/watch/${match.id}"
-            newLiveSearchResponse(
-                name = match.title,
-                url = url,
-                type = TvType.Live
-            ) {
-                this.posterUrl = "$mainUrl${match.posterPath ?: "/api/images/poster/fallback.webp"}"
-            }
-        }.filterNotNull()
-
-        return newHomePageResponse(
-            list = listOf(HomePageList(request.name, list, isHorizontalImages = true)),
-            hasNext = false
-        )
-    }
-
-    override suspend fun load(url: String): LoadResponse {
-        val matchId = url.substringAfterLast("/")
-        val title = matchId.replace("-", " ")
-            .replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.ROOT) else it.toString() }
-            .replace(Regex("-\\d+$"), "")
-        val posterUrl = "$mainUrl/api/images/poster/$matchId.webp"
-        return newLiveStreamLoadResponse(
-            name = title,
-            url = url,
-            dataUrl = url
-        ) {
-            this.posterUrl = posterUrl
-        }
-    }
-
-    override suspend fun loadLinks(
-        data: String,
-        isCasting: Boolean,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ): Boolean {
-        val matchId = data.substringAfterLast("/")
-        val extractor = StreamedMediaExtractor() // Updated to new extractor
-        var success = false
-
-        sources.forEach { source ->
-            for (streamNo in 1..maxStreams) {
-                val streamUrl = "$mainUrl/watch/$matchId/$source/$streamNo"
-                Log.d("StreamedProvider", "Processing stream URL: $streamUrl")
-                if (extractor.getUrl(streamUrl, matchId, source, streamNo, subtitleCallback, callback)) {
-                    success = true
-                }
-            }
-        }
-        return success
-    }
-
-    data class Match(
-        @JsonProperty("id") val id: String? = null,
-        @JsonProperty("title") val title: String,
-        @JsonProperty("poster") val posterPath: String? = null,
-        @JsonProperty("popular") val popular: Boolean = false,
-        @JsonProperty("sources") val matchSources: ArrayList<MatchSource> = arrayListOf()
-    )
-
-    data class MatchSource(
-        @JsonProperty("source") val sourceName: String,
-        @JsonProperty("id") val id: String
-    )
-}
-
 class StreamedMediaExtractor {
     private val fetchUrl = "https://embedstreams.top/fetch"
     private val cookieUrl = "https://fishy.streamed.su/api/event"
     private val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
     private val baseHeaders = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
-        "Content-Type" to "application/json"
+        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
+        "Accept" to "*/*",
+        "Origin" to "https://embedstreams.top",
+        "Referer" to "https://embedstreams.top/"
     )
     private val fallbackDomains = listOf("p2-panel.streamed.su", "streamed.su")
     private val cookieCache = mutableMapOf<String, String>()
@@ -209,12 +111,25 @@ class StreamedMediaExtractor {
             "Cookie" to combinedCookies
         )
 
-        // Test M3U8 with fallbacks
+        // Fetch and rewrite M3U8
         for (domain in listOf("rr.buytommy.top") + fallbackDomains) {
             try {
                 val testUrl = m3u8Url.replace("rr.buytommy.top", domain)
                 val testResponse = app.get(testUrl, headers = m3u8Headers, timeout = 15)
-                if (testResponse.code == 200) {
+                if (testResponse.code == 200 && testResponse.text.contains("#EXTM3U")) {
+                    // Rewrite .png and .js to .ts
+                    val modifiedM3u8Content = testResponse.text.split("\n").joinToString("\n") { line ->
+                        if (line.trim().startsWith("https://") && (line.endsWith(".png") || line.endsWith(".js"))) {
+                            line.replace(".png", ".ts").replace(".js", ".ts")
+                        } else if (line.contains("URI=\"") && (line.contains(".png") || line.contains(".js"))) {
+                            line.replace(".png", ".ts").replace(".js", ".ts")
+                        } else {
+                            line
+                        }
+                    }
+                    Log.d("StreamedMediaExtractor", "Modified M3U8 content:\n$modifiedM3u8Content")
+
+                    // Add ExtractorLink with modified headers
                     callback.invoke(
                         newExtractorLink(
                             source = "Streamed",
@@ -237,7 +152,8 @@ class StreamedMediaExtractor {
             }
         }
 
-        // If tests fail, add link anyway (as in original)
+        // Fallback: Add original URL with warning
+        Log.w("StreamedMediaExtractor", "M3U8 tests failed, adding original URL as fallback")
         callback.invoke(
             newExtractorLink(
                 source = "Streamed",
@@ -250,7 +166,6 @@ class StreamedMediaExtractor {
                 this.headers = m3u8Headers
             }
         )
-        Log.d("StreamedMediaExtractor", "M3U8 test failed but added anyway: $m3u8Url")
         return true
     }
 
