@@ -8,6 +8,7 @@ import com.lagradost.cloudstream3.utils.Qualities
 import android.util.Log
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import java.util.Base64
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -126,7 +127,7 @@ class StreamedMediaExtractor {
         "Origin" to "https://embedstreams.top",
         "Referer" to "https://embedstreams.top/"
     )
-    private val fallbackDomains = emptyList<String>() // Removed ineffective domains
+    private val fallbackDomains = emptyList<String>()
     private val cookieCache = mutableMapOf<String, String>()
 
     suspend fun getUrl(
@@ -182,27 +183,47 @@ class StreamedMediaExtractor {
         )
         Log.d("StreamedMediaExtractor", "Fetching with data: $postData and headers: $fetchHeaders")
 
-        val encryptedResponse = try {
-            val response = app.post(fetchUrl, headers = fetchHeaders, json = postData, timeout = 15)
-            Log.d("StreamedMediaExtractor", "Fetch response code: ${response.code}")
-            response.text
+        val response = try {
+            app.post(fetchUrl, headers = fetchHeaders, json = postData, timeout = 15)
         } catch (e: Exception) {
             Log.e("StreamedMediaExtractor", "Fetch failed: ${e.message}")
             return false
         }
-        Log.d("StreamedMediaExtractor", "Encrypted response: $encryptedResponse")
+        Log.d("StreamedMediaExtractor", "Fetch response code: ${response.code}")
+        if (response.code != 200) {
+            Log.e("StreamedMediaExtractor", "Fetch failed with code: ${response.code}")
+            return false
+        }
+
+        // Base64-encode the raw response bytes
+        val encryptedBytes = response.body?.bytes() ?: return false.also {
+            Log.e("StreamedMediaExtractor", "Fetch response body is null")
+        }
+        Log.d("StreamedMediaExtractor", "Raw response bytes length: ${encryptedBytes.size}")
+        val encryptedBase64 = Base64.getEncoder().encodeToString(encryptedBytes)
+        Log.d("StreamedMediaExtractor", "Base64-encoded response: $encryptedBase64")
 
         // Decrypt using Deno
-        val decryptPostData = mapOf("encrypted" to encryptedResponse)
+        val decryptPostData = mapOf("encrypted" to encryptedBase64)
         val decryptResponse = try {
-            app.post(decryptUrl, json = decryptPostData, headers = mapOf("Content-Type" to "application/json"))
-                .parsedSafe<Map<String, String>>()
+            val response = app.post(
+                decryptUrl,
+                json = decryptPostData,
+                headers = mapOf("Content-Type" to "application/json"),
+                timeout = 15
+            )
+            Log.d("StreamedMediaExtractor", "Decrypt response: ${response.text}")
+            response.parsedSafe<Map<String, String>>()
         } catch (e: Exception) {
             Log.e("StreamedMediaExtractor", "Decryption request failed: ${e.message}")
             return false
         }
         val decryptedPath = decryptResponse?.get("decrypted") ?: return false.also {
             Log.e("StreamedMediaExtractor", "Decryption failed or no 'decrypted' key")
+        }
+        if (decryptedPath.contains("Error decrypting")) {
+            Log.e("StreamedMediaExtractor", "Decryption error: $decryptedPath")
+            return false
         }
         Log.d("StreamedMediaExtractor", "Decrypted path: $decryptedPath")
 
