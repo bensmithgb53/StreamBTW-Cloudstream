@@ -2,6 +2,7 @@ package ben.smith53
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
@@ -11,8 +12,12 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
+import kotlinx.coroutines.delay
 
 class StreamedProvider : MainAPI() {
     override var mainUrl = "https://streamed.su"
@@ -85,7 +90,23 @@ class StreamedProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val matchId = data.substringAfterLast("/")
-        val extractor = StreamedMediaExtractor() // Updated to new extractor
+
+        // Check if the stream is live
+        val matchDetailsUrl = "$mainUrl/api/matches/id/$matchId"
+        val matchDetails = try {
+            val response = app.get(matchDetailsUrl).text
+            parseJson<Match>(response)
+        } catch (e: Exception) {
+            Log.e("StreamedProvider", "Failed to fetch match details: ${e.message}")
+            return false
+        }
+
+        if (matchDetails.matchSources.isEmpty() || !isStreamLive(matchDetails)) {
+            Log.w("StreamedProvider", "Stream is not live or has no sources: $matchId")
+            return false
+        }
+
+        val extractor = StreamedMediaExtractor()
         var success = false
 
         sources.forEach { source ->
@@ -98,6 +119,12 @@ class StreamedProvider : MainAPI() {
             }
         }
         return success
+    }
+
+    private fun isStreamLive(match: Match): Boolean {
+        // Adjust based on API response; example check for non-empty sources
+        // Inspect API for fields like "status": "live" or "startTime"
+        return match.matchSources.any { it.sourceName.isNotEmpty() }
     }
 
     data class Match(
@@ -119,11 +146,34 @@ class StreamedMediaExtractor {
     private val cookieUrl = "https://fishy.streamed.su/api/event"
     private val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
     private val baseHeaders = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
+        "Accept" to "*/*",
         "Content-Type" to "application/json"
     )
-    private val fallbackDomains = listOf("p2-panel.streamed.su", "streamed.su")
+    private val fallbackDomains = listOf("rr.buytommy.top", "p2-panel.streamed.su", "streamed.su")
     private val cookieCache = mutableMapOf<String, String>()
+    private val cloudflareKiller = CloudflareKiller()
+
+    // OkHttp Interceptor to manage headers and mimic proxy behavior
+    private val streamInterceptor = Interceptor { chain ->
+        val request = chain.request()
+        val url = request.url.toString()
+
+        // Apply to M3U8 playlists, segments, and keys
+        if (url.endsWith(".m3u8") || url.endsWith(".ts") || url.contains("/key/")) {
+            Log.d("StreamedMediaExtractor", "Intercepting URL: $url")
+
+            val newRequest = request.newBuilder()
+                .url(url)
+                .header("Referer", "https://embedstreams.top/")
+                .header("Origin", "https://embedstreams.top")
+                .header("Cookie", cookieCache[request.url.toString().substringBefore("/")] ?: "")
+                .build()
+            chain.proceed(newRequest)
+        } else {
+            chain.proceed(request)
+        }
+    }
 
     suspend fun getUrl(
         streamUrl: String,
@@ -135,9 +185,14 @@ class StreamedMediaExtractor {
     ): Boolean {
         Log.d("StreamedMediaExtractor", "Starting extraction for: $streamUrl")
 
-        // Fetch stream page cookies
+        // Fetch stream page with CloudflareKiller
         val streamResponse = try {
-            app.get(streamUrl, headers = baseHeaders, timeout = 15)
+            app.get(
+                streamUrl,
+                headers = baseHeaders,
+                interceptor = streamInterceptor,
+                cloudflareKiller = cloudflareKiller
+            )
         } catch (e: Exception) {
             Log.e("StreamedMediaExtractor", "Stream page fetch failed: ${e.message}")
             return false
@@ -149,7 +204,7 @@ class StreamedMediaExtractor {
         val eventCookies = fetchEventCookies(streamUrl, streamUrl)
         Log.d("StreamedMediaExtractor", "Event cookies: $eventCookies")
 
-        // Combine cookies
+        // Combine cookies, including Cloudflare cookies
         val combinedCookies = buildString {
             if (streamCookies.isNotEmpty()) {
                 append(streamCookies.entries.joinToString("; ") { "${it.key}=${it.value}" })
@@ -158,12 +213,19 @@ class StreamedMediaExtractor {
                 if (isNotEmpty()) append("; ")
                 append(eventCookies)
             }
+            cloudflareKiller.getCookies(streamUrl)?.let { cfCookies ->
+                if (isNotEmpty()) append("; ")
+                append(cfCookies.entries.joinToString("; ") { "${it.key}=${it.value}" })
+            }
         }
         if (combinedCookies.isEmpty()) {
             Log.e("StreamedMediaExtractor", "No cookies obtained")
             return false
         }
         Log.d("StreamedMediaExtractor", "Combined cookies: $combinedCookies")
+
+        // Cache cookies for interceptor
+        cookieCache[streamUrl] = combinedCookies
 
         // POST to fetch encrypted string
         val postData = mapOf(
@@ -174,16 +236,15 @@ class StreamedMediaExtractor {
         val embedReferer = "https://embedstreams.top/embed/$source/$matchId/$streamNo"
         val fetchHeaders = baseHeaders + mapOf(
             "Referer" to streamUrl,
+            "Origin" to "https://embedstreams.top",
             "Cookie" to combinedCookies
         )
         Log.d("StreamedMediaExtractor", "Fetching with data: $postData and headers: $fetchHeaders")
 
-        val encryptedResponse = try {
-            val response = app.post(fetchUrl, headers = fetchHeaders, json = postData, timeout = 15)
-            Log.d("StreamedMediaExtractor", "Fetch response code: ${response.code}")
-            response.text
-        } catch (e: Exception) {
-            Log.e("StreamedMediaExtractor", "Fetch failed: ${e.message}")
+        // Try fetching encrypted string with fallback domains
+        val encryptedResponse = fetchWithFallback(fetchUrl, fetchHeaders, postData)
+        if (encryptedResponse == null) {
+            Log.e("StreamedMediaExtractor", "Failed to fetch encrypted response")
             return false
         }
         Log.d("StreamedMediaExtractor", "Encrypted response: $encryptedResponse")
@@ -191,8 +252,13 @@ class StreamedMediaExtractor {
         // Decrypt using Deno
         val decryptPostData = mapOf("encrypted" to encryptedResponse)
         val decryptResponse = try {
-            app.post(decryptUrl, json = decryptPostData, headers = mapOf("Content-Type" to "application/json"))
-                .parsedSafe<Map<String, String>>()
+            app.post(
+                decryptUrl,
+                json = decryptPostData,
+                headers = mapOf("Content-Type" to "application/json"),
+                interceptor = streamInterceptor,
+                cloudflareKiller = cloudflareKiller
+            ).parsedSafe<Map<String, String>>()
         } catch (e: Exception) {
             Log.e("StreamedMediaExtractor", "Decryption request failed: ${e.message}")
             return false
@@ -202,18 +268,24 @@ class StreamedMediaExtractor {
         }
         Log.d("StreamedMediaExtractor", "Decrypted path: $decryptedPath")
 
-        // Construct M3U8 URL
+        // Construct and test M3U8 URL with fallback domains
         val m3u8Url = "https://rr.buytommy.top$decryptedPath"
         val m3u8Headers = baseHeaders + mapOf(
             "Referer" to embedReferer,
+            "Origin" to "https://embedstreams.top",
             "Cookie" to combinedCookies
         )
 
-        // Test M3U8 with fallbacks
-        for (domain in listOf("rr.buytommy.top") + fallbackDomains) {
+        for (domain in fallbackDomains) {
             try {
                 val testUrl = m3u8Url.replace("rr.buytommy.top", domain)
-                val testResponse = app.get(testUrl, headers = m3u8Headers, timeout = 15)
+                val testResponse = app.get(
+                    testUrl,
+                    headers = m3u8Headers,
+                    timeout = 15,
+                    interceptor = streamInterceptor,
+                    cloudflareKiller = cloudflareKiller
+                )
                 if (testResponse.code == 200) {
                     callback.invoke(
                         newExtractorLink(
@@ -237,21 +309,39 @@ class StreamedMediaExtractor {
             }
         }
 
-        // If tests fail, add link anyway (as in original)
-        callback.invoke(
-            newExtractorLink(
-                source = "Streamed",
-                name = "$source Stream $streamNo",
-                url = m3u8Url,
-                type = ExtractorLinkType.M3U8
-            ) {
-                this.referer = embedReferer
-                this.quality = Qualities.Unknown.value
-                this.headers = m3u8Headers
+        Log.w("StreamedMediaExtractor", "All M3U8 tests failed for $m3u8Url")
+        return false
+    }
+
+    private suspend fun fetchWithFallback(
+        url: String,
+        headers: Map<String, String>,
+        postData: Map<String, String>,
+        retries: Int = 3
+    ): String? {
+        for (domain in fallbackDomains) {
+            val domainUrl = url.replace("embedstreams.top", domain)
+            repeat(retries) { attempt ->
+                try {
+                    val response = app.post(
+                        domainUrl,
+                        headers = headers,
+                        json = postData,
+                        timeout = 15,
+                        interceptor = streamInterceptor,
+                        cloudflareKiller = cloudflareKiller
+                    )
+                    Log.d("StreamedMediaExtractor", "Fetch attempt ${attempt + 1} for $domainUrl: code=${response.code}")
+                    if (response.code == 200 && response.text.isNotEmpty()) {
+                        return response.text
+                    }
+                } catch (e: Exception) {
+                    Log.e("StreamedMediaExtractor", "Fetch attempt ${attempt + 1} failed for $domainUrl: ${e.message}")
+                }
+                delay(1000) // Wait before retrying
             }
-        )
-        Log.d("StreamedMediaExtractor", "M3U8 test failed but added anyway: $m3u8Url")
-        return true
+        }
+        return null
     }
 
     private suspend fun fetchEventCookies(pageUrl: String, referrer: String): String {
@@ -261,14 +351,15 @@ class StreamedMediaExtractor {
         try {
             val response = app.post(
                 cookieUrl,
-                data = mapOf(),
                 headers = mapOf("Content-Type" to "text/plain"),
                 requestBody = payload.toRequestBody("text/plain".toMediaType()),
-                timeout = 15
+                timeout = 15,
+                interceptor = streamInterceptor,
+                cloudflareKiller = cloudflareKiller
             )
             val cookies = response.headers.filter { it.first == "Set-Cookie" }
                 .map { it.second.split(";")[0] }
-            val formattedCookies = listOf("_ddg8_", "_ddg10_", "_ddg9_", "_ddg1_")
+            val formattedCookies = listOf("_ddg8_", "_ddg10_", "_ddg9_", "_ddg1_", "__cf_bm", "cf_clearance")
                 .mapNotNull { key -> cookies.find { it.startsWith(key) } }
                 .joinToString("; ")
             if (formattedCookies.isNotEmpty()) {
