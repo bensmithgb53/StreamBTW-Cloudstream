@@ -8,7 +8,6 @@ import com.lagradost.cloudstream3.utils.Qualities
 import android.util.Log
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
-import java.util.Base64
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -86,7 +85,7 @@ class StreamedProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val matchId = data.substringAfterLast("/")
-        val extractor = StreamedMediaExtractor()
+        val extractor = StreamedMediaExtractor() // Updated to new extractor
         var success = false
 
         sources.forEach { source ->
@@ -120,14 +119,10 @@ class StreamedMediaExtractor {
     private val cookieUrl = "https://fishy.streamed.su/api/event"
     private val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
     private val baseHeaders = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
-        "Accept" to "*/*",
-        "Accept-Encoding" to "gzip, deflate, br",
-        "Connection" to "keep-alive",
-        "Origin" to "https://embedstreams.top",
-        "Referer" to "https://embedstreams.top/"
+        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+        "Content-Type" to "application/json"
     )
-    private val fallbackDomains = emptyList<String>()
+    private val fallbackDomains = listOf("p2-panel.streamed.su", "streamed.su")
     private val cookieCache = mutableMapOf<String, String>()
 
     suspend fun getUrl(
@@ -183,37 +178,21 @@ class StreamedMediaExtractor {
         )
         Log.d("StreamedMediaExtractor", "Fetching with data: $postData and headers: $fetchHeaders")
 
-        val response = try {
-            app.post(fetchUrl, headers = fetchHeaders, json = postData, timeout = 15)
+        val encryptedResponse = try {
+            val response = app.post(fetchUrl, headers = fetchHeaders, json = postData, timeout = 15)
+            Log.d("StreamedMediaExtractor", "Fetch response code: ${response.code}")
+            response.text
         } catch (e: Exception) {
             Log.e("StreamedMediaExtractor", "Fetch failed: ${e.message}")
             return false
         }
-        Log.d("StreamedMediaExtractor", "Fetch response code: ${response.code}")
-        if (response.code != 200) {
-            Log.e("StreamedMediaExtractor", "Fetch failed with code: ${response.code}")
-            return false
-        }
-
-        // Base64-encode the raw response bytes
-        val encryptedBytes = response.body?.bytes() ?: return false.also {
-            Log.e("StreamedMediaExtractor", "Fetch response body is null")
-        }
-        Log.d("StreamedMediaExtractor", "Raw response bytes length: ${encryptedBytes.size}")
-        val encryptedBase64 = Base64.getEncoder().encodeToString(encryptedBytes)
-        Log.d("StreamedMediaExtractor", "Base64-encoded response: $encryptedBase64")
+        Log.d("StreamedMediaExtractor", "Encrypted response: $encryptedResponse")
 
         // Decrypt using Deno
-        val decryptPostData = mapOf("encrypted" to encryptedBase64)
+        val decryptPostData = mapOf("encrypted" to encryptedResponse)
         val decryptResponse = try {
-            val response = app.post(
-                decryptUrl,
-                json = decryptPostData,
-                headers = mapOf("Content-Type" to "application/json"),
-                timeout = 15
-            )
-            Log.d("StreamedMediaExtractor", "Decrypt response: ${response.text}")
-            response.parsedSafe<Map<String, String>>()
+            app.post(decryptUrl, json = decryptPostData, headers = mapOf("Content-Type" to "application/json"))
+                .parsedSafe<Map<String, String>>()
         } catch (e: Exception) {
             Log.e("StreamedMediaExtractor", "Decryption request failed: ${e.message}")
             return false
@@ -221,40 +200,21 @@ class StreamedMediaExtractor {
         val decryptedPath = decryptResponse?.get("decrypted") ?: return false.also {
             Log.e("StreamedMediaExtractor", "Decryption failed or no 'decrypted' key")
         }
-        if (decryptedPath.contains("Error decrypting")) {
-            Log.e("StreamedMediaExtractor", "Decryption error: $decryptedPath")
-            return false
-        }
         Log.d("StreamedMediaExtractor", "Decrypted path: $decryptedPath")
 
         // Construct M3U8 URL
         val m3u8Url = "https://rr.buytommy.top$decryptedPath"
         val m3u8Headers = baseHeaders + mapOf(
-            "Host" to "rr.buytommy.top",
             "Referer" to embedReferer,
             "Cookie" to combinedCookies
         )
 
-        // Fetch and rewrite M3U8
+        // Test M3U8 with fallbacks
         for (domain in listOf("rr.buytommy.top") + fallbackDomains) {
             try {
                 val testUrl = m3u8Url.replace("rr.buytommy.top", domain)
                 val testResponse = app.get(testUrl, headers = m3u8Headers, timeout = 15)
-                Log.d("StreamedMediaExtractor", "M3U8 response headers for $domain: ${testResponse.headers}")
-                if (testResponse.code == 200 && testResponse.text.contains("#EXTM3U")) {
-                    // Rewrite .png and .js to .ts
-                    val modifiedM3u8Content = testResponse.text.split("\n").joinToString("\n") { line ->
-                        if (line.trim().startsWith("https://") && (line.endsWith(".png") || line.endsWith(".js"))) {
-                            line.replace(".png", ".ts").replace(".js", ".ts")
-                        } else if (line.contains("URI=\"") && (line.contains(".png") || line.contains(".js"))) {
-                            line.replace(".png", ".ts").replace(".js", ".ts")
-                        } else {
-                            line
-                        }
-                    }
-                    Log.d("StreamedMediaExtractor", "Modified M3U8 content:\n$modifiedM3u8Content")
-
-                    // Add ExtractorLink with modified headers
+                if (testResponse.code == 200) {
                     callback.invoke(
                         newExtractorLink(
                             source = "Streamed",
@@ -277,8 +237,7 @@ class StreamedMediaExtractor {
             }
         }
 
-        // Fallback: Add original URL with warning
-        Log.w("StreamedMediaExtractor", "M3U8 tests failed, adding original URL as fallback")
+        // If tests fail, add link anyway (as in original)
         callback.invoke(
             newExtractorLink(
                 source = "Streamed",
@@ -291,6 +250,7 @@ class StreamedMediaExtractor {
                 this.headers = m3u8Headers
             }
         )
+        Log.d("StreamedMediaExtractor", "M3U8 test failed but added anyway: $m3u8Url")
         return true
     }
 
