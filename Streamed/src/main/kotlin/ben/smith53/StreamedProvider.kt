@@ -121,10 +121,12 @@ class StreamedMediaExtractor {
     private val baseHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
         "Accept" to "*/*",
+        "Accept-Encoding" to "gzip, deflate, br",
+        "Connection" to "keep-alive",
         "Origin" to "https://embedstreams.top",
         "Referer" to "https://embedstreams.top/"
     )
-    private val fallbackDomains = listOf("p2-panel.streamed.su", "streamed.su")
+    private val fallbackDomains = emptyList<String>() // Removed ineffective domains
     private val cookieCache = mutableMapOf<String, String>()
 
     suspend fun getUrl(
@@ -207,6 +209,7 @@ class StreamedMediaExtractor {
         // Construct M3U8 URL
         val m3u8Url = "https://rr.buytommy.top$decryptedPath"
         val m3u8Headers = baseHeaders + mapOf(
+            "Host" to "rr.buytommy.top",
             "Referer" to embedReferer,
             "Cookie" to combinedCookies
         )
@@ -216,6 +219,7 @@ class StreamedMediaExtractor {
             try {
                 val testUrl = m3u8Url.replace("rr.buytommy.top", domain)
                 val testResponse = app.get(testUrl, headers = m3u8Headers, timeout = 15)
+                Log.d("StreamedMediaExtractor", "M3U8 response headers for $domain: ${testResponse.headers}")
                 if (testResponse.code == 200 && testResponse.text.contains("#EXTM3U")) {
                     // Rewrite .png and .js to .ts
                     val modifiedM3u8Content = testResponse.text.split("\n").joinToString("\n") { line ->
