@@ -152,19 +152,25 @@ class StreamedMediaExtractor {
     )
     private val fallbackDomains = listOf("rr.buytommy.top", "p2-panel.streamed.su", "streamed.su")
     private val cookieCache = mutableMapOf<String, String>()
-    private val cloudflareKiller = CloudflareKiller()
+    private val cloudflareKiller = CloudflareKiller() // Initialize for potential internal use
 
-    // OkHttp Interceptor to manage headers and mimic proxy behavior
+    // OkHttp Interceptor to manage headers and cookies
     private val streamInterceptor = Interceptor { chain ->
         val request = chain.request()
         val url = request.url.toString()
 
         // Apply to M3U8 playlists, segments, and keys
-        if (url.endsWith(".m3u8") || url.endsWith(".ts") || url.contains("/key/")) {
-            Log.d("StreamedMediaExtractor", "Intercepting URL: $url")
+        if (url.endsWith(".m3u8") || url.endsWith(".ts") || url.endsWith(".js") || url.contains("/key/")) {
+            // Try .js if .ts fails (mimicking proxy's fallback)
+            val newUrl = if (url.endsWith(".ts")) {
+                url.replace(".ts", ".js")
+            } else {
+                url
+            }
+            Log.d("StreamedMediaExtractor", "Intercepting URL: $url -> $newUrl")
 
             val newRequest = request.newBuilder()
-                .url(url)
+                .url(newUrl)
                 .header("Referer", "https://embedstreams.top/")
                 .header("Origin", "https://embedstreams.top")
                 .header("Cookie", cookieCache[request.url.toString().substringBefore("/")] ?: "")
@@ -185,13 +191,13 @@ class StreamedMediaExtractor {
     ): Boolean {
         Log.d("StreamedMediaExtractor", "Starting extraction for: $streamUrl")
 
-        // Fetch stream page with CloudflareKiller
+        // Fetch stream page
         val streamResponse = try {
             app.get(
                 streamUrl,
                 headers = baseHeaders,
                 interceptor = streamInterceptor,
-                cloudflareKiller = cloudflareKiller
+                timeout = 15
             )
         } catch (e: Exception) {
             Log.e("StreamedMediaExtractor", "Stream page fetch failed: ${e.message}")
@@ -204,7 +210,7 @@ class StreamedMediaExtractor {
         val eventCookies = fetchEventCookies(streamUrl, streamUrl)
         Log.d("StreamedMediaExtractor", "Event cookies: $eventCookies")
 
-        // Combine cookies, including Cloudflare cookies
+        // Combine cookies
         val combinedCookies = buildString {
             if (streamCookies.isNotEmpty()) {
                 append(streamCookies.entries.joinToString("; ") { "${it.key}=${it.value}" })
@@ -212,10 +218,6 @@ class StreamedMediaExtractor {
             if (eventCookies.isNotEmpty()) {
                 if (isNotEmpty()) append("; ")
                 append(eventCookies)
-            }
-            cloudflareKiller.getCookies(streamUrl)?.let { cfCookies ->
-                if (isNotEmpty()) append("; ")
-                append(cfCookies.entries.joinToString("; ") { "${it.key}=${it.value}" })
             }
         }
         if (combinedCookies.isEmpty()) {
@@ -257,7 +259,7 @@ class StreamedMediaExtractor {
                 json = decryptPostData,
                 headers = mapOf("Content-Type" to "application/json"),
                 interceptor = streamInterceptor,
-                cloudflareKiller = cloudflareKiller
+                timeout = 15
             ).parsedSafe<Map<String, String>>()
         } catch (e: Exception) {
             Log.e("StreamedMediaExtractor", "Decryption request failed: ${e.message}")
@@ -283,8 +285,7 @@ class StreamedMediaExtractor {
                     testUrl,
                     headers = m3u8Headers,
                     timeout = 15,
-                    interceptor = streamInterceptor,
-                    cloudflareKiller = cloudflareKiller
+                    interceptor = streamInterceptor
                 )
                 if (testResponse.code == 200) {
                     callback.invoke(
@@ -328,8 +329,7 @@ class StreamedMediaExtractor {
                         headers = headers,
                         json = postData,
                         timeout = 15,
-                        interceptor = streamInterceptor,
-                        cloudflareKiller = cloudflareKiller
+                        interceptor = streamInterceptor
                     )
                     Log.d("StreamedMediaExtractor", "Fetch attempt ${attempt + 1} for $domainUrl: code=${response.code}")
                     if (response.code == 200 && response.text.isNotEmpty()) {
@@ -354,8 +354,7 @@ class StreamedMediaExtractor {
                 headers = mapOf("Content-Type" to "text/plain"),
                 requestBody = payload.toRequestBody("text/plain".toMediaType()),
                 timeout = 15,
-                interceptor = streamInterceptor,
-                cloudflareKiller = cloudflareKiller
+                interceptor = streamInterceptor
             )
             val cookies = response.headers.filter { it.first == "Set-Cookie" }
                 .map { it.second.split(";")[0] }
