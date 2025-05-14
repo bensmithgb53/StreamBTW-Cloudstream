@@ -108,6 +108,15 @@ class StreamedProvider : MainAPI() {
                     }
                 } catch (e: Exception) {
                     Log.e("StreamedProvider", "Failed for $source stream $streamNo: ${e.message}")
+                    // Retry once
+                    try {
+                        val streamUrl = "$mainUrl/watch/$matchId/$source/$streamNo"
+                        if (extractor.getUrl(streamUrl, matchId, source, streamNo, subtitleCallback, callback)) {
+                            success = true
+                        }
+                    } catch (e2: Exception) {
+                        Log.e("StreamedProvider", "Retry failed for $source stream $streamNo: ${e2.message}")
+                    }
                 }
             }
         }
@@ -133,9 +142,8 @@ class StreamedMediaExtractor {
     private val fetchUrl = "https://embedstreams.top/fetch"
     private val cookieUrl = "https://fishy.streamed.su/api/event"
     private val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
-    private val challengeBaseUrl = "https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/b"
     private val baseHeaders = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
         "Content-Type" to "application/json",
         "Accept" to "*/*"
     )
@@ -147,7 +155,6 @@ class StreamedMediaExtractor {
         "ann.embedstreams.top"
     )
     private val cookieCache = mutableMapOf<String, String>()
-    private var cfClearance: String? = null
 
     suspend fun getUrl(
         streamUrl: String,
@@ -159,21 +166,9 @@ class StreamedMediaExtractor {
     ): Boolean {
         Log.d("StreamedMediaExtractor", "Starting extraction for: $streamUrl")
 
-        // Fetch Cloudflare clearance cookie (only for non-24/7 streams)
-        if (!isKnown247Stream(matchId)) {
-            if (fetchCloudflareClearance(streamUrl)) {
-                Log.d("StreamedMediaExtractor", "Cloudflare clearance obtained")
-            } else {
-                Log.w("StreamedMediaExtractor", "Cloudflare clearance fetch failed, proceeding without it")
-            }
-        }
-
         // Fetch stream page cookies
         val streamResponse = try {
-            app.get(
-                streamUrl,
-                headers = baseHeaders + (cfClearance?.let { mapOf("Cookie" to "cf_clearance=$it") } ?: emptyMap())
-            )
+            app.get(streamUrl, headers = baseHeaders)
         } catch (e: Exception) {
             Log.e("StreamedMediaExtractor", "Stream page fetch failed: ${e.message}")
             return false
@@ -198,10 +193,6 @@ class StreamedMediaExtractor {
                 if (isNotEmpty()) append("; ")
                 append(eventCookies)
             }
-            cfClearance?.let {
-                if (isNotEmpty()) append("; ")
-                append("cf_clearance=$it")
-            }
         }
         Log.d("StreamedMediaExtractor", "Combined cookies: $combinedCookies")
 
@@ -214,8 +205,7 @@ class StreamedMediaExtractor {
         val embedReferer = "https://embedstreams.top/embed/$source/$matchId/$streamNo"
         val fetchHeaders = baseHeaders + mapOf(
             "Referer" to embedReferer,
-            "Origin" to "https://embedstreams.top",
-            "Cookie" to combinedCookies
+            "Origin" to "https://embedstreams.top"
         )
         Log.d("StreamedMediaExtractor", "Fetching with data: $postData and headers: $fetchHeaders")
 
@@ -226,7 +216,10 @@ class StreamedMediaExtractor {
             return false
         }
         Log.d("StreamedMediaExtractor", "Fetch response code: ${response.code}")
-        if (response.code != 200) return false
+        if (response.code != 200) {
+            Log.e("StreamedMediaExtractor", "Fetch failed with response: ${response.text.take(100)}")
+            return false
+        }
         val encryptedResponse = response.text
         Log.d("StreamedMediaExtractor", "Encrypted response: $encryptedResponse")
 
@@ -254,7 +247,7 @@ class StreamedMediaExtractor {
         val m3u8BaseUrl = "https://rr.buytommy.top$basePath"
         val m3u8Headers = baseHeaders + mapOf(
             "Referer" to embedReferer,
-            "Cookie" to combinedCookies
+            "Origin" to "https://embedstreams.top"
         )
 
         // Test M3U8 with fallbacks
@@ -263,6 +256,7 @@ class StreamedMediaExtractor {
                 val testUrl = m3u8BaseUrl.replace("rr.buytommy.top", domain) + queryParams
                 Log.d("StreamedMediaExtractor", "Testing M3U8 URL: $testUrl")
                 val testResponse = app.get(testUrl, headers = m3u8Headers)
+                Log.d("StreamedMediaExtractor", "M3U8 response code for $domain: ${testResponse.code}")
                 if (testResponse.code == 200 && testResponse.text.contains("#EXTM3U")) {
                     callback.invoke(
                         newExtractorLink(
@@ -287,29 +281,6 @@ class StreamedMediaExtractor {
         }
 
         Log.e("StreamedMediaExtractor", "All M3U8 tests failed for $m3u8BaseUrl")
-        return false
-    }
-
-    private suspend fun fetchCloudflareClearance(streamUrl: String): Boolean {
-        val challengeUrl = "$challengeBaseUrl/turnstile/if/ov2/av0/rcv/v99e3/0x4AAAAAAAkvKraQY_9hzpmB/auto/"
-        val challengeHeaders = baseHeaders + mapOf(
-            "Referer" to streamUrl,
-            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-        )
-        try {
-            val response = app.get(challengeUrl, headers = challengeHeaders)
-            if (response.code == 200) {
-                val cookies = response.headers.filter { it.first == "Set-Cookie" }
-                    .map { it.second.split(";")[0] }
-                cfClearance = cookies.find { it.startsWith("cf_clearance=") }?.substringAfter("cf_clearance=")
-                Log.d("StreamedMediaExtractor", "Cloudflare clearance cookie: $cfClearance")
-                return cfClearance != null
-            } else {
-                Log.w("StreamedMediaExtractor", "Cloudflare challenge failed with code: ${response.code}")
-            }
-        } catch (e: Exception) {
-            Log.e("StreamedMediaExtractor", "Cloudflare challenge failed: ${e.message}")
-        }
         return false
     }
 
@@ -343,22 +314,5 @@ class StreamedMediaExtractor {
             Log.e("StreamedMediaExtractor", "Failed to fetch event cookies: ${e.message}")
         }
         return ""
-    }
-
-    private fun isKnown247Stream(matchId: String): Boolean {
-        val known247Streams = listOf(
-            "wwe-network",
-            "sky-sports-f1",
-            "tennis-channel",
-            "dazn-f1",
-            "motogp-qualifying",
-            "italian-open",
-            "all-sports-24-7"
-        ).map { it.lowercase() }
-        return matchId.lowercase().containsAnyOf(known247Streams)
-    }
-
-    private fun String.containsAnyOf(substrings: List<String>): Boolean {
-        return substrings.any { this.contains(it) }
     }
 }
