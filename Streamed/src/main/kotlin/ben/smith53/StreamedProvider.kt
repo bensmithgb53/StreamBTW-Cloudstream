@@ -2,11 +2,10 @@ package ben.smith53
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.network.CloudflareInterceptor
+import com.lagradost.cloudstream3.network.Response
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
-import android.util.Log
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import java.util.Locale
@@ -18,8 +17,8 @@ import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 import com.lagradost.cloudstream3.network.VideoInterceptor
+import okhttp3.Request
 import okio.ByteString.Companion.toByteString
-import java.net.URL
 
 class StreamedProvider : MainAPI() {
     override var mainUrl = "https://streamed.su"
@@ -166,7 +165,7 @@ class StreamedMediaExtractor {
             if (streamCookies.isNotEmpty()) {
                 append(streamCookies.entries.joinToString("; ") { "${it.key}=${it.value}" })
             }
-            if (eventCookies.isNotEmpty intergenerational()) {
+            if (eventCookies.isNotEmpty()) {
                 if (isNotEmpty()) append("; ")
                 append(eventCookies)
             }
@@ -312,12 +311,14 @@ class StreamedMediaExtractor {
                             source = "Streamed",
                             name = "$source Stream $streamNo",
                             url = testUrl,
-                            type = ExtractorLinkType.M3U8,
-                            interceptor = interceptor
+                            type = ExtractorLinkType.M3U8
                         ) {
                             this.referer = embedReferer
                             this.quality = Qualities.Unknown.value
                             this.headers = m3u8Headers
+                            // Note: 'interceptor' parameter is commented out due to version incompatibility
+                            // If your CloudStream3 version supports it, uncomment and use:
+                            // this.interceptor = interceptor
                         }
                     )
                     Log.d("StreamedMediaExtractor", "M3U8 URL added: $testUrl")
@@ -336,12 +337,14 @@ class StreamedMediaExtractor {
                 source = "Streamed",
                 name = "$source Stream $streamNo",
                 url = m3u8Url,
-                type = ExtractorLinkType.M3U8,
-                interceptor = interceptor
+                type = ExtractorLinkType.M3U8
             ) {
                 this.referer = embedReferer
                 this.quality = Qualities.Unknown.value
                 this.headers = m3u8Headers
+                // Note: 'interceptor' parameter is commented out due to version incompatibility
+                // If your CloudStream3 version supports it, uncomment and use:
+                // this.interceptor = interceptor
             }
         )
         Log.d("StreamedMediaExtractor", "M3U8 test failed but added anyway: $m3u8Url")
@@ -351,7 +354,7 @@ class StreamedMediaExtractor {
     private suspend fun fetchEventCookies(pageUrl: String, referrer: String): String {
         cookieCache[pageUrl]?.let { return it }
 
-        val payload = """{"n":"pageview","u":"$pageUrl","d":"streamed.su","r":"$referrer"}"""
+        val payload = """{"n":"pageview","u":"|T|${pageUrl}|T|","d":"streamed.su","r":"|T|${referrer}|T|"}"""
         try {
             val response = app.post(
                 cookieUrl,
