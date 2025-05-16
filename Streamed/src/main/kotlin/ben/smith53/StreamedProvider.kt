@@ -2,6 +2,7 @@ package ben.smith53
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.network.CloudflareInterceptor
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
@@ -13,6 +14,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
+import javax.crypto.Cipher
+import javax.crypto.spec.IvParameterSpec
+import javax.crypto.spec.SecretKeySpec
+import com.lagradost.cloudstream3.network.VideoInterceptor
+import okio.ByteString.Companion.toByteString
+import java.net.URL
 
 class StreamedProvider : MainAPI() {
     override var mainUrl = "https://streamed.su"
@@ -85,7 +92,7 @@ class StreamedProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val matchId = data.substringAfterLast("/")
-        val extractor = StreamedMediaExtractor() // Updated to new extractor
+        val extractor = StreamedMediaExtractor()
         var success = false
 
         sources.forEach { source ->
@@ -124,6 +131,11 @@ class StreamedMediaExtractor {
     )
     private val fallbackDomains = listOf("p2-panel.streamed.su", "streamed.su")
     private val cookieCache = mutableMapOf<String, String>()
+    private val keyCache = mutableMapOf<String, ByteArray>()
+
+    // Hardcoded IV from JavaScript
+    private val defaultIvHex = "507dcd1eb7f04bb6983b19be56b89020"
+    private val defaultIv: ByteArray = defaultIvHex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 
     suspend fun getUrl(
         streamUrl: String,
@@ -154,7 +166,7 @@ class StreamedMediaExtractor {
             if (streamCookies.isNotEmpty()) {
                 append(streamCookies.entries.joinToString("; ") { "${it.key}=${it.value}" })
             }
-            if (eventCookies.isNotEmpty()) {
+            if (eventCookies.isNotEmpty intergenerational()) {
                 if (isNotEmpty()) append("; ")
                 append(eventCookies)
             }
@@ -209,6 +221,86 @@ class StreamedMediaExtractor {
             "Cookie" to combinedCookies
         )
 
+        // Fetch M3U8 to extract key URL
+        val m3u8Content = try {
+            app.get(m3u8Url, headers = m3u8Headers, timeout = 15).text
+        } catch (e: Exception) {
+            Log.e("StreamedMediaExtractor", "Failed to fetch M3U8: ${e.message}")
+            return false
+        }
+
+        // Parse #EXT-X-KEY
+        var keyUrl: String? = null
+        m3u8Content.lines().forEach { line ->
+            if (line.startsWith("#EXT-X-KEY")) {
+                val uriMatch = Regex("URI=\"([^\"]+)\"").find(line)
+                keyUrl = uriMatch?.groups?.get(1)?.value
+            }
+        }
+
+        // If no key URL in M3U8, construct it based on JavaScript example
+        if (keyUrl == null) {
+            keyUrl = "https://rr.buytommy.top/$source/key/$matchId/$streamNo"
+        }
+
+        // Create VideoInterceptor for decryption
+        val interceptor = object : VideoInterceptor {
+            override suspend fun intercept(url: String, request: Request): Response {
+                if (!url.endsWith(".ts")) {
+                    return app.get(url, headers = request.headers.toMap())
+                }
+
+                // Fetch the key if not cached
+                val key = keyCache[keyUrl] ?: run {
+                    try {
+                        val keyResponse = app.get(
+                            keyUrl!!,
+                            headers = m3u8Headers + mapOf("Referer" to "https://embedstreams.top/"),
+                            timeout = 15
+                        )
+                        if (keyResponse.code != 200) {
+                            Log.e("StreamedMediaExtractor", "Failed to fetch key: ${keyResponse.code}")
+                            return Response(url, body = byteArrayOf().toByteString())
+                        }
+                        val keyBytes = keyResponse.body.bytes()
+                        keyCache[keyUrl!!] = keyBytes
+                        keyBytes
+                    } catch (e: Exception) {
+                        Log.e("StreamedMediaExtractor", "Key fetch failed: ${e.message}")
+                        return Response(url, body = byteArrayOf().toByteString())
+                    }
+                }
+
+                // Fetch the encrypted segment
+                val segmentResponse = try {
+                    app.get(url, headers = m3u8Headers, timeout = 15)
+                } catch (e: Exception) {
+                    Log.e("StreamedMediaExtractor", "Segment fetch failed: ${e.message}")
+                    return Response(url, body = byteArrayOf().toByteString())
+                }
+
+                if (segmentResponse.code != 200) {
+                    Log.e("StreamedMediaExtractor", "Segment fetch failed: ${segmentResponse.code}")
+                    return Response(url, body = byteArrayOf().toByteString())
+                }
+
+                val encryptedData = segmentResponse.body.bytes()
+                val decryptedData = try {
+                    decryptSegment(encryptedData, key, defaultIv)
+                } catch (e: Exception) {
+                    Log.e("StreamedMediaExtractor", "Decryption failed: ${e.message}")
+                    return Response(url, body = byteArrayOf().toByteString())
+                }
+
+                return Response(
+                    url = url,
+                    body = decryptedData.toByteString(),
+                    headers = segmentResponse.headers.toMap(),
+                    code = 200
+                )
+            }
+        }
+
         // Test M3U8 with fallbacks
         for (domain in listOf("rr.buytommy.top") + fallbackDomains) {
             try {
@@ -220,7 +312,8 @@ class StreamedMediaExtractor {
                             source = "Streamed",
                             name = "$source Stream $streamNo",
                             url = testUrl,
-                            type = ExtractorLinkType.M3U8
+                            type = ExtractorLinkType.M3U8,
+                            interceptor = interceptor
                         ) {
                             this.referer = embedReferer
                             this.quality = Qualities.Unknown.value
@@ -237,13 +330,14 @@ class StreamedMediaExtractor {
             }
         }
 
-        // If tests fail, add link anyway (as in original)
+        // Fallback: Add link anyway
         callback.invoke(
             newExtractorLink(
                 source = "Streamed",
                 name = "$source Stream $streamNo",
                 url = m3u8Url,
-                type = ExtractorLinkType.M3U8
+                type = ExtractorLinkType.M3U8,
+                interceptor = interceptor
             ) {
                 this.referer = embedReferer
                 this.quality = Qualities.Unknown.value
@@ -279,5 +373,17 @@ class StreamedMediaExtractor {
             Log.e("StreamedMediaExtractor", "Failed to fetch event cookies: ${e.message}")
         }
         return ""
+    }
+
+    private fun decryptSegment(encryptedData: ByteArray, key: ByteArray, iv: ByteArray): ByteArray {
+        try {
+            val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+            val secretKey = SecretKeySpec(key, "AES")
+            val ivSpec = IvParameterSpec(iv)
+            cipher.init(Cipher.DECRYPT_MODE, secretKey, ivSpec)
+            return cipher.doFinal(encryptedData)
+        } catch (e: Exception) {
+            throw Exception("AES decryption failed: ${e.message}")
+        }
     }
 }
