@@ -2,10 +2,10 @@ package ben.smith53
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
-import android.util.Log
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import java.util.Locale
@@ -18,9 +18,10 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.delay
+import okhttp3.Response
 
 class StreamedProvider : MainAPI() {
-    override var mainUrl = "https://streamed.su" // Use streamed.su, but support streamed.pk if needed
+    override var mainUrl = "https://streamed.su"
     override var name = "Streamed"
     override var supportedTypes = setOf(TvType.Live)
     override val hasMainPage = true
@@ -61,7 +62,7 @@ class StreamedProvider : MainAPI() {
                 type = TvType.Live
             ) {
                 this.posterUrl = match.posterPath?.let { "$mainUrl$it" } ?: "$mainUrl/api/images/poster/fallback.webp"
-                this.data = match.matchSources.map { it.sourceName }.joinToString(",")
+                // Removed 'data' as SearchResponse does not have this property
             }
         }
 
@@ -170,7 +171,7 @@ class StreamedMediaExtractor {
                 delay(1000)
             }
         }
-        val streamCookies = streamResponse?.cookies ?: emptyMap()
+        val streamCookies = streamResponse?.cookieHeaders?.associate { it.split("=", limit = 2).let { pair -> pair[0] to pair[1].substringBefore(";") } } ?: emptyMap()
         Log.d("StreamedMediaExtractor", "Stream cookies: $streamCookies")
 
         // Fetch event cookies
@@ -180,7 +181,7 @@ class StreamedMediaExtractor {
         // Combine cookies
         val combinedCookies = buildString {
             if (streamCookies.isNotEmpty()) {
-                append(streamCookies.entries.joinToString("; ") { "${it.key}=${it.value}" })
+                append(streamCookies.map { "${it.key}=${it.value}" }.joinToString("; "))
             }
             if (eventCookies.isNotEmpty()) {
                 if (isNotEmpty()) append("; ")
@@ -318,10 +319,11 @@ class StreamedMediaExtractor {
                 requestBody = payload.toRequestBody("text/plain".toMediaType()),
                 timeout = 15
             )
-            val cookies = response.headers.filter { it.first == "Set-Cookie" }
-                .map { it.second.split(";")[0] }
+            val cookies = response.cookieHeaders
+                .map { it.split("=", limit = 2).let { pair -> pair[0] to pair[1].substringBefore(";") } }
+                .toMap()
             val formattedCookies = listOf("_ddg8_", "_ddg10_", "_ddg9_", "_ddg1_")
-                .mapNotNull { key -> cookies.find { it.startsWith(key) } }
+                .mapNotNull { key -> cookies[key]?.let { "$key=$it" } }
                 .joinToString("; ")
             if (formattedCookies.isNotEmpty()) {
                 cookieCache[pageUrl] = formattedCookies to System.currentTimeMillis()
