@@ -9,16 +9,14 @@ import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.TimeUnit
 import android.util.Log
 import com.lagradost.nicehttp.NiceResponse
 import kotlinx.coroutines.delay
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
 
 class StreamedProvider : MainAPI() {
     override var mainUrl = "https://streamed.su"
@@ -103,18 +101,17 @@ class StreamedProvider : MainAPI() {
 
         Log.d("StreamedProvider", "Available sources for $matchId: $availableSources")
 
-        val jobs = availableSources.flatMap { source ->
-            (1..maxStreams).map { streamNo ->
-                async {
-                    val streamUrl = "$mainUrl/watch/$matchId/$source/$streamNo"
-                    Log.d("StreamedProvider", "Processing stream URL: $streamUrl")
-                    StreamedMediaExtractor().getUrl(streamUrl, matchId, source, streamNo, subtitleCallback, callback)
+        var success = false
+        availableSources.forEach { source ->
+            for (streamNo in 1..maxStreams) {
+                val streamUrl = "$mainUrl/watch/$matchId/$source/$streamNo"
+                Log.d("StreamedProvider", "Processing stream URL: $streamUrl")
+                if (StreamedMediaExtractor().getUrl(streamUrl, matchId, source, streamNo, subtitleCallback, callback)) {
+                    success = true
                 }
             }
         }
-
-        val results = jobs.awaitAll()
-        results.any { it }
+        success
     }
 
     data class Match(
@@ -255,20 +252,13 @@ class StreamedMediaExtractor {
         }
         Log.d("StreamedMediaExtractor", "Decrypted path: $decryptedPath")
 
-        // Construct and test M3U8 URL
+        // Construct M3U8 URL
         val m3u8Url = "https://rr.buytommy.top$decryptedPath"
         val m3u8Headers = baseHeaders + mapOf(
             "Referer" to embedReferer,
             "Cookie" to combinedCookies,
             "Accept" to "application/vnd.apple.mpegurl, video/mp2t, video/mp4, application/x-mpegURL"
         )
-
-        // Check expiry timestamp
-        val expiryMatch = Regex("expiry=(\\d+)").find(m3u8Url)?.groupValues?.get(1)?.toLongOrNull()
-        if (expiryMatch != null && expiryMatch < System.currentTimeMillis() / 1000 + 30) {
-            Log.w("StreamedMediaExtractor", "M3U8 URL expired or near expiry: $m3u8Url")
-            return@withContext false
-        }
 
         // Test M3U8 with fallbacks
         for (domain in listOf("rr.buytommy.top") + fallbackDomains) {
@@ -298,8 +288,21 @@ class StreamedMediaExtractor {
             }
         }
 
-        Log.w("StreamedMediaExtractor", "All M3U8 tests failed for $m3u8Url")
-        return@withContext false
+        // Fallback: Add untested M3U8 link (as in original)
+        callback.invoke(
+            newExtractorLink(
+                source = "Streamed",
+                name = "$source Stream $streamNo",
+                url = m3u8Url,
+                type = ExtractorLinkType.M3U8
+            ) {
+                this.referer = embedReferer
+                this.quality = Qualities.Unknown.value
+                this.headers = m3u8Headers
+            }
+        )
+        Log.d("StreamedMediaExtractor", "M3U8 test failed but added anyway: $m3u8Url")
+        return@withContext true
     }
 
     private suspend fun fetchEventCookies(pageUrl: String, referrer: String): String {
