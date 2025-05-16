@@ -2,12 +2,12 @@ package ben.smith53
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.network.Response
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import android.util.Log
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -16,9 +16,6 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
-import com.lagradost.cloudstream3.network.VideoInterceptor
-import okhttp3.Request
-import okio.ByteString.Companion.toByteString
 
 class StreamedProvider : MainAPI() {
     override var mainUrl = "https://streamed.su"
@@ -237,70 +234,46 @@ class StreamedMediaExtractor {
             }
         }
 
-        // If no key URL in M3U8, construct it based on JavaScript example
+        // If no key URL in M3U8, construct it
         if (keyUrl == null) {
             keyUrl = "https://rr.buytommy.top/$source/key/$matchId/$streamNo"
         }
 
-        // Create VideoInterceptor for decryption
-        val interceptor = object : VideoInterceptor {
-            override suspend fun intercept(url: String, request: Request): Response {
-                if (!url.endsWith(".ts")) {
-                    return app.get(url, headers = request.headers.toMap())
-                }
-
-                // Fetch the key if not cached
-                val key = keyCache[keyUrl] ?: run {
-                    try {
-                        val keyResponse = app.get(
-                            keyUrl!!,
-                            headers = m3u8Headers + mapOf("Referer" to "https://embedstreams.top/"),
-                            timeout = 15
-                        )
-                        if (keyResponse.code != 200) {
-                            Log.e("StreamedMediaExtractor", "Failed to fetch key: ${keyResponse.code}")
-                            return Response(url, body = byteArrayOf().toByteString())
-                        }
-                        val keyBytes = keyResponse.body.bytes()
-                        keyCache[keyUrl!!] = keyBytes
-                        keyBytes
-                    } catch (e: Exception) {
-                        Log.e("StreamedMediaExtractor", "Key fetch failed: ${e.message}")
-                        return Response(url, body = byteArrayOf().toByteString())
-                    }
-                }
-
-                // Fetch the encrypted segment
-                val segmentResponse = try {
-                    app.get(url, headers = m3u8Headers, timeout = 15)
-                } catch (e: Exception) {
-                    Log.e("StreamedMediaExtractor", "Segment fetch failed: ${e.message}")
-                    return Response(url, body = byteArrayOf().toByteString())
-                }
-
-                if (segmentResponse.code != 200) {
-                    Log.e("StreamedMediaExtractor", "Segment fetch failed: ${segmentResponse.code}")
-                    return Response(url, body = byteArrayOf().toByteString())
-                }
-
-                val encryptedData = segmentResponse.body.bytes()
-                val decryptedData = try {
-                    decryptSegment(encryptedData, key, defaultIv)
-                } catch (e: Exception) {
-                    Log.e("StreamedMediaExtractor", "Decryption failed: ${e.message}")
-                    return Response(url, body = byteArrayOf().toByteString())
-                }
-
-                return Response(
-                    url = url,
-                    body = decryptedData.toByteString(),
-                    headers = segmentResponse.headers.toMap(),
-                    code = 200
+        // Fetch and cache the key
+        val key = keyCache[keyUrl] ?: run {
+            try {
+                val keyResponse = app.get(
+                    keyUrl!!,
+                    headers = m3u8Headers + mapOf("Referer" to "https://embedstreams.top/"),
+                    timeout = 15
                 )
+                if (keyResponse.code != 200) {
+                    Log.e("StreamedMediaExtractor", "Failed to fetch key: ${keyResponse.code}")
+                    return false
+                }
+                val keyBytes = keyResponse.body.bytes()
+                keyCache[keyUrl!!] = keyBytes
+                keyBytes
+            } catch (e: Exception) {
+                Log.e("StreamedMediaExtractor", "Key fetch failed: ${e.message}")
+                return false
             }
         }
 
-        // Test M3U8 with fallbacks
+        // Proxy M3U8: Rewrite .ts URLs and remove #EXT-X-KEY
+        val proxyUrl = "http://localhost:8080/m3u8/$matchId/$source/$streamNo"
+        val modifiedM3u8 = m3u8Content.lines()
+            .filterNot { it.startsWith("#EXT-X-KEY") }
+            .map { line ->
+                if (line.endsWith(".ts")) {
+                    "http://localhost:8080/decrypt/$matchId/$source/$streamNo/$line"
+                } else {
+                    line
+                }
+            }.joinToString("\n")
+
+        // Note: Local server setup is required (see below)
+        // For now, we'll add the original M3U8 as a fallback
         for (domain in listOf("rr.buytommy.top") + fallbackDomains) {
             try {
                 val testUrl = m3u8Url.replace("rr.buytommy.top", domain)
@@ -310,15 +283,12 @@ class StreamedMediaExtractor {
                         newExtractorLink(
                             source = "Streamed",
                             name = "$source Stream $streamNo",
-                            url = testUrl,
+                            url = testUrl, // Use proxyUrl if local server is implemented
                             type = ExtractorLinkType.M3U8
                         ) {
                             this.referer = embedReferer
                             this.quality = Qualities.Unknown.value
                             this.headers = m3u8Headers
-                            // Note: 'interceptor' parameter is commented out due to version incompatibility
-                            // If your CloudStream3 version supports it, uncomment and use:
-                            // this.interceptor = interceptor
                         }
                     )
                     Log.d("StreamedMediaExtractor", "M3U8 URL added: $testUrl")
@@ -342,9 +312,6 @@ class StreamedMediaExtractor {
                 this.referer = embedReferer
                 this.quality = Qualities.Unknown.value
                 this.headers = m3u8Headers
-                // Note: 'interceptor' parameter is commented out due to version incompatibility
-                // If your CloudStream3 version supports it, uncomment and use:
-                // this.interceptor = interceptor
             }
         )
         Log.d("StreamedMediaExtractor", "M3U8 test failed but added anyway: $m3u8Url")
@@ -354,7 +321,7 @@ class StreamedMediaExtractor {
     private suspend fun fetchEventCookies(pageUrl: String, referrer: String): String {
         cookieCache[pageUrl]?.let { return it }
 
-        val payload = """{"n":"pageview","u":"|T|${pageUrl}|T|","d":"streamed.su","r":"|T|${referrer}|T|"}"""
+        val payload = """{"n":"pageview","u":"$pageUrl","d":"streamed.su","r":"$referrer"}"""
         try {
             val response = app.post(
                 cookieUrl,
