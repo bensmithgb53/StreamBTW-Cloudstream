@@ -5,7 +5,6 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
-import android.util.Log
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import java.util.Locale
@@ -17,6 +16,9 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.delay
+import android.util.Log
+import okhttp3.Response
 
 class StreamedProvider : MainAPI() {
     override var mainUrl = "https://streamed.su"
@@ -91,14 +93,22 @@ class StreamedProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean = withContext(Dispatchers.IO) {
         val matchId = data.substringAfterLast("/")
-        val extractor = StreamedMediaExtractor()
+        val matchInfo = try {
+            app.get("$mainUrl/api/matches/id/$matchId").parsedSafe<Match>()
+        } catch (e: Exception) {
+            Log.w("StreamedProvider", "Failed to fetch match info: ${e.message}")
+            null
+        }
+        val availableSources = matchInfo?.matchSources?.map { it.sourceName }?.filter { it in sources } ?: sources
 
-        val jobs = sources.flatMap { source ->
+        Log.d("StreamedProvider", "Available sources for $matchId: $availableSources")
+
+        val jobs = availableSources.flatMap { source ->
             (1..maxStreams).map { streamNo ->
                 async {
                     val streamUrl = "$mainUrl/watch/$matchId/$source/$streamNo"
                     Log.d("StreamedProvider", "Processing stream URL: $streamUrl")
-                    extractor.getUrl(streamUrl, matchId, source, streamNo, subtitleCallback, callback)
+                    StreamedMediaExtractor().getUrl(streamUrl, matchId, source, streamNo, subtitleCallback, callback)
                 }
             }
         }
@@ -149,7 +159,7 @@ class StreamedMediaExtractor {
         var streamResponse: Response? = null
         while (attempt <= maxRetries && streamResponse == null) {
             try {
-                streamResponse = app.get(streamUrl, headers = baseHeaders, timeout = 15)
+                streamResponse = app.get(streamUrl.replace("streamed.su", "streamed.pk"), headers = baseHeaders, timeout = 15)
             } catch (e: Exception) {
                 Log.w("StreamedMediaExtractor", "Stream page fetch attempt ${attempt + 1} failed: ${e.message}")
                 attempt++
@@ -157,10 +167,13 @@ class StreamedMediaExtractor {
                     Log.e("StreamedMediaExtractor", "Stream page fetch failed after $maxRetries retries")
                     return@withContext false
                 }
-                delay(1000) // Wait 1s before retry
+                delay(1000)
             }
         }
-        val streamCookies = streamResponse?.cookies ?: emptyMap()
+        val streamCookies = streamResponse?.headers?.values("Set-Cookie")?.associate {
+            val pair = it.split("=", limit = 2)
+            pair[0] to pair[1].substringBefore(";")
+        } ?: emptyMap()
         Log.d("StreamedMediaExtractor", "Stream cookies: $streamCookies")
 
         // Fetch event cookies
@@ -170,7 +183,7 @@ class StreamedMediaExtractor {
         // Combine cookies
         val combinedCookies = buildString {
             if (streamCookies.isNotEmpty()) {
-                append(streamCookies.entries.joinToString("; ") { "${it.key}=${it.value}" })
+                append(streamCookies.map { (key, value) -> "$key=$value" }.joinToString("; "))
             }
             if (eventCookies.isNotEmpty()) {
                 if (isNotEmpty()) append("; ")
@@ -201,7 +214,7 @@ class StreamedMediaExtractor {
         while (attempt <= maxRetries && encryptedResponse == null) {
             try {
                 val response = app.post(fetchUrl, headers = fetchHeaders, json = postData, timeout = 15)
-                if (response.code == 200) {
+                if (response.code == 200 && response.text.isNotBlank()) {
                     encryptedResponse = response.text
                 } else {
                     Log.w("StreamedMediaExtractor", "Fetch attempt ${attempt + 1} failed with code: ${response.code}")
@@ -253,6 +266,13 @@ class StreamedMediaExtractor {
             "Accept" to "application/vnd.apple.mpegurl, video/mp2t, video/mp4, application/x-mpegURL"
         )
 
+        // Check expiry timestamp
+        val expiryMatch = Regex("expiry=(\\d+)").find(m3u8Url)?.groupValues?.get(1)?.toLongOrNull()
+        if (expiryMatch != null && expiryMatch < System.currentTimeMillis() / 1000 + 30) {
+            Log.w("StreamedMediaExtractor", "M3U8 URL expired or near expiry: $m3u8Url")
+            return@withContext false
+        }
+
         // Test M3U8 with fallbacks
         for (domain in listOf("rr.buytommy.top") + fallbackDomains) {
             try {
@@ -301,10 +321,12 @@ class StreamedMediaExtractor {
                 requestBody = payload.toRequestBody("text/plain".toMediaType()),
                 timeout = 15
             )
-            val cookies = response.headers.filter { it.first == "Set-Cookie" }
-                .map { it.second.split(";")[0] }
+            val cookies = response.headers.values("Set-Cookie").associate {
+                val pair = it.split("=", limit = 2)
+                pair[0] to pair[1].substringBefore(";")
+            }
             val formattedCookies = listOf("_ddg8_", "_ddg10_", "_ddg9_", "_ddg1_")
-                .mapNotNull { key -> cookies.find { it.startsWith(key) } }
+                .mapNotNull { key -> cookies[key]?.let { "$key=$it" } }
                 .joinToString("; ")
             if (formattedCookies.isNotEmpty()) {
                 cookieCache[pageUrl] = formattedCookies to System.currentTimeMillis()
