@@ -20,7 +20,7 @@ import java.util.Date
 class StreamedProvider : MainAPI() {
     override var mainUrl = "https://streamed.su"
     override var name = "Streamed"
-    override var supportedTypes = setOf(TvType.Live)
+    override var supportedaptpes = setOf(TvType.Live)
     override val hasMainPage = true
 
     private val sources = listOf("alpha", "bravo", "charlie", "delta", "echo", "foxtrot")
@@ -29,7 +29,6 @@ class StreamedProvider : MainAPI() {
     private val logFile = File("/data/data/com.termux/files/home/streamed_logs.txt")
 
     init {
-        // Ensure log file exists
         if (!logFile.exists()) logFile.createNewFile()
     }
 
@@ -43,8 +42,24 @@ class StreamedProvider : MainAPI() {
         }
     }
 
+    // Explicitly use Pair<String, String> to resolve ambiguity
     override val mainPage = mainPageOf(
-        // ... (unchanged)
+        "$mainUrl/api/matches/live/popular" to "Popular",
+        "$mainUrl/api/matches/football" to "Football",
+        "$mainUrl/api/matches/baseball" to "Baseball",
+        "$mainUrl/api/matches/american-football" to "American Football",
+        "$mainUrl/api/matches/hockey" to "Hockey",
+        "$mainUrl/api/matches/basketball" to "Basketball",
+        "$mainUrl/api/matches/motor-sports" to "Motor Sports",
+        "$mainUrl/api/matches/fight" to "Fight",
+        "$mainUrl/api/matches/tennis" to "Tennis",
+        "$mainUrl/api/matches/rugby" to "Rugby",
+        "$mainUrl/api/matches/golf" to "Golf",
+        "$mainUrl/api/matches/billiards" to "Billiards",
+        "$mainUrl/api/matches/afl" to "AFL",
+        "$mainUrl/api/matches/darts" to "Darts",
+        "$mainUrl/api/matches/cricket" to "Cricket",
+        "$mainUrl/api/matches/other" to "Other"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -56,17 +71,19 @@ class StreamedProvider : MainAPI() {
             val listJson = parseJson<List<Match>>(rawList)
             logToFile("Parsed ${listJson.size} matches")
 
-            val list = listJson.filter { match -> match.matchSources.isNotEmpty() }.map { match ->
-                val url = "$mainUrl/watch/${match.id}"
-                logToFile("Processing match: ${match.title}, URL: $url")
-                newLiveSearchResponse(
-                    name = match.title,
-                    url = url,
-                    type = TvType.Live
-                ) {
-                    this.posterUrl = "$mainUrl${match.posterPath ?: "/api/images/poster/fallback.webp"}"
+            val list = listJson.filter { it.matchSources.isNotEmpty() }.mapNotNull { match ->
+                match.id?.let { id ->
+                    val url = "$mainUrl/watch/$id"
+                    logToFile("Processing match: ${match.title}, URL: $url")
+                    newLiveSearchResponse(
+                        name = match.title,
+                        url = url,
+                        type = TvType.Live
+                    ) {
+                        this.posterUrl = "$mainUrl${match.posterPath ?: "/api/images/poster/fallback.webp"}"
+                    }
                 }
-            }.filterNotNull()
+            }
 
             logToFile("Returning ${list.size} items for ${request.name}")
             return newHomePageResponse(
@@ -133,10 +150,22 @@ class StreamedProvider : MainAPI() {
         return success
     }
 
-    // ... (Match and MatchSource data classes unchanged)
+    data class Match(
+        @JsonProperty("id") val id: String? = null,
+        @JsonProperty("title") val title: String,
+        @JsonProperty("poster") val posterPath: String? = null,
+        @JsonProperty("popular") val popular: Boolean = false,
+        @JsonProperty("sources") val matchSources: ArrayList<MatchSource> = arrayListOf()
+    )
+
+    data class MatchSource(
+        @JsonProperty("source") val sourceName: String,
+        @JsonProperty("id") val id: String
+    )
 }
 
 class StreamedMediaExtractor(private val logFile: File) {
+    // ... (unchanged from your previous version, included for completeness)
     private val fetchUrl = "https://embedstreams.top/fetch"
     private val cookieUrl = "https://fishy.streamed.su/api/event"
     private val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
@@ -169,7 +198,6 @@ class StreamedMediaExtractor(private val logFile: File) {
         logToFile("Starting extraction for: $streamUrl")
         Log.d(logTag, "Starting extraction for: $streamUrl")
 
-        // Fetch stream page cookies
         val streamResponse = try {
             app.get(streamUrl, headers = baseHeaders, timeout = 15)
         } catch (e: Exception) {
@@ -181,12 +209,10 @@ class StreamedMediaExtractor(private val logFile: File) {
         logToFile("Stream cookies: $streamCookies")
         Log.d(logTag, "Stream cookies: $streamCookies")
 
-        // Fetch event cookies
         val eventCookies = fetchEventCookies(streamUrl, streamUrl)
         logToFile("Event cookies: $eventCookies")
         Log.d(logTag, "Event cookies: $eventCookies")
 
-        // Combine cookies
         val combinedCookies = buildString {
             if (streamCookies.isNotEmpty()) {
                 append(streamCookies.entries.joinToString("; ") { "${it.key}=${it.value}" })
@@ -204,7 +230,6 @@ class StreamedMediaExtractor(private val logFile: File) {
         logToFile("Combined cookies: $combinedCookies")
         Log.d(logTag, "Combined cookies: $combinedCookies")
 
-        // POST to fetch encrypted string
         val postData = mapOf(
             "source" to source,
             "id" to matchId,
@@ -231,7 +256,6 @@ class StreamedMediaExtractor(private val logFile: File) {
         logToFile("Encrypted response: $encryptedResponse")
         Log.d(logTag, "Encrypted response: $encryptedResponse")
 
-        // Decrypt using Deno
         val decryptPostData = mapOf("encrypted" to encryptedResponse)
         val decryptResponse = try {
             app.post(decryptUrl, json = decryptPostData, headers = mapOf("Content-Type" to "application/json"))
@@ -248,14 +272,12 @@ class StreamedMediaExtractor(private val logFile: File) {
         logToFile("Decrypted path: $decryptedPath")
         Log.d(logTag, "Decrypted path: $decryptedPath")
 
-        // Construct M3U8 URL
         val m3u8Url = "https://rr.buytommy.top$decryptedPath"
         val m3u8Headers = baseHeaders + mapOf(
             "Referer" to embedReferer,
             "Cookie" to combinedCookies
         )
 
-        // Test M3U8 with fallbacks
         for (domain in listOf("rr.buytommy.top") + fallbackDomains) {
             try {
                 val testUrl = m3u8Url.replace("rr.buytommy.top", domain)
@@ -288,7 +310,6 @@ class StreamedMediaExtractor(private val logFile: File) {
             }
         }
 
-        // If tests fail, add link anyway
         callback.invoke(
             newExtractorLink(
                 source = "Streamed",
