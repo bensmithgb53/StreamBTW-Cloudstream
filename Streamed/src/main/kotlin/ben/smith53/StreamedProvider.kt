@@ -2,7 +2,6 @@ package ben.smith53
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
@@ -19,6 +18,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.delay
 import okhttp3.Response
+import android.util.Log
 
 class StreamedProvider : MainAPI() {
     override var mainUrl = "https://streamed.su"
@@ -62,7 +62,6 @@ class StreamedProvider : MainAPI() {
                 type = TvType.Live
             ) {
                 this.posterUrl = match.posterPath?.let { "$mainUrl$it" } ?: "$mainUrl/api/images/poster/fallback.webp"
-                // Removed 'data' as SearchResponse does not have this property
             }
         }
 
@@ -171,7 +170,10 @@ class StreamedMediaExtractor {
                 delay(1000)
             }
         }
-        val streamCookies = streamResponse?.cookieHeaders?.associate { it.split("=", limit = 2).let { pair -> pair[0] to pair[1].substringBefore(";") } } ?: emptyMap()
+        val streamCookies = streamResponse?.cookieHeaders?.associate {
+            val pair = it.split("=", limit = 2)
+            pair[0] to pair[1].substringBefore(";")
+        } ?: emptyMap()
         Log.d("StreamedMediaExtractor", "Stream cookies: $streamCookies")
 
         // Fetch event cookies
