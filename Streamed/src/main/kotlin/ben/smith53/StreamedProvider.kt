@@ -16,9 +16,9 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
-import kotlinx.coroutines.delay
 import android.util.Log
-import okhttp3.Response
+import com.lagradost.nicehttp.NiceResponse
+import kotlinx.coroutines.delay
 
 class StreamedProvider : MainAPI() {
     override var mainUrl = "https://streamed.su"
@@ -156,7 +156,7 @@ class StreamedMediaExtractor {
 
         // Fetch stream page cookies with retry
         var attempt = 0
-        var streamResponse: Response? = null
+        var streamResponse: NiceResponse? = null
         while (attempt <= maxRetries && streamResponse == null) {
             try {
                 streamResponse = app.get(streamUrl.replace("streamed.su", "streamed.pk"), headers = baseHeaders, timeout = 15)
@@ -170,10 +170,7 @@ class StreamedMediaExtractor {
                 delay(1000)
             }
         }
-        val streamCookies = streamResponse?.headers?.values("Set-Cookie")?.associate {
-            val pair = it.split("=", limit = 2)
-            pair[0] to pair[1].substringBefore(";")
-        } ?: emptyMap()
+        val streamCookies = streamResponse?.cookies ?: emptyMap()
         Log.d("StreamedMediaExtractor", "Stream cookies: $streamCookies")
 
         // Fetch event cookies
@@ -183,7 +180,7 @@ class StreamedMediaExtractor {
         // Combine cookies
         val combinedCookies = buildString {
             if (streamCookies.isNotEmpty()) {
-                append(streamCookies.map { (key, value) -> "$key=$value" }.joinToString("; "))
+                append(streamCookies.map { "${it.key}=${it.value}" }.joinToString("; "))
             }
             if (eventCookies.isNotEmpty()) {
                 if (isNotEmpty()) append("; ")
@@ -321,10 +318,7 @@ class StreamedMediaExtractor {
                 requestBody = payload.toRequestBody("text/plain".toMediaType()),
                 timeout = 15
             )
-            val cookies = response.headers.values("Set-Cookie").associate {
-                val pair = it.split("=", limit = 2)
-                pair[0] to pair[1].substringBefore(";")
-            }
+            val cookies = response.cookies
             val formattedCookies = listOf("_ddg8_", "_ddg10_", "_ddg9_", "_ddg1_")
                 .mapNotNull { key -> cookies[key]?.let { "$key=$it" } }
                 .joinToString("; ")
