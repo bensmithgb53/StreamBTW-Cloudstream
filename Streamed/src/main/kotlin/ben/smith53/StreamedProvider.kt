@@ -1,8 +1,6 @@
 package ben.smith53
 
 import com.fasterxml.jackson.annotation.JsonProperty
-import com.fasterxml.jackson.annotation.JsonAlias
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
@@ -15,12 +13,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
-import javax.crypto.Cipher
-import javax.crypto.spec.IvParameterSpec
-import javax.crypto.spec.SecretKeySpec
-import java.util.concurrent.ConcurrentHashMap
-import java.net.URL
-import java.util.regex.Pattern
 
 class StreamedProvider : MainAPI() {
     override var mainUrl = "https://streamed.su"
@@ -30,6 +22,8 @@ class StreamedProvider : MainAPI() {
 
     private val sources = listOf("alpha", "bravo", "charlie", "delta", "echo", "foxtrot")
     private val maxStreams = 4
+    private val maxRetries = 3
+    private val timeoutSeconds = 20L
 
     override val mainPage = mainPageOf(
         "$mainUrl/api/matches/live/popular" to "Popular",
@@ -51,20 +45,13 @@ class StreamedProvider : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val response = app.get(request.data)
-        Log.d("StreamedProvider", "Raw JSON response: ${response.text}")
-        val listJson = response.parsedSafe<List<Match>>()
-        if (listJson == null) {
-            Log.e("StreamedProvider", "Failed to parse main page JSON")
-            return newHomePageResponse(list = emptyList(), hasNext = false)
-        }
+        val rawList = app.get(request.data, timeout = timeoutSeconds).text
+        val listJson = parseJson<List<Match>>(rawList)
 
-        val list = listJson.filter { match ->
-            match.matchSources.isNotEmpty() && match.title != null && match.id != null
-        }.map { match ->
+        val list = listJson.filter { match -> match.matchSources.isNotEmpty() }.map { match ->
             val url = "$mainUrl/watch/${match.id}"
             newLiveSearchResponse(
-                name = match.title!!,
+                name = match.title,
                 url = url,
                 type = TvType.Live
             ) {
@@ -103,21 +90,25 @@ class StreamedProvider : MainAPI() {
         val extractor = StreamedMediaExtractor()
         var success = false
 
-        sources.forEach { source ->
-            for (streamNo in 1..maxStreams) {
-                val streamUrl = "$mainUrl/watch/$matchId/$source/$streamNo"
-                Log.d("StreamedProvider", "Processing stream URL: $streamUrl")
-                if (extractor.getUrl(streamUrl, matchId, source, streamNo, subtitleCallback, callback)) {
-                    success = true
+        // Process sources in parallel for faster loading
+        sources.map { source ->
+            withContext(Dispatchers.IO) {
+                for (streamNo in 1..maxStreams) {
+                    val streamUrl = "$mainUrl/watch/$matchId/$source/$streamNo"
+                    Log.d("StreamedProvider", "Processing stream URL: $streamUrl")
+                    if (extractor.getUrl(streamUrl, matchId, source, streamNo, subtitleCallback, callback)) {
+                        success = true
+                    }
                 }
             }
-        }
+        }.forEach { it.join() } // Wait for all coroutines to complete
+
         return success
     }
 
     data class Match(
         @JsonProperty("id") val id: String? = null,
-        @JsonProperty("title") @JsonAlias("name") val title: String? = null,
+        @JsonProperty("title") val title: String,
         @JsonProperty("poster") val posterPath: String? = null,
         @JsonProperty("popular") val popular: Boolean = false,
         @JsonProperty("sources") val matchSources: ArrayList<MatchSource> = arrayListOf()
@@ -133,18 +124,15 @@ class StreamedMediaExtractor {
     private val fetchUrl = "https://embedstreams.top/fetch"
     private val cookieUrl = "https://fishy.streamed.su/api/event"
     private val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
+    private val fallbackDecryptUrl = "https://backup-decrypt.deno.dev/decrypt" // Add a backup decryption server
     private val baseHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
-        "Content-Type" to "application/json"
+        "Content-Type" to "application/json",
+        "Accept" to "*/*",
+        "Origin" to "https://streamed.su"
     )
-    private val fallbackDomains = listOf("p2-panel.streamed.su", "streamed.su")
-    private val cookieCache = ConcurrentHashMap<String, String>()
-    private val keyCache = ConcurrentHashMap<String, ByteArray>()
-    private val mapper = jacksonObjectMapper()
-
-    private fun Any.toJson(): String {
-        return mapper.writeValueAsString(this)
-    }
+    private val fallbackDomains = listOf("p2-panel.streamed.su", "streamed.su", "cdn.streamed.su")
+    private val cookieCache = mutableMapOf<String, String>()
 
     suspend fun getUrl(
         streamUrl: String,
@@ -156,15 +144,23 @@ class StreamedMediaExtractor {
     ): Boolean {
         Log.d("StreamedMediaExtractor", "Starting extraction for: $streamUrl")
 
-        // Fetch stream page cookies
-        val streamResponse = try {
-            app.get(streamUrl, headers = baseHeaders, timeout = 15)
-        } catch (e: Exception) {
-            Log.e("StreamedMediaExtractor", "Stream page fetch failed: ${e.message}")
-            return false
+        // Fetch stream page cookies with retries
+        var streamCookies = ""
+        repeat(maxRetries) { attempt ->
+            try {
+                val streamResponse = app.get(streamUrl, headers = baseHeaders, timeout = timeoutSeconds)
+                streamCookies = streamResponse.cookies
+                Log.d("StreamedMediaExtractor", "Stream cookies: $streamCookies")
+                if (streamCookies.isNotEmpty()) return@repeat
+            } catch (e: Exception) {
+                Log.w("StreamedMediaExtractor", "Stream page fetch attempt ${attempt + 1} failed: ${e.message}")
+                if (attempt == maxRetries - 1) {
+                    Log.e("StreamedMediaExtractor", "All stream page fetch attempts failed")
+                    return false
+                }
+                kotlinx.coroutines.delay(1000L) // Wait before retry
+            }
         }
-        val streamCookies = streamResponse.cookies
-        Log.d("StreamedMediaExtractor", "Stream cookies: $streamCookies")
 
         // Fetch event cookies
         val eventCookies = fetchEventCookies(streamUrl, streamUrl)
@@ -186,7 +182,7 @@ class StreamedMediaExtractor {
         }
         Log.d("StreamedMediaExtractor", "Combined cookies: $combinedCookies")
 
-        // POST to fetch encrypted string
+        // POST to fetch encrypted string with retries
         val postData = mapOf(
             "source" to source,
             "id" to matchId,
@@ -197,151 +193,112 @@ class StreamedMediaExtractor {
             "Referer" to streamUrl,
             "Cookie" to combinedCookies
         )
-        Log.d("StreamedMediaExtractor", "Fetching with data: $postData and headers: $fetchHeaders")
+        Log.d("StreamedMediaExtractor", "Fetching with data: $postData")
 
-        val encryptedResponse = try {
-            val response = app.post(fetchUrl, headers = fetchHeaders, json = postData, timeout = 15)
-            Log.d("StreamedMediaExtractor", "Fetch response code: ${response.code}")
-            response.text
-        } catch (e: Exception) {
-            Log.e("StreamedMediaExtractor", "Fetch failed: ${e.message}")
+        var encryptedResponse: String? = null
+        repeat(maxRetries) { attempt ->
+            try {
+                val response = app.post(fetchUrl, headers = fetchHeaders, json = postData, timeout = timeoutSeconds)
+                Log.d("StreamedMediaExtractor", "Fetch response code: ${response.code}")
+                if (response.code == 200) {
+                    encryptedResponse = response.text
+                    return@repeat
+                } else {
+                    Log.w("StreamedMediaExtractor", "Fetch attempt ${attempt + 1} failed with code: ${response.code}")
+                }
+            } catch (e: Exception) {
+                Log.w("StreamedMediaExtractor", "Fetch attempt ${attempt + 1} failed: ${e.message}")
+            }
+            if (attempt < maxRetries - 1) kotlinx.coroutines.delay(1000L)
+        }
+
+        if (encryptedResponse == null) {
+            Log.e("StreamedMediaExtractor", "All fetch attempts failed")
             return false
         }
         Log.d("StreamedMediaExtractor", "Encrypted response: $encryptedResponse")
 
-        // Decrypt using Deno
-        val decryptPostData = mapOf("encrypted" to encryptedResponse)
-        val decryptResponse = try {
-            app.post(decryptUrl, json = decryptPostData, headers = mapOf("Content-Type" to "application/json"))
-                .parsedSafe<Map<String, String>>()
-        } catch (e: Exception) {
-            Log.e("StreamedMediaExtractor", "Decryption request failed: ${e.message}")
+        // Decrypt with fallback
+        val decryptUrls = listOf(decryptUrl, fallbackDecryptUrl)
+        var decryptedPath: String? = null
+        for (decryptEndpoint in decryptUrls) {
+            repeat(maxRetries) { attempt ->
+                try {
+                    val decryptPostData = mapOf("encrypted" to encryptedResponse)
+                    val decryptResponse = app.post(
+                        decryptEndpoint,
+                        json = decryptPostData,
+                        headers = mapOf("Content-Type" to "application/json"),
+                        timeout = timeoutSeconds
+                    ).parsedSafe<Map<String, String>>()
+                    decryptedPath = decryptResponse?.get("decrypted")
+                    if (decryptedPath != null) {
+                        Log.d("StreamedMediaExtractor", "Decrypted path: $decryptedPath with $decryptEndpoint")
+                        return@repeat
+                    }
+                } catch (e: Exception) {
+                    Log.w("StreamedMediaExtractor", "Decryption attempt ${attempt + 1} failed with $decryptEndpoint: ${e.message}")
+                }
+                if (attempt < maxRetries - 1) kotlinx.coroutines.delay(1000L)
+            }
+            if (decryptedPath != null) break
+        }
+
+        if (decryptedPath == null) {
+            Log.e("StreamedMediaExtractor", "Decryption failed across all endpoints")
             return false
         }
-        val decryptedPath = decryptResponse?.get("decrypted") ?: return false.also {
-            Log.e("StreamedMediaExtractor", "Decryption failed or no 'decrypted' key")
-        }
-        Log.d("StreamedMediaExtractor", "Decrypted path: $decryptedPath")
 
-        // Construct M3U8 URL
-        val m3u8Url = "https://rr.buytommy.top$decryptedPath"
+        // Construct and test M3U8 URLs
+        val m3u8BaseUrl = "https://rr.buytommy.top$decryptedPath"
         val m3u8Headers = baseHeaders + mapOf(
             "Referer" to embedReferer,
             "Cookie" to combinedCookies
         )
 
-        // Parse M3U8 for decryption
-        return try {
-            val m3u8Content = app.get(m3u8Url, headers = m3u8Headers, timeout = 15).text
-            val playlist = parseM3U8(m3u8Content, m3u8Url)
-            val keyUrl = playlist.keyUrl?.let { resolveRelativeUrl(m3u8Url, it) }
-            val iv = playlist.keyIV?.let { hexToByteArray(it) } ?: byteArrayOf(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-            val segments = playlist.segments
-
-            if (keyUrl == null || segments.isEmpty()) {
-                // Fallback to non-encrypted stream
-                for (domain in listOf("rr.buytommy.top") + fallbackDomains) {
-                    try {
-                        val testUrl = m3u8Url.replace("rr.buytommy.top", domain)
-                        val testResponse = app.get(testUrl, headers = m3u8Headers, timeout = 15)
-                        if (testResponse.code == 200) {
-                            callback.invoke(
-                                newExtractorLink(
-                                    source = "Streamed",
-                                    name = "$source Stream $streamNo",
-                                    url = testUrl,
-                                    type = ExtractorLinkType.M3U8
-                                ) {
-                                    this.referer = embedReferer
-                                    this.quality = Qualities.Unknown.value
-                                    this.headers = m3u8Headers
-                                }
-                            )
-                            Log.d("StreamedMediaExtractor", "M3U8 URL added: $testUrl")
-                            return true
-                        } else {
-                            Log.w("StreamedMediaExtractor", "M3U8 test failed for $domain with code: ${testResponse.code}")
+        for (domain in listOf("rr.buytommy.top") + fallbackDomains) {
+            try {
+                val testUrl = m3u8BaseUrl.replace("rr.buytommy.top", domain)
+                val testResponse = app.get(testUrl, headers = m3u8Headers, timeout = timeoutSeconds)
+                if (testResponse.code == 200 && testResponse.text.contains("#EXTM3U")) {
+                    callback.invoke(
+                        newExtractorLink(
+                            source = "Streamed",
+                            name = "$source Stream $streamNo",
+                            url = testUrl,
+                            type = ExtractorLinkType.M3U8
+                        ) {
+                            this.referer = embedReferer
+                            this.quality = Qualities.Unknown.value
+                            this.headers = m3u8Headers
                         }
-                    } catch (e: Exception) {
-                        Log.e("StreamedMediaExtractor", "M3U8 test failed for $domain: ${e.message}")
-                    }
+                    )
+                    Log.d("StreamedMediaExtractor", "M3U8 URL added: $testUrl")
+                    return true
+                } else {
+                    Log.w("StreamedMediaExtractor", "M3U8 test failed for $domain with code: ${testResponse.code}")
                 }
-                return false
+            } catch (e: Exception) {
+                Log.e("StreamedMediaExtractor", "M3U8 test failed for $domain: ${e.message}")
             }
-
-            // Fetch and cache AES key
-            val key = keyCache[keyUrl] ?: run {
-                val keyResponse = app.get(keyUrl, headers = m3u8Headers + mapOf("Referer" to embedReferer), timeout = 15)
-                if (keyResponse.code != 200) {
-                    Log.e("StreamedMediaExtractor", "Failed to fetch key: ${keyResponse.code}")
-                    return false
-                }
-                keyResponse.body.bytes().also { keyCache[keyUrl] = it }
-            }
-
-            callback.invoke(
-                newExtractorLink(
-                    source = "Streamed",
-                    name = "$source Stream $streamNo",
-                    url = m3u8Url,
-                    type = ExtractorLinkType.M3U8
-                ) {
-                    this.referer = embedReferer
-                    this.quality = Qualities.Unknown.value
-                    this.headers = m3u8Headers
-                    this.extractorData = mapOf(
-                        "keyUrl" to keyUrl,
-                        "key" to key.toBase64(),
-                        "iv" to iv.toBase64()
-                    ).toJson()
-                }
-            )
-            Log.d("StreamedMediaExtractor", "M3U8 URL added with decryption: $m3u8Url")
-            return true
-        } catch (e: Exception) {
-            Log.e("StreamedMediaExtractor", "M3U8 processing failed: ${e.message}")
-            // Fallback to non-encrypted stream
-            for (domain in listOf("rr.buytommy.top") + fallbackDomains) {
-                try {
-                    val testUrl = m3u8Url.replace("rr.buytommy.top", domain)
-                    val testResponse = app.get(testUrl, headers = m3u8Headers, timeout = 15)
-                    if (testResponse.code == 200) {
-                        callback.invoke(
-                            newExtractorLink(
-                                source = "Streamed",
-                                name = "$source Stream $streamNo",
-                                url = testUrl,
-                                type = ExtractorLinkType.M3U8
-                            ) {
-                                this.referer = embedReferer
-                                this.quality = Qualities.Unknown.value
-                                this.headers = m3u8Headers
-                            }
-                        )
-                        Log.d("StreamedMediaExtractor", "M3U8 URL added: $testUrl")
-                        return true
-                    } else {
-                        Log.w("StreamedMediaExtractor", "M3U8 test failed for $domain with code: ${testResponse.code}")
-                    }
-                } catch (e: Exception) {
-                    Log.e("StreamedMediaExtractor", "M3U8 test failed for $domain: ${e.message}")
-                }
-            }
-            return false
         }
+
+        Log.e("StreamedMediaExtractor", "All M3U8 tests failed for $m3u8BaseUrl")
+        return false
     }
 
-    private suspend fun fetchEventCookies(pageUrl: String, referrer: String): String = withContext(Dispatchers.IO) {
-        cookieCache[pageUrl]?.let { return@withContext it }
+    private suspend fun fetchEventCookies(pageUrl: String, referrer: String): String {
+        cookieCache[pageUrl]?.let { return it }
+
         val payload = """{"n":"pageview","u":"$pageUrl","d":"streamed.su","r":"$referrer"}"""
-        repeat(3) { attempt ->
+        repeat(maxRetries) { attempt ->
             try {
                 val response = app.post(
                     cookieUrl,
                     data = mapOf(),
                     headers = mapOf("Content-Type" to "text/plain"),
                     requestBody = payload.toRequestBody("text/plain".toMediaType()),
-                    timeout = 15
+                    timeout = timeoutSeconds
                 )
                 val cookies = response.headers.filter { it.first == "Set-Cookie" }
                     .map { it.second.split(";")[0] }
@@ -350,85 +307,16 @@ class StreamedMediaExtractor {
                     .joinToString("; ")
                 if (formattedCookies.isNotEmpty()) {
                     cookieCache[pageUrl] = formattedCookies
-                    return@withContext formattedCookies
+                    return formattedCookies
                 }
             } catch (e: Exception) {
-                Log.e("StreamedMediaExtractor", "Attempt ${attempt + 1} failed: ${e.message}")
+                Log.w("StreamedMediaExtractor", "Event cookies fetch attempt ${attempt + 1} failed: ${e.message}")
+                if (attempt == maxRetries - 1) {
+                    Log.e("StreamedMediaExtractor", "All event cookies fetch attempts failed")
+                }
+                kotlinx.coroutines.delay(1000L)
             }
         }
-        ""
-    }
-
-    data class M3U8Playlist(
-        val targetDuration: Int,
-        val mediaSequence: Int,
-        val keyUrl: String?,
-        val keyIV: String?,
-        val segments: List<Segment>
-    )
-
-    data class Segment(
-        val url: String,
-        val duration: Float
-    )
-
-    private fun parseM3U8(content: String, baseUrl: String): M3U8Playlist {
-        val lines = content.lines().map { it.trim() }.filter { it.isNotEmpty() && !it.startsWith("#EXT-X-ENDLIST") }
-        var targetDuration = 5
-        var mediaSequence = 0
-        var keyUrl: String? = null
-        var keyIV: String? = null
-        val segments = mutableListOf<Segment>()
-
-        val keyPattern = Pattern.compile("""#EXT-X-KEY:METHOD=AES-128,URI="([^"]+)",IV=([^,]+)""")
-        val infPattern = Pattern.compile("""#EXTINF:([\d.]+),""")
-
-        var currentDuration: Float? = null
-        lines.forEach { line ->
-            when {
-                line.startsWith("#EXT-X-TARGETDURATION:") -> {
-                    targetDuration = line.substringAfter(":").toIntOrNull() ?: 5
-                }
-                line.startsWith("#EXT-X-MEDIA-SEQUENCE:") -> {
-                    mediaSequence = line.substringAfter(":").toIntOrNull() ?: 0
-                }
-                line.startsWith("#EXT-X-KEY:") -> {
-                    val matcher = keyPattern.matcher(line)
-                    if (matcher.find()) {
-                        keyUrl = matcher.group(1)
-                        keyIV = matcher.group(2)?.substringAfter("0x")
-                    }
-                }
-                line.startsWith("#EXTINF:") -> {
-                    val matcher = infPattern.matcher(line)
-                    if (matcher.find()) {
-                        currentDuration = matcher.group(1)?.toFloatOrNull()
-                    }
-                }
-                !line.startsWith("#") && currentDuration != null -> {
-                    segments.add(Segment(resolveRelativeUrl(baseUrl, line), currentDuration!!))
-                    currentDuration = null
-                }
-            }
-        }
-
-        return M3U8Playlist(targetDuration, mediaSequence, keyUrl, keyIV, segments)
-    }
-
-    private fun resolveRelativeUrl(baseUrl: String, relativeUrl: String): String {
-        return if (relativeUrl.startsWith("http")) {
-            relativeUrl
-        } else {
-            val base = URL(baseUrl)
-            URL(base.protocol, base.host, base.port, relativeUrl).toString()
-        }
-    }
-
-    private fun hexToByteArray(hex: String): ByteArray {
-        return hex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
-    }
-
-    private fun ByteArray.toBase64(): String {
-        return android.util.Base64.encodeToString(this, android.util.Base64.NO_WRAP)
+        return ""
     }
 }
