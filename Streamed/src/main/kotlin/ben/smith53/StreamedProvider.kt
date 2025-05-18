@@ -90,7 +90,6 @@ class StreamedProvider : MainAPI() {
         val extractor = StreamedMediaExtractor()
         var success = false
 
-        // Process sources in parallel for faster loading
         sources.map { source ->
             withContext(Dispatchers.IO) {
                 for (streamNo in 1..maxStreams) {
@@ -101,7 +100,7 @@ class StreamedProvider : MainAPI() {
                     }
                 }
             }
-        }.forEach { it.join() } // Wait for all coroutines to complete
+        }.forEach { it.join() }
 
         return success
     }
@@ -124,7 +123,7 @@ class StreamedMediaExtractor {
     private val fetchUrl = "https://embedstreams.top/fetch"
     private val cookieUrl = "https://fishy.streamed.su/api/event"
     private val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
-    private val fallbackDecryptUrl = "https://backup-decrypt.deno.dev/decrypt" // Add a backup decryption server
+    private val fallbackDecryptUrl = "https://backup-decrypt.deno.dev/decrypt"
     private val baseHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
         "Content-Type" to "application/json",
@@ -144,7 +143,6 @@ class StreamedMediaExtractor {
     ): Boolean {
         Log.d("StreamedMediaExtractor", "Starting extraction for: $streamUrl")
 
-        // Fetch stream page cookies with retries
         var streamCookies = ""
         repeat(maxRetries) { attempt ->
             try {
@@ -154,19 +152,14 @@ class StreamedMediaExtractor {
                 if (streamCookies.isNotEmpty()) return@repeat
             } catch (e: Exception) {
                 Log.w("StreamedMediaExtractor", "Stream page fetch attempt ${attempt + 1} failed: ${e.message}")
-                if (attempt == maxRetries - 1) {
-                    Log.e("StreamedMediaExtractor", "All stream page fetch attempts failed")
-                    return false
-                }
-                kotlinx.coroutines.delay(1000L) // Wait before retry
+                if (attempt == maxRetries - 1) return false
+                kotlinx.coroutines.delay(1000L)
             }
         }
 
-        // Fetch event cookies
         val eventCookies = fetchEventCookies(streamUrl, streamUrl)
         Log.d("StreamedMediaExtractor", "Event cookies: $eventCookies")
 
-        // Combine cookies
         val combinedCookies = buildString {
             if (streamCookies.isNotEmpty()) {
                 append(streamCookies.entries.joinToString("; ") { "${it.key}=${it.value}" })
@@ -182,7 +175,6 @@ class StreamedMediaExtractor {
         }
         Log.d("StreamedMediaExtractor", "Combined cookies: $combinedCookies")
 
-        // POST to fetch encrypted string with retries
         val postData = mapOf(
             "source" to source,
             "id" to matchId,
@@ -203,8 +195,6 @@ class StreamedMediaExtractor {
                 if (response.code == 200) {
                     encryptedResponse = response.text
                     return@repeat
-                } else {
-                    Log.w("StreamedMediaExtractor", "Fetch attempt ${attempt + 1} failed with code: ${response.code}")
                 }
             } catch (e: Exception) {
                 Log.w("StreamedMediaExtractor", "Fetch attempt ${attempt + 1} failed: ${e.message}")
@@ -218,7 +208,6 @@ class StreamedMediaExtractor {
         }
         Log.d("StreamedMediaExtractor", "Encrypted response: $encryptedResponse")
 
-        // Decrypt with fallback
         val decryptUrls = listOf(decryptUrl, fallbackDecryptUrl)
         var decryptedPath: String? = null
         for (decryptEndpoint in decryptUrls) {
@@ -232,10 +221,7 @@ class StreamedMediaExtractor {
                         timeout = timeoutSeconds
                     ).parsedSafe<Map<String, String>>()
                     decryptedPath = decryptResponse?.get("decrypted")
-                    if (decryptedPath != null) {
-                        Log.d("StreamedMediaExtractor", "Decrypted path: $decryptedPath with $decryptEndpoint")
-                        return@repeat
-                    }
+                    if (decryptedPath != null) return@repeat
                 } catch (e: Exception) {
                     Log.w("StreamedMediaExtractor", "Decryption attempt ${attempt + 1} failed with $decryptEndpoint: ${e.message}")
                 }
@@ -249,7 +235,6 @@ class StreamedMediaExtractor {
             return false
         }
 
-        // Construct and test M3U8 URLs
         val m3u8BaseUrl = "https://rr.buytommy.top$decryptedPath"
         val m3u8Headers = baseHeaders + mapOf(
             "Referer" to embedReferer,
@@ -275,8 +260,6 @@ class StreamedMediaExtractor {
                     )
                     Log.d("StreamedMediaExtractor", "M3U8 URL added: $testUrl")
                     return true
-                } else {
-                    Log.w("StreamedMediaExtractor", "M3U8 test failed for $domain with code: ${testResponse.code}")
                 }
             } catch (e: Exception) {
                 Log.e("StreamedMediaExtractor", "M3U8 test failed for $domain: ${e.message}")
@@ -311,11 +294,8 @@ class StreamedMediaExtractor {
                 }
             } catch (e: Exception) {
                 Log.w("StreamedMediaExtractor", "Event cookies fetch attempt ${attempt + 1} failed: ${e.message}")
-                if (attempt == maxRetries - 1) {
-                    Log.e("StreamedMediaExtractor", "All event cookies fetch attempts failed")
-                }
-                kotlinx.coroutines.delay(1000L)
             }
+            if (attempt < maxRetries - 1) kotlinx.coroutines.delay(1000L)
         }
         return ""
     }
