@@ -7,7 +7,6 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
-import com.lagradost.cloudstream3.utils.VideoInterceptor
 import android.util.Log
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
@@ -22,7 +21,6 @@ import javax.crypto.spec.SecretKeySpec
 import java.util.concurrent.ConcurrentHashMap
 import java.net.URL
 import java.util.regex.Pattern
-import okio.ByteString
 
 class StreamedProvider : MainAPI() {
     override var mainUrl = "https://streamed.su"
@@ -281,9 +279,6 @@ class StreamedMediaExtractor {
                 keyResponse.body.bytes().also { keyCache[keyUrl] = it }
             }
 
-            // Create VideoInterceptor for decryption
-            val interceptor = StreamedVideoInterceptor(key, iv)
-
             callback.invoke(
                 newExtractorLink(
                     source = "Streamed",
@@ -294,10 +289,14 @@ class StreamedMediaExtractor {
                     this.referer = embedReferer
                     this.quality = Qualities.Unknown.value
                     this.headers = m3u8Headers
-                    this.interceptor = interceptor
+                    this.extractorData = mapOf(
+                        "keyUrl" to keyUrl,
+                        "key" to key.toBase64(),
+                        "iv" to iv.toBase64()
+                    ).toJson()
                 }
             )
-            Log.d("StreamedMediaExtractor", "M3U8 URL added with interceptor: $m3u8Url")
+            Log.d("StreamedMediaExtractor", "M3U8 URL added with decryption: $m3u8Url")
             return true
         } catch (e: Exception) {
             Log.e("StreamedMediaExtractor", "M3U8 processing failed: ${e.message}")
@@ -431,23 +430,5 @@ class StreamedMediaExtractor {
 
     private fun ByteArray.toBase64(): String {
         return android.util.Base64.encodeToString(this, android.util.Base64.NO_WRAP)
-    }
-}
-
-class StreamedVideoInterceptor(
-    private val key: ByteArray,
-    private val iv: ByteArray
-) : VideoInterceptor {
-    override suspend fun intercept(url: String, request: okhttp3.Request): ByteString? {
-        try {
-            val response = app.get(url, headers = request.headers.toMap()).body.bytes()
-            val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
-            cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), IvParameterSpec(iv))
-            val decrypted = cipher.doFinal(response)
-            return ByteString.of(*decrypted)
-        } catch (e: Exception) {
-            Log.e("StreamedVideoInterceptor", "Decryption failed for $url: ${e.message}")
-            return null
-        }
     }
 }
