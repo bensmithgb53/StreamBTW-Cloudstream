@@ -78,19 +78,9 @@ class StreamedProvider : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse {
         val matchId = url.substringAfterLast("/")
-        val apiUrl = "$mainUrl/api/matches/live/popular"
-        val response = app.get(apiUrl)
-        Log.d("StreamedProvider", "Raw JSON response: ${response.text}")
-        val matches = response.parsedSafe<List<Match>>()
-        if (matches == null) {
-            Log.e("StreamedProvider", "Failed to parse matches JSON")
-            throw IllegalStateException("Invalid API response")
-        }
-        val match = matches.find { it.id == matchId } ?: run {
-            Log.e("StreamedProvider", "Match not found for ID: $matchId")
-            throw IllegalStateException("Match not found")
-        }
-        val title = match.title ?: "Unknown Title"
+        val title = matchId.replace("-", " ")
+            .replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.ROOT) else it.toString() }
+            .replace(Regex("-\\d+$"), "")
         val posterUrl = "$mainUrl/api/images/poster/$matchId.webp"
         return newLiveStreamLoadResponse(
             name = title,
@@ -115,9 +105,8 @@ class StreamedProvider : MainAPI() {
             for (streamNo in 1..maxStreams) {
                 val streamUrl = "$mainUrl/watch/$matchId/$source/$streamNo"
                 Log.d("StreamedProvider", "Processing stream URL: $streamUrl")
-                if (extractor.getUrl(streamUrl, matchId, source, streamNo, callback)) {
+                if (extractor.getUrl(streamUrl, matchId, source, streamNo, subtitleCallback, callback)) {
                     success = true
-                    return@forEach
                 }
             }
         }
@@ -160,6 +149,7 @@ class StreamedMediaExtractor {
         matchId: String,
         source: String,
         streamNo: Int,
+        subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         Log.d("StreamedMediaExtractor", "Starting extraction for: $streamUrl")
@@ -238,7 +228,7 @@ class StreamedMediaExtractor {
             "Cookie" to combinedCookies
         )
 
-        // Parse M3U8 and handle decryption
+        // Parse M3U8 for decryption
         return try {
             val m3u8Content = app.get(m3u8Url, headers = m3u8Headers, timeout = 15).text
             val playlist = parseM3U8(m3u8Content, m3u8Url)
@@ -247,7 +237,33 @@ class StreamedMediaExtractor {
             val segments = playlist.segments
 
             if (keyUrl == null || segments.isEmpty()) {
-                Log.e("StreamedMediaExtractor", "No key or segments found in M3U8")
+                // Fallback to original behavior
+                for (domain in listOf("rr.buytommy.top") + fallbackDomains) {
+                    try {
+                        val testUrl = m3u8Url.replace("rr.buytommy.top", domain)
+                        val testResponse = app.get(testUrl, headers = m3u8Headers, timeout = 15)
+                        if (testResponse.code == 200) {
+                            callback.invoke(
+                                newExtractorLink(
+                                    source = "Streamed",
+                                    name = "$source Stream $streamNo",
+                                    url = testUrl,
+                                    type = ExtractorLinkType.M3U8
+                                ) {
+                                    this.referer = embedReferer
+                                    this.quality = Qualities.Unknown.value
+                                    this.headers = m3u8Headers
+                                }
+                            )
+                            Log.d("StreamedMediaExtractor", "M3U8 URL added: $testUrl")
+                            return true
+                        } else {
+                            Log.w("StreamedMediaExtractor", "M3U8 test failed for $domain with code: ${testResponse.code}")
+                        }
+                    } catch (e: Exception) {
+                        Log.e("StreamedMediaExtractor", "M3U8 test failed for $domain: ${e.message}")
+                    }
+                }
                 return false
             }
 
@@ -291,11 +307,38 @@ class StreamedMediaExtractor {
                     ).toJson()
                 }
             )
-            Log.d("StreamedMediaExtractor", "M3U8 URL added: $m3u8Url")
-            true
+            Log.d("StreamedMediaExtractor", "M3U8 URL added with decryption: $m3u8Url")
+            return true
         } catch (e: Exception) {
             Log.e("StreamedMediaExtractor", "M3U8 processing failed: ${e.message}")
-            false
+            // Fallback to original behavior
+            for (domain in listOf("rr.buytommy.top") + fallbackDomains) {
+                try {
+                    val testUrl = m3u8Url.replace("rr.buytommy.top", domain)
+                    val testResponse = app.get(testUrl, headers = m3u8Headers, timeout = 15)
+                    if (testResponse.code == 200) {
+                        callback.invoke(
+                            newExtractorLink(
+                                source = "Streamed",
+                                name = "$source Stream $streamNo",
+                                url = testUrl,
+                                type = ExtractorLinkType.M3U8
+                            ) {
+                                this.referer = embedReferer
+                                this.quality = Qualities.Unknown.value
+                                this.headers = m3u8Headers
+                            }
+                        )
+                        Log.d("StreamedMediaExtractor", "M3U8 URL added: $testUrl")
+                        return true
+                    } else {
+                        Log.w("StreamedMediaExtractor", "M3U8 test failed for $domain with code: ${testResponse.code}")
+                    }
+                } catch (e: Exception) {
+                    Log.e("StreamedMediaExtractor", "M3U8 test failed for $domain: ${e.message}")
+                }
+            }
+            return false
         }
     }
 
@@ -313,7 +356,9 @@ class StreamedMediaExtractor {
                 )
                 val cookies = response.headers.filter { it.first == "Set-Cookie" }
                     .map { it.second.split(";")[0] }
-                val formattedCookies = cookies.joinToString("; ")
+                val formattedCookies = listOf("_ddg8_", "_ddg10_", "_ddg9_", "_ddg1_")
+                    .mapNotNull { key -> cookies.find { it.startsWith(key) } }
+                    .joinToString("; ")
                 if (formattedCookies.isNotEmpty()) {
                     cookieCache[pageUrl] = formattedCookies
                     return@withContext formattedCookies
