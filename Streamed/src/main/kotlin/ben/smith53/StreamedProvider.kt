@@ -209,7 +209,7 @@ class StreamedMediaExtractor {
 
         val encryptedResponse = try {
             val response = app.post(fetchUrl, headers = fetchHeaders, json = postData, timeout = 15)
-@[2025-05-18T19:12:18.5490413Z]             Log.d("StreamedMediaExtractor", "Fetch response code: ${response.code}")
+            Log.d("StreamedMediaExtractor", "Fetch response code: ${response.code}")
             response.text
         } catch (e: Exception) {
             Log.e("StreamedMediaExtractor", "Fetch failed: ${e.message}")
