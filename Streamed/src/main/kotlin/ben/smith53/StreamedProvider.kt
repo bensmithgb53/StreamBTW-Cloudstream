@@ -1,6 +1,7 @@
 package ben.smith53
 
 import com.fasterxml.jackson.annotation.JsonProperty
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
@@ -18,7 +19,6 @@ import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 import java.util.concurrent.ConcurrentHashMap
 import java.net.URL
-import java.nio.ByteBuffer
 import java.util.regex.Pattern
 
 class StreamedProvider : MainAPI() {
@@ -101,7 +101,7 @@ class StreamedProvider : MainAPI() {
                 Log.d("StreamedProvider", "Processing stream URL: $streamUrl")
                 if (extractor.getUrl(streamUrl, matchId, source, streamNo, callback)) {
                     success = true
-                    return@forEach // Break early on success
+                    return@forEach
                 }
             }
         }
@@ -133,6 +133,11 @@ class StreamedMediaExtractor {
     private val fallbackDomains = listOf("p2-panel.streamed.su", "streamed.su")
     private val cookieCache = ConcurrentHashMap<String, String>()
     private val keyCache = ConcurrentHashMap<String, ByteArray>()
+    private val mapper = jacksonObjectMapper()
+
+    private fun Any.toJson(): String {
+        return mapper.writeValueAsString(this)
+    }
 
     suspend fun getUrl(
         streamUrl: String,
@@ -248,13 +253,11 @@ class StreamedMediaExtractor {
                 appendLine("#EXT-X-MEDIA-SEQUENCE:${playlist.mediaSequence}")
                 segments.forEach { segment ->
                     appendLine("#EXTINF:${segment.duration},")
-                    appendLine(segment.url) // We'll proxy these URLs
+                    appendLine(segment.url)
                 }
                 appendLine("#EXT-X-ENDLIST")
             }
 
-            // For simplicity, pass the original M3U8 and let the player fetch segments
-            // Ideally, we'd proxy the segments through a local server, but CloudStream's player can handle M3U8
             callback.invoke(
                 newExtractorLink(
                     source = "Streamed",
@@ -265,7 +268,6 @@ class StreamedMediaExtractor {
                     this.referer = embedReferer
                     this.quality = Qualities.Unknown.value
                     this.headers = m3u8Headers
-                    // Pass key and IV for decryption (if player supports it)
                     this.extractorData = mapOf(
                         "keyUrl" to keyUrl,
                         "key" to key.toBase64(),
@@ -307,7 +309,6 @@ class StreamedMediaExtractor {
         ""
     }
 
-    // M3U8 Parsing Logic
     data class M3U8Playlist(
         val targetDuration: Int,
         val mediaSequence: Int,
@@ -373,7 +374,7 @@ class StreamedMediaExtractor {
         }
     }
 
-    private fun hexToByteArray(hex: String): ByteArray {
+  private fun hexToByteArray(hex: String): ByteArray {
         return hex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
     }
 
