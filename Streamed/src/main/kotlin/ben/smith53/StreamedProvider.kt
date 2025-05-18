@@ -1,6 +1,7 @@
 package ben.smith53
 
 import com.fasterxml.jackson.annotation.JsonProperty
+import com.fasterxml.jackson.annotation.JsonAlias
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
@@ -50,13 +51,18 @@ class StreamedProvider : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val rawList = app.get(request.data).text
-        val listJson = parseJson<List<Match>>(rawList)
+        val response = app.get(request.data)
+        Log.d("StreamedProvider", "Raw JSON response: ${response.text}")
+        val listJson = response.parsedSafe<List<Match>>()
+        if (listJson == null) {
+            Log.e("StreamedProvider", "Failed to parse main page JSON")
+            return newHomePageResponse(list = emptyList(), hasNext = false)
+        }
 
-        val list = listJson.filter { match -> match.matchSources.isNotEmpty() }.map { match ->
+        val list = listJson.filter { match -> match.matchSources.isNotEmpty() && match.title != null }.map { match ->
             val url = "$mainUrl/watch/${match.id}"
             newLiveSearchResponse(
-                name = match.title,
+                name = match.title!!,
                 url = url,
                 type = TvType.Live
             ) {
@@ -73,11 +79,21 @@ class StreamedProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse {
         val matchId = url.substringAfterLast("/")
         val apiUrl = "$mainUrl/api/matches/live/popular"
-        val matches = app.get(apiUrl).parsed<List<Match>>()
-        val match = matches.find { it.id == matchId } ?: throw IllegalStateException("Match not found")
+        val response = app.get(apiUrl)
+        Log.d("StreamedProvider", "Raw JSON response: ${response.text}")
+        val matches = response.parsedSafe<List<Match>>()
+        if (matches == null) {
+            Log.e("StreamedProvider", "Failed to parse matches JSON")
+            throw IllegalStateException("Invalid API response")
+        }
+        val match = matches.find { it.id == matchId } ?: run {
+            Log.e("StreamedProvider", "Match not found for ID: $matchId")
+            throw IllegalStateException("Match not found")
+        }
+        val title = match.title ?: "Unknown Title"
         val posterUrl = "$mainUrl/api/images/poster/$matchId.webp"
         return newLiveStreamLoadResponse(
-            name = match.title,
+            name = title,
             url = url,
             dataUrl = url
         ) {
@@ -110,7 +126,7 @@ class StreamedProvider : MainAPI() {
 
     data class Match(
         @JsonProperty("id") val id: String? = null,
-        @JsonProperty("title") val title: String,
+        @JsonProperty("title") @JsonAlias("name") val title: String? = null,
         @JsonProperty("poster") val posterPath: String? = null,
         @JsonProperty("popular") val popular: Boolean = false,
         @JsonProperty("sources") val matchSources: ArrayList<MatchSource> = arrayListOf()
@@ -193,7 +209,7 @@ class StreamedMediaExtractor {
 
         val encryptedResponse = try {
             val response = app.post(fetchUrl, headers = fetchHeaders, json = postData, timeout = 15)
-            Log.d("StreamedMediaExtractor", "Fetch response code: ${response.code}")
+@[2025-05-18T19:12:18.5490413Z]             Log.d("StreamedMediaExtractor", "Fetch response code: ${response.code}")
             response.text
         } catch (e: Exception) {
             Log.e("StreamedMediaExtractor", "Fetch failed: ${e.message}")
@@ -374,7 +390,7 @@ class StreamedMediaExtractor {
         }
     }
 
-  private fun hexToByteArray(hex: String): ByteArray {
+    private fun hexToByteArray(hex: String): ByteArray {
         return hex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
     }
 
