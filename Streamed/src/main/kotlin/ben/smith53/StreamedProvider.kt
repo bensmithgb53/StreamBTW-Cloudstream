@@ -9,14 +9,10 @@ import android.util.Log
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import java.util.Locale
-import kotlinx.coroutines.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
-import java.io.File
-import javax.crypto.Cipher
-import javax.crypto.spec.IvParameterSpec
-import javax.crypto.spec.SecretKeySpec
-import java.util.regex.Pattern
 
 class StreamedProvider : MainAPI() {
     override var mainUrl = "https://streamed.su"
@@ -26,6 +22,13 @@ class StreamedProvider : MainAPI() {
 
     private val sources = listOf("alpha", "bravo", "charlie", "delta", "echo", "foxtrot")
     private val maxStreams = 4
+    private val fetchUrl = "https://embedstreams.top/fetch"
+    private val cookieUrl = "https://fishy.streamed.su/api/event"
+    private val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
+    private val baseHeaders = mapOf(
+        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+        "Content-Type" to "application/json"
+    )
 
     override val mainPage = mainPageOf(
         "$mainUrl/api/matches/live/popular" to "Popular",
@@ -126,14 +129,7 @@ class StreamedMediaExtractor {
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
         "Content-Type" to "application/json"
     )
-    private val fallbackDomains = listOf("p2-panel.streamed.su", "streamed.su")
     private val cookieCache = mutableMapOf<String, String>()
-    private val ivBytes = byteArrayOf(
-        0x18, 0x31, 0xF9.toByte(), 0x89.toByte(), 0x74, 0x21, 0x91.toByte(), 0xF8.toByte(),
-        0xD3.toByte(), 0xB4.toByte(), 0x50.toByte(), 0xC2.toByte(), 0x75.toByte(), 0xB1.toByte(), 0xB3.toByte(), 0x5A
-    )
-    private val pollInterval = 5000L // 5 seconds
-    private val maxSegments = 100 // Keep last 100 segments
 
     suspend fun getUrl(
         streamUrl: String,
@@ -219,201 +215,21 @@ class StreamedMediaExtractor {
             "Cookie" to combinedCookies
         )
 
-        // Setup local storage
-        val tempDir = System.getProperty("java.io.tmpdir") ?: return false.also {
-            Log.e("StreamedMediaExtractor", "Temporary directory not available")
-        }
-        val cacheDir = File(tempDir, "streamed_$matchId_$source_$streamNo")
-        if (!cacheDir.exists()) cacheDir.mkdirs()
-        val localM3u8File = File(cacheDir, "playlist.m3u8")
-        val seenUrls = mutableSetOf<String>()
-        var lastSequence = 31207 // From latest Python run
-
-        // Start live streaming coroutine
-        val job = CoroutineScope(Dispatchers.IO).launch {
-            while (isActive) {
-                try {
-                    val success = fetchAndProcessM3u8(
-                        m3u8Url, m3u8Headers, cacheDir, localM3u8File,
-                        seenUrls, lastSequence
-                    )
-                    if (success) {
-                        lastSequence += seenUrls.size // Update sequence
-                    } else {
-                        Log.w("StreamedMediaExtractor", "M3U8 fetch failed, retrying...")
-                    }
-                } catch (e: Exception) {
-                    Log.e("StreamedMediaExtractor", "M3U8 processing error: ${e.message}")
-                }
-                delay(pollInterval)
+        // Add M3U8 link
+        callback.invoke(
+            newExtractorLink(
+                source = "Streamed",
+                name = "$source Stream $streamNo",
+                url = m3u8Url,
+                type = ExtractorLinkType.M3U8
+            ) {
+                this.referer = embedReferer
+                this.quality = Qualities.Unknown.value
+                this.headers = m3u8Headers
             }
-        }
-
-        // Wait briefly to ensure initial segments are fetched
-        delay(1000)
-
-        // Return ExtractorLink with local M3U8
-        if (localM3u8File.exists()) {
-            callback.invoke(
-                newExtractorLink(
-                    source = "Streamed",
-                    name = "$source Stream $streamNo",
-                    url = localM3u8File.toURI().toString(),
-                    type = ExtractorLinkType.M3U8
-                ) {
-                    this.referer = embedReferer
-                    this.quality = Qualities.Unknown.value
-                    this.headers = m3u8Headers
-                }
-            )
-            Log.d("StreamedMediaExtractor", "Local M3U8 added: ${localM3u8File.toURI()}")
-            // Cleanup on scope cancellation
-            CoroutineScope(Dispatchers.IO).launch {
-                job.join()
-                cacheDir.deleteRecursively()
-                Log.d("StreamedMediaExtractor", "Cleaned up cache directory: $cacheDir")
-            }
-            return true
-        } else {
-            Log.e("StreamedMediaExtractor", "Local M3U8 not created")
-            job.cancel()
-            return false
-        }
-    }
-
-    private suspend fun fetchAndProcessM3u8(
-        m3u8Url: String,
-        headers: Map<String, String>,
-        cacheDir: File,
-        localM3u8File: File,
-        seenUrls: MutableSet<String>,
-        lastSequence: Int
-    ): Boolean = withContext(Dispatchers.IO) {
-        // Fetch M3U8
-        val m3u8Response = try {
-            app.get(m3u8Url, headers = headers, timeout = 15)
-        } catch (e: Exception) {
-            Log.e("StreamedMediaExtractor", "M3U8 fetch failed: ${e.message}")
-            return@withContext false
-        }
-        if (m3u8Response.code != 200) {
-            Log.e("StreamedMediaExtractor", "M3U8 fetch failed with code: ${m3u8Response.code}")
-            return@withContext false
-        }
-        val m3u8Content = m3u8Response.text
-        Log.d("StreamedMediaExtractor", "M3U8 content:\n$m3u8Content")
-
-        // Parse M3U8
-        val lines = m3u8Content.lines()
-        val segmentUrls = lines.filter { it.startsWith("https://") && (".ts?" in it || ".png?" in it) }
-        val sequenceMatch = Pattern.compile("#EXT-X-MEDIA-SEQUENCE:(\\d+)").matcher(m3u8Content)
-        val sequenceNumber = if (sequenceMatch.find()) sequenceMatch.group(1).toInt() else lastSequence
-
-        // Extract key URL
-        var keyUrl: String? = null
-        for (line in lines) {
-            if (line.startsWith("#EXT-X-KEY")) {
-                val match = Pattern.compile("""URI="([^"]+)"""").matcher(line)
-                if (match.find()) {
-                    keyUrl = match.group(1)
-                    if (keyUrl?.startsWith("/alpha/key") == true) {
-                        keyUrl = "https://rr.buytommy.top$keyUrl"
-                    }
-                }
-                break
-            }
-        }
-
-        // Download key
-        val keyBytes = keyUrl?.let {
-            try {
-                val response = app.get(it, headers = headers, timeout = 15)
-                if (response.code == 200) response.body.bytes() else null
-            } catch (e: Exception) {
-                Log.e("StreamedMediaExtractor", "Key fetch failed: ${e.message}")
-                null
-            }
-        } ?: return@withContext false.also {
-            Log.e("StreamedMediaExtractor", "No key found or fetch failed")
-        }
-
-        // Filter new segments
-        val newSegments = segmentUrls.mapIndexedNotNull { i, url ->
-            val seq = sequenceNumber + i
-            if (seq > lastSequence && url !in seenUrls) url to seq else null
-        }
-        if (newSegments.isEmpty()) {
-            Log.d("StreamedMediaExtractor", "No new segments found")
-            return@withContext true
-        }
-
-        // Download and decrypt segments
-        val segmentFiles = mutableListOf<String>()
-        newSegments.forEachIndexed { index, (url, seq) ->
-            val segmentFile = File(cacheDir, "segment_${seq}_decrypted.ts")
-            try {
-                val segmentResponse = app.get(url, headers = headers, timeout = 15)
-                if (segmentResponse.code == 200) {
-                    val encryptedData = segmentResponse.body.bytes()
-                    val decryptedData = decryptSegment(encryptedData, keyBytes, ivBytes)
-                    if (decryptedData != null) {
-                        segmentFile.writeBytes(decryptedData)
-                        segmentFiles.add(segmentFile.absolutePath)
-                        seenUrls.add(url)
-                        Log.d("StreamedMediaExtractor", "Decrypted segment saved: ${segmentFile.absolutePath}")
-                    } else {
-                        Log.w("StreamedMediaExtractor", "Decryption failed for: $url")
-                    }
-                } else {
-                    Log.w("StreamedMediaExtractor", "Segment fetch failed for $url: ${segmentResponse.code}")
-                }
-            } catch (e: Exception) {
-                Log.e("StreamedMediaExtractor", "Segment processing failed for $url: ${e.message}")
-            }
-        }
-
-        // Update local M3U8
-        val m3u8Lines = mutableListOf(
-            "#EXTM3U",
-            "#EXT-X-VERSION:4",
-            "#EXT-X-TARGETDURATION:4",
-            "#EXT-X-MEDIA-SEQUENCE:${lastSequence + 1}"
         )
-        newSegments.forEachIndexed { index, (url, _) ->
-            val segmentFile = File(cacheDir, "segment_${lastSequence + 1 + index}_decrypted.ts")
-            if (segmentFile.exists()) {
-                val duration = lines.find { line ->
-                    lines.indexOf(line) + 1 == lines.indexOf(url) && line.startsWith("#EXTINF:")
-                }?.substringAfter("#EXTINF:")?.substringBefore(",") ?: "3.0"
-                m3u8Lines.add("#EXTINF:$duration,Video")
-                m3u8Lines.add(segmentFile.absolutePath)
-            }
-        }
-        localM3u8File.writeText(m3u8Lines.joinToString("\n") + "\n")
-        Log.d("StreamedMediaExtractor", "Updated local M3U8: ${localM3u8File.absolutePath}")
-
-        // Cleanup old segments
-        val allSegments = cacheDir.listFiles { _, name -> name.endsWith("_decrypted.ts") }?.sortedBy { it.name }
-        if (allSegments != null && allSegments.size > maxSegments) {
-            allSegments.take(allSegments.size - maxSegments).forEach { it.delete() }
-            Log.d("StreamedMediaExtractor", "Cleaned up old segments")
-        }
-
-        return@withContext true
-    }
-
-    private fun decryptSegment(data: ByteArray, key: ByteArray, iv: ByteArray): ByteArray? {
-        return try {
-            val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
-            val keySpec = SecretKeySpec(key, "AES")
-            val ivSpec = IvParameterSpec(iv)
-            cipher.init(Cipher.DECRYPT_MODE, keySpec, ivSpec)
-            val decrypted = cipher.doFinal(data)
-            decrypted // No manual padding removal needed with PKCS5Padding
-        } catch (e: Exception) {
-            Log.e("StreamedMediaExtractor", "Decryption failed: ${e.message}")
-            null
-        }
+        Log.d("StreamedMediaExtractor", "M3U8 URL added: $m3u8Url")
+        return true
     }
 
     private suspend fun fetchEventCookies(pageUrl: String, referrer: String): String {
