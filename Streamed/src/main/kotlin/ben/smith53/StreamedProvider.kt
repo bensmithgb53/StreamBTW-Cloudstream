@@ -223,7 +223,7 @@ class StreamedMediaExtractor {
         val tempDir = System.getProperty("java.io.tmpdir") ?: return false.also {
             Log.e("StreamedMediaExtractor", "Temporary directory not available")
         }
-        val cacheDir = File(tempDir, "streamed_$matchId_$source_$streamNo") // Fixed: uses matchId, source
+        val cacheDir = File(tempDir, "streamed_$matchId_$source_$streamNo")
         if (!cacheDir.exists()) cacheDir.mkdirs()
         val localM3u8File = File(cacheDir, "playlist.m3u8")
         val seenUrls = mutableSetOf<String>()
