@@ -5,6 +5,7 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
+import android.content.Context
 import android.util.Log
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
@@ -18,7 +19,6 @@ import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 import java.util.regex.Pattern
 
-// StreamedProvider remains unchanged
 class StreamedProvider : MainAPI() {
     override var mainUrl = "https://streamed.su"
     override var name = "Streamed"
@@ -90,7 +90,7 @@ class StreamedProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val matchId = data.substringAfterLast("/")
-        val extractor = StreamedMediaExtractor()
+        val extractor = StreamedMediaExtractor(context) // Pass context from MainAPI
         var success = false
 
         sources.forEach { source ->
@@ -119,7 +119,7 @@ class StreamedProvider : MainAPI() {
     )
 }
 
-class StreamedMediaExtractor {
+class StreamedMediaExtractor(private val context: Context) {
     private val fetchUrl = "https://embedstreams.top/fetch"
     private val cookieUrl = "https://fishy.streamed.su/api/event"
     private val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
@@ -221,7 +221,6 @@ class StreamedMediaExtractor {
         )
 
         // Setup local storage
-        val context = app.baseClient.context
         val cacheDir = File(context.cacheDir, "streamed_$matchId_$source_$streamNo")
         if (!cacheDir.exists()) cacheDir.mkdirs()
         val localM3u8File = File(cacheDir, "playlist.m3u8")
