@@ -5,7 +5,6 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
-import android.content.Context
 import android.util.Log
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
@@ -90,7 +89,7 @@ class StreamedProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val matchId = data.substringAfterLast("/")
-        val extractor = StreamedMediaExtractor(context) // Pass context from MainAPI
+        val extractor = StreamedMediaExtractor()
         var success = false
 
         sources.forEach { source ->
@@ -119,7 +118,7 @@ class StreamedProvider : MainAPI() {
     )
 }
 
-class StreamedMediaExtractor(private val context: Context) {
+class StreamedMediaExtractor {
     private val fetchUrl = "https://embedstreams.top/fetch"
     private val cookieUrl = "https://fishy.streamed.su/api/event"
     private val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
@@ -221,7 +220,10 @@ class StreamedMediaExtractor(private val context: Context) {
         )
 
         // Setup local storage
-        val cacheDir = File(context.cacheDir, "streamed_$matchId_$source_$streamNo")
+        val tempDir = System.getProperty("java.io.tmpdir") ?: return false.also {
+            Log.e("StreamedMediaExtractor", "Temporary directory not available")
+        }
+        val cacheDir = File(tempDir, "streamed_$matchId_$source_$streamNo")
         if (!cacheDir.exists()) cacheDir.mkdirs()
         val localM3u8File = File(cacheDir, "playlist.m3u8")
         val seenUrls = mutableSetOf<String>()
