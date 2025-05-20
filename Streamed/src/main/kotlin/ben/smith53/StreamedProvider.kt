@@ -63,7 +63,7 @@ class StreamedProvider : MainAPI() {
                 type = TvType.Live
             ) {
                 this.posterUrl = "$mainUrl${match.posterPath ?: "/api/images/poster/fallback.webp"}"
-                this.data = match.matchSources.map { it.sourceName }.joinToString(",")
+                // TODO: Store matchSources if needed, e.g., as extraData if supported
             }
         }.filterNotNull()
 
@@ -120,9 +120,10 @@ class StreamedProvider : MainAPI() {
                 val streamId = stream.id
                 val streamNo = stream.streamNo
                 val language = stream.language
+                val isHd = stream.hd
                 val streamUrl = "$mainUrl/watch/$matchId/$source/$streamNo"
-                Log.d("StreamedProvider", "Processing stream URL: $streamUrl (ID: $streamId, Language: $language)")
-                if (extractor.getUrl(streamUrl, streamId, source, streamNo, language, subtitleCallback, callback)) {
+                Log.d("StreamedProvider", "Processing stream URL: $streamUrl (ID: $streamId, Language: $language, HD: $isHd)")
+                if (extractor.getUrl(streamUrl, streamId, source, streamNo, language, isHd, subtitleCallback, callback)) {
                     success = true
                 }
             }
@@ -172,6 +173,7 @@ class StreamedMediaExtractor {
         source: String,
         streamNo: Int,
         language: String,
+        isHd: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
@@ -270,12 +272,12 @@ class StreamedMediaExtractor {
             callback.invoke(
                 newExtractorLink(
                     source = "Streamed",
-                    name = "$source Stream $streamNo ($language${if (stream.hd) ", HD" else ""})",
+                    name = "$source Stream $streamNo ($language${if (isHd) ", HD" else ""})",
                     url = m3u8Url,
                     type = ExtractorLinkType.M3U8
                 ) {
                     this.referer = embedReferer
-                    this.quality = if (stream.hd) Qualities.P1080.value else Qualities.Unknown.value
+                    this.quality = if (isHd) Qualities.P1080.value else Qualities.Unknown.value
                     this.headers = m3u8Headers
                 }
             )
