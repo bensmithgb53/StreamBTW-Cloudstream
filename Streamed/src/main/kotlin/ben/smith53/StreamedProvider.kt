@@ -1,3 +1,4 @@
+
 package ben.smith53
 
 import com.fasterxml.jackson.annotation.JsonProperty
