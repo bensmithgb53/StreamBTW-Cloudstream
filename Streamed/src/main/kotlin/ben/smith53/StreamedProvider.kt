@@ -58,24 +58,34 @@ class StreamedProvider : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val rawList = app.get(request.data).text
-        val listJson = parseJson<List<Match>>(rawList)
+        try {
+            val response = app.get(request.data, headers = baseHeaders, timeout = 15)
+            val rawList = response.text
+            Log.d("StreamedProvider", "Main page raw response for ${request.data}: ${rawList.take(1000)}")
+            val listJson = parseJson<List<Match>>(rawList)
 
-        val list = listJson.filter { match -> match.matchSources.isNotEmpty() }.map { match ->
-            val url = "$mainUrl/watch/${match.id}"
-            newLiveSearchResponse(
-                name = match.title,
-                url = url,
-                type = TvType.Live
-            ) {
-                this.posterUrl = "$mainUrl${match.posterPath ?: "/api/images/poster/fallback.webp"}"
-            }
-        }.filterNotNull()
+            val list = listJson.filter { match -> match.matchSources.isNotEmpty() }.map { match ->
+                val url = "$mainUrl/watch/${match.id}"
+                newLiveSearchResponse(
+                    name = match.title,
+                    url = url,
+                    type = TvType.Live
+                ) {
+                    this.posterUrl = "$mainUrl${match.posterPath ?: "/api/images/poster/fallback.webp"}"
+                }
+            }.filterNotNull()
 
-        return newHomePageResponse(
-            list = listOf(HomePageList(request.name, list, isHorizontalImages = true)),
-            hasNext = false
-        )
+            return newHomePageResponse(
+                list = listOf(HomePageList(request.name, list, isHorizontalImages = true)),
+                hasNext = false
+            )
+        } catch (e: Exception) {
+            Log.e("StreamedProvider", "Main page fetch failed for ${request.data}: ${e.message}")
+            return newHomePageResponse(
+                list = listOf(HomePageList(request.name, emptyList(), isHorizontalImages = true)),
+                hasNext = false
+            )
+        }
     }
 
     override suspend fun load(url: String): LoadResponse {
@@ -105,10 +115,19 @@ class StreamedProvider : MainAPI() {
         var success = false
 
         sources.forEach { source ->
+            // Try API-fetched stream IDs
             val streamInfos = try {
                 val apiUrl = "$mainUrl/api/stream/$source/$normalizedMatchId"
-                val response = app.get(apiUrl, timeout = 15).text
-                parseJson<List<StreamInfo>>(response).filter { it.embedUrl.isNotBlank() }
+                val response = withRetry(3) {
+                    app.get(apiUrl, headers = baseHeaders, interceptor = cfKiller, timeout = 15)
+                }
+                Log.d("StreamedProvider", "Stream API response for $source ($normalizedMatchId): ${response.text.take(1000)}")
+                if (response.code == 200 && response.text.isNotBlank()) {
+                    parseJson<List<StreamInfo>>(response.text).filter { it.embedUrl.isNotBlank() }
+                } else {
+                    Log.w("StreamedProvider", "Invalid stream API response for $source ($normalizedMatchId): Code ${response.code}")
+                    emptyList()
+                }
             } catch (e: Exception) {
                 Log.w("StreamedProvider", "No streams for $source ($normalizedMatchId): ${e.message}")
                 emptyList()
@@ -127,6 +146,7 @@ class StreamedProvider : MainAPI() {
                     }
                 }
             } else {
+                // Fallback to raw matchId
                 for (streamNo in 1..maxStreams) {
                     val streamUrl = "$mainUrl/watch/$matchId/$source/$streamNo"
                     Log.d("StreamedProvider", "Processing fallback stream URL: $streamUrl (ID: $matchId)")
@@ -141,6 +161,21 @@ class StreamedProvider : MainAPI() {
             Log.e("StreamedProvider", "No links found for $matchId")
         }
         return success
+    }
+
+    // Retry utility function
+    private suspend fun <T> withRetry(attempts: Int, block: suspend () -> T): T {
+        var lastException: Exception? = null
+        repeat(attempts) { attempt ->
+            try {
+                return block()
+            } catch (e: Exception) {
+                lastException = e
+                Log.w("StreamedProvider", "Attempt ${attempt + 1} failed: ${e.message}")
+                if (attempt < attempts - 1) delay(1000L * (attempt + 1))
+            }
+        }
+        throw lastException ?: Exception("All retry attempts failed")
     }
 
     data class Match(
@@ -180,7 +215,7 @@ class StreamedMediaExtractor {
     )
     private val fallbackDomains = listOf("p2-panel.streamed.su", "streamed.su")
     private val cookieCache = mutableMapOf<String, String>()
-    private val hardcodedIV = "507dcd1eb7f04bb6983b19be56b89020" // From JavaScript code
+    private val hardcodedIV = "507dcd1eb7f04bb6983b19be56b89020" // For alpha streams
 
     suspend fun getUrl(
         streamUrl: String,
@@ -196,7 +231,9 @@ class StreamedMediaExtractor {
 
         // Fetch stream page cookies
         val streamResponse = try {
-            app.get(streamUrl, headers = baseHeaders, timeout = 15)
+            withRetry(3) {
+                app.get(streamUrl, headers = baseHeaders, timeout = 15)
+            }
         } catch (e: Exception) {
             Log.e("StreamedMediaExtractor", "Stream page fetch failed for $source/$streamNo: ${e.message}")
             return false
@@ -238,7 +275,9 @@ class StreamedMediaExtractor {
         Log.d("StreamedMediaExtractor", "Fetching with data: $postData and headers: $fetchHeaders")
 
         val encryptedResponse = try {
-            val response = app.post(fetchUrl, headers = fetchHeaders, json = postData, timeout = 15)
+            val response = withRetry(3) {
+                app.post(fetchUrl, headers = fetchHeaders, json = postData, timeout = 15)
+            }
             Log.d("StreamedMediaExtractor", "Fetch response code for $source/$streamNo: ${response.code}")
             if (response.code != 200) {
                 Log.e("StreamedMediaExtractor", "Fetch failed for $source/$streamNo with code: ${response.code}")
@@ -256,8 +295,11 @@ class StreamedMediaExtractor {
         // Decrypt using Deno
         val decryptPostData = mapOf("encrypted" to encryptedResponse)
         val decryptResponse = try {
-            app.post(decryptUrl, json = decryptPostData, headers = mapOf("Content-Type" to "application/json"), timeout = 15)
-                .parsedSafe<Map<String, String>>()
+            val response = withRetry(3) {
+                app.post(decryptUrl, json = decryptPostData, headers = mapOf("Content-Type" to "application/json"), timeout = 15)
+            }
+            Log.d("StreamedMediaExtractor", "Decrypt response for $source/$streamNo: ${response.text.take(1000)}")
+            response.parsedSafe<Map<String, String>>()
         } catch (e: Exception) {
             Log.e("StreamedMediaExtractor", "Decryption request failed for $source/$streamNo: ${e.message}")
             return false
@@ -274,7 +316,7 @@ class StreamedMediaExtractor {
             "Cookie" to combinedCookies
         )
 
-        // Fetch encryption key for encrypted sources (e.g., alpha)
+        // Fetch encryption key for alpha streams
         var keyUri: String? = null
         if (source == "alpha") {
             keyUri = "https://rr.buytommy.top/alpha/key/$source-$streamId-$streamNo/xiwebobi9a7ibafeki9a/1747388939"
@@ -346,13 +388,15 @@ class StreamedMediaExtractor {
 
         val payload = """{"n":"pageview","u":"$pageUrl","d":"streamed.su","r":"$referrer"}"""
         try {
-            val response = app.post(
-                cookieUrl,
-                data = mapOf(),
-                headers = mapOf("Content-Type" to "text/plain"),
-                requestBody = payload.toRequestBody("text/plain".toMediaType()),
-                timeout = 15
-            )
+            val response = withRetry(3) {
+                app.post(
+                    cookieUrl,
+                    data = mapOf(),
+                    headers = mapOf("Content-Type" to "text/plain"),
+                    requestBody = payload.toRequestBody("text/plain".toMediaType()),
+                    timeout = 15
+                )
+            }
             val cookies = response.headers.filter { it.first == "Set-Cookie" }
                 .map { it.second.split(";")[0] }
             val formattedCookies = listOf("_ddg8_", "_ddg10_", "_ddg9_", "_ddg1_")
