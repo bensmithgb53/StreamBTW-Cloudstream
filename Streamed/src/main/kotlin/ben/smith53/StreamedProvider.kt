@@ -13,6 +13,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
+import kotlinx.coroutines.delay
 
 class StreamedProvider : MainAPI() {
     override var mainUrl = "https://streamed.su"
@@ -26,10 +27,15 @@ class StreamedProvider : MainAPI() {
     private val cookieUrl = "https://fishy.streamed.su/api/event"
     private val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
     private val baseHeaders = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
+        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
         "Content-Type" to "application/json",
-        "Accept" to "application/vnd.apple.mpegurl, */*",
-        "Origin" to "https://embedstreams.top"
+        "Accept" to "application/json, text/plain, */*",
+        "Accept-Encoding" to "gzip, deflate, br",
+        "Origin" to "https://streamed.su",
+        "Referer" to "https://streamed.su/",
+        "Sec-Fetch-Site" to "same-origin",
+        "Sec-Fetch-Mode" to "cors",
+        "Sec-Fetch-Dest" to "empty"
     )
 
     override val mainPage = mainPageOf(
@@ -94,17 +100,17 @@ class StreamedProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val matchId = data.substringAfterLast("/")
+        val normalizedMatchId = matchId.replace(Regex("^\\d+-"), "")
         val extractor = StreamedMediaExtractor()
         var success = false
 
         sources.forEach { source ->
-            // Try API-fetched stream IDs
             val streamInfos = try {
-                val apiUrl = "$mainUrl/api/stream/$source/$matchId"
-                val response = app.get(apiUrl, timeout = 10).text
+                val apiUrl = "$mainUrl/api/stream/$source/$normalizedMatchId"
+                val response = app.get(apiUrl, timeout = 15).text
                 parseJson<List<StreamInfo>>(response).filter { it.embedUrl.isNotBlank() }
             } catch (e: Exception) {
-                Log.w("StreamedProvider", "No streams for $source ($matchId): ${e.message}")
+                Log.w("StreamedProvider", "No streams for $source ($normalizedMatchId): ${e.message}")
                 emptyList()
             }
 
@@ -121,7 +127,6 @@ class StreamedProvider : MainAPI() {
                     }
                 }
             } else {
-                // Fallback to raw matchId (original behavior)
                 for (streamNo in 1..maxStreams) {
                     val streamUrl = "$mainUrl/watch/$matchId/$source/$streamNo"
                     Log.d("StreamedProvider", "Processing fallback stream URL: $streamUrl (ID: $matchId)")
@@ -166,13 +171,16 @@ class StreamedMediaExtractor {
     private val cookieUrl = "https://fishy.streamed.su/api/event"
     private val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
     private val baseHeaders = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
+        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
         "Content-Type" to "application/json",
         "Accept" to "application/vnd.apple.mpegurl, */*",
-        "Origin" to "https://embedstreams.top"
+        "Accept-Encoding" to "gzip, deflate, br",
+        "Origin" to "https://embedstreams.top",
+        "Referer" to "https://embedstreams.top/"
     )
     private val fallbackDomains = listOf("p2-panel.streamed.su", "streamed.su")
     private val cookieCache = mutableMapOf<String, String>()
+    private val hardcodedIV = "507dcd1eb7f04bb6983b19be56b89020" // From JavaScript code
 
     suspend fun getUrl(
         streamUrl: String,
@@ -266,6 +274,22 @@ class StreamedMediaExtractor {
             "Cookie" to combinedCookies
         )
 
+        // Fetch encryption key for encrypted sources (e.g., alpha)
+        var keyUri: String? = null
+        if (source == "alpha") {
+            keyUri = "https://rr.buytommy.top/alpha/key/$source-$streamId-$streamNo/xiwebobi9a7ibafeki9a/1747388939"
+            try {
+                val keyResponse = app.get(keyUri, headers = mapOf("Referer" to "https://embedstreams.top/"), timeout = 15)
+                if (keyResponse.code != 200) {
+                    Log.w("StreamedMediaExtractor", "Failed to fetch key for $source/$streamNo: ${keyResponse.code}")
+                    keyUri = null
+                }
+            } catch (e: Exception) {
+                Log.e("StreamedMediaExtractor", "Error fetching key for $source/$streamNo: ${e.message}")
+                keyUri = null
+            }
+        }
+
         // Test M3U8 with fallbacks
         for (domain in listOf("rr.buytommy.top") + fallbackDomains) {
             try {
@@ -282,6 +306,9 @@ class StreamedMediaExtractor {
                             this.referer = embedReferer
                             this.quality = if (isHd) Qualities.P1080.value else Qualities.Unknown.value
                             this.headers = m3u8Headers
+                            if (keyUri != null) {
+                                this.extractorData = "AES-CBC:$keyUri:$hardcodedIV"
+                            }
                         }
                     )
                     Log.d("StreamedMediaExtractor", "M3U8 URL added for $source/$streamNo: $testUrl")
@@ -305,6 +332,9 @@ class StreamedMediaExtractor {
                 this.referer = embedReferer
                 this.quality = if (isHd) Qualities.P1080.value else Qualities.Unknown.value
                 this.headers = m3u8Headers
+                if (keyUri != null) {
+                    this.extractorData = "AES-CBC:$keyUri:$hardcodedIV"
+                }
             }
         )
         Log.d("StreamedMediaExtractor", "M3U8 test failed but added anyway for $source/$streamNo: $m3u8Url")
