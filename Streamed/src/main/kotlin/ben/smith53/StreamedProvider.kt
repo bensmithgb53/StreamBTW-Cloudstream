@@ -27,13 +27,12 @@ class StreamedProvider : MainAPI() {
     private val cookieUrl = "https://fishy.streamed.su/api/event"
     private val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
     private val baseHeaders = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-        "Content-Type" to "application/json",
+        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
         "Accept" to "application/json, text/plain, */*",
         "Accept-Encoding" to "gzip, deflate, br",
-        "Origin" to "https://streamed.su",
-        "Referer" to "https://streamed.su/",
-        "Sec-Fetch-Site" to "same-origin",
+        "Origin" to "https://embedstreams.top",
+        "Referer" to "https://embedstreams.top/",
+        "Sec-Fetch-Site" to "cross-site",
         "Sec-Fetch-Mode" to "cors",
         "Sec-Fetch-Dest" to "empty"
     )
@@ -59,7 +58,9 @@ class StreamedProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         try {
-            val response = app.get(request.data, headers = baseHeaders, timeout = 15)
+            val response = withRetry(3) {
+                app.get(request.data, headers = baseHeaders, interceptor = cfKiller, timeout = 15)
+            }
             val rawList = response.text
             Log.d("StreamedProvider", "Main page raw response for ${request.data}: ${rawList.take(1000)}")
             val listJson = parseJson<List<Match>>(rawList)
@@ -206,12 +207,14 @@ class StreamedMediaExtractor {
     private val cookieUrl = "https://fishy.streamed.su/api/event"
     private val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
     private val baseHeaders = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-        "Content-Type" to "application/json",
+        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
         "Accept" to "application/vnd.apple.mpegurl, */*",
         "Accept-Encoding" to "gzip, deflate, br",
         "Origin" to "https://embedstreams.top",
-        "Referer" to "https://embedstreams.top/"
+        "Referer" to "https://embedstreams.top/",
+        "Sec-Fetch-Site" to "cross-site",
+        "Sec-Fetch-Mode" to "cors",
+        "Sec-Fetch-Dest" to "empty"
     )
     private val fallbackDomains = listOf("p2-panel.streamed.su", "streamed.su")
     private val cookieCache = mutableMapOf<String, String>()
@@ -229,10 +232,32 @@ class StreamedMediaExtractor {
     ): Boolean {
         Log.d("StreamedMediaExtractor", "Starting extraction for: $streamUrl (ID: $streamId)")
 
+        // Test decryption service availability
+        val decryptTest = try {
+            withRetry(3) {
+                app.post(
+                    decryptUrl,
+                    json = mapOf("encrypted" to "test"),
+                    headers = mapOf("Content-Type" to "application/json"),
+                    timeout = 10
+                )
+            }
+            Log.d("StreamedMediaExtractor", "Decryption service test response: ${decryptTest.text.take(1000)}")
+            decryptTest.code == 200
+        } catch (e: Exception) {
+            Log.e("StreamedMediaExtractor", "Decryption service unavailable: ${e.message}")
+            return false
+        }
+        if (!decryptTest) {
+            Log.e("StreamedMediaExtractor", "Decryption service failed test for $source/$streamNo")
+            return false
+        }
+
         // Fetch stream page cookies
+        val embedUrl = "https://embedstreams.top/embed/$source/$streamId/$streamNo"
         val streamResponse = try {
             withRetry(3) {
-                app.get(streamUrl, headers = baseHeaders, timeout = 15)
+                app.get(embedUrl, headers = baseHeaders, interceptor = cfKiller, timeout = 15)
             }
         } catch (e: Exception) {
             Log.e("StreamedMediaExtractor", "Stream page fetch failed for $source/$streamNo: ${e.message}")
@@ -242,7 +267,7 @@ class StreamedMediaExtractor {
         Log.d("StreamedMediaExtractor", "Stream cookies for $source/$streamNo: $streamCookies")
 
         // Fetch event cookies
-        val eventCookies = fetchEventCookies(streamUrl, streamUrl)
+        val eventCookies = fetchEventCookies(embedUrl, embedUrl)
         Log.d("StreamedMediaExtractor", "Event cookies for $source/$streamNo: $eventCookies")
 
         // Combine cookies
@@ -267,10 +292,10 @@ class StreamedMediaExtractor {
             "id" to streamId,
             "streamNo" to streamNo.toString()
         )
-        val embedReferer = "https://embedstreams.top/embed/$source/$streamId/$streamNo"
         val fetchHeaders = baseHeaders + mapOf(
-            "Referer" to streamUrl,
-            "Cookie" to combinedCookies
+            "Referer" to embedUrl,
+            "Cookie" to combinedCookies,
+            "Content-Type" to "application/json"
         )
         Log.d("StreamedMediaExtractor", "Fetching with data: $postData and headers: $fetchHeaders")
 
@@ -312,23 +337,31 @@ class StreamedMediaExtractor {
         // Construct M3U8 URL
         val m3u8Url = "https://rr.buytommy.top$decryptedPath"
         val m3u8Headers = baseHeaders + mapOf(
-            "Referer" to embedReferer,
+            "Referer" to embedUrl,
             "Cookie" to combinedCookies
         )
 
-        // Fetch encryption key for alpha streams
+        // Fetch M3U8 to extract EXT-X-KEY for alpha streams
         var keyUri: String? = null
         if (source == "alpha") {
-            keyUri = "https://rr.buytommy.top/alpha/key/$source-$streamId-$streamNo/xiwebobi9a7ibafeki9a/1747388939"
             try {
-                val keyResponse = app.get(keyUri, headers = mapOf("Referer" to "https://embedstreams.top/"), timeout = 15)
-                if (keyResponse.code != 200) {
-                    Log.w("StreamedMediaExtractor", "Failed to fetch key for $source/$streamNo: ${keyResponse.code}")
-                    keyUri = null
+                val m3u8Response = withRetry(3) {
+                    app.get(m3u8Url, headers = m3u8Headers, interceptor = cfKiller, timeout = 15)
+                }
+                if (m3u8Response.code == 200) {
+                    val m3u8Content = m3u8Response.text
+                    Log.d("StreamedMediaExtractor", "M3U8 content for $source/$streamNo: ${m3u8Content.take(1000)}")
+                    // Extract EXT-X-KEY URI
+                    val keyMatch = Regex("""#EXT-X-KEY:METHOD=AES-128,URI="([^"]+)"""").find(m3u8Content)
+                    keyUri = keyMatch?.groups?.get(1)?.value
+                    if (keyUri == null) {
+                        Log.w("StreamedMediaExtractor", "No EXT-X-KEY found in M3U8 for $source/$streamNo")
+                    }
+                } else {
+                    Log.w("StreamedMediaExtractor", "Failed to fetch M3U8 for $source/$streamNo: ${m3u8Response.code}")
                 }
             } catch (e: Exception) {
-                Log.e("StreamedMediaExtractor", "Error fetching key for $source/$streamNo: ${e.message}")
-                keyUri = null
+                Log.e("StreamedMediaExtractor", "Error fetching M3U8 for $source/$streamNo: ${e.message}")
             }
         }
 
@@ -336,7 +369,9 @@ class StreamedMediaExtractor {
         for (domain in listOf("rr.buytommy.top") + fallbackDomains) {
             try {
                 val testUrl = m3u8Url.replace("rr.buytommy.top", domain)
-                val testResponse = app.get(testUrl, headers = m3u8Headers, timeout = 15)
+                val testResponse = withRetry(3) {
+                    app.get(testUrl, headers = m3u8Headers, interceptor = cfKiller, timeout = 15)
+                }
                 if (testResponse.code == 200) {
                     callback.invoke(
                         newExtractorLink(
@@ -345,7 +380,7 @@ class StreamedMediaExtractor {
                             url = testUrl,
                             type = ExtractorLinkType.M3U8
                         ) {
-                            this.referer = embedReferer
+                            this.referer = embedUrl
                             this.quality = if (isHd) Qualities.P1080.value else Qualities.Unknown.value
                             this.headers = m3u8Headers
                             if (keyUri != null) {
@@ -371,7 +406,7 @@ class StreamedMediaExtractor {
                 url = m3u8Url,
                 type = ExtractorLinkType.M3U8
             ) {
-                this.referer = embedReferer
+                this.referer = embedUrl
                 this.quality = if (isHd) Qualities.P1080.value else Qualities.Unknown.value
                 this.headers = m3u8Headers
                 if (keyUri != null) {
