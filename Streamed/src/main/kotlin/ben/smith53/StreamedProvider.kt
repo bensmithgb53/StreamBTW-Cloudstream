@@ -94,7 +94,8 @@ class StreamedProvider : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse {
         val matchId = url.substringAfterLast("/")
-        val title = matchId.replace(Regex("^\\d+-"), "") // Normalize ID
+        val normalizedMatchId = matchId.replace(Regex("^\\d+-"), "")
+        val title = normalizedMatchId
             .replace("-", " ")
             .replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.ROOT) else it.toString() }
             .replace(Regex("-\\d+$"), "")
@@ -102,7 +103,8 @@ class StreamedProvider : MainAPI() {
         return newLiveStreamLoadResponse(
             name = title,
             url = url,
-            dataUrl = url
+            dataUrl = url,
+            contentRating = null // Add contentRating for compatibility
         ) {
             this.posterUrl = posterUrl
         }
@@ -115,7 +117,7 @@ class StreamedProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val matchId = data.substringAfterLast("/")
-        val normalizedMatchId = matchId.replace(Regex("^\\d+-"), "") // Normalize for API
+        val normalizedMatchId = matchId.replace(Regex("^\\d+-"), "")
         val extractor = StreamedMediaExtractor()
         var success = false
 
@@ -175,18 +177,7 @@ class StreamedProvider : MainAPI() {
 
         if (!success) {
             Log.e("StreamedProvider", "No links found for $matchId")
-            callback.invoke(
-                ExtractorLink(
-                    source = "Streamed",
-                    name = "Error",
-                    url = "",
-                    referer = "",
-                    quality = Qualities.Unknown.value,
-                    type = ExtractorLinkType.M3U8,
-                    isError = true,
-                    errorMessage = "No valid streams found for this event"
-                )
-            )
+            throw ErrorLoadingException("No valid streams found for this event")
         }
         return success
     }
@@ -325,28 +316,25 @@ class StreamedMediaExtractor {
                 val testResponse = app.get(testUrl, headers = m3u8Headers, interceptor = cfKiller, timeout = defaultTimeout)
                 if (testResponse.code == 200 && testResponse.text.contains("#EXTM3U")) {
                     // Verify key availability
-                    val keyResponse = try {
-                        app.get(keyUrl, headers = m3u8Headers, interceptor = cfKiller, timeout = defaultTimeout)
+                    val keyAvailable = try {
+                        val keyResponse = app.get(keyUrl, headers = m3u8Headers, interceptor = cfKiller, timeout = defaultTimeout)
                         keyResponse.code == 200 && keyResponse.text.isNotBlank()
                     } catch (e: Exception) {
                         Log.w("StreamedMediaExtractor", "Key fetch failed for $keyUrl: ${e.message}")
                         false
                     }
-                    if (keyResponse) {
+                    if (keyAvailable) {
                         callback.invoke(
                             newExtractorLink(
                                 source = "Streamed",
                                 name = "$source Stream $streamNo ($language${if (isHd) ", HD" else ""})",
                                 url = testUrl,
-                                type = ExtractorLinkType.M3U8
-                            ) {
-                                this.referer = embedReferer
-                                this.quality = if (isHd) Qualities.P1080.value else Qualities.Unknown.value
-                                this.headers = m3u8Headers
-                                this.connectionTimeout = 15000
-                                this.bufferSize = 1024 * 1024
-                                this.addExtra("keyUrl" to keyUrl)
-                            }
+                                referer = embedReferer,
+                                quality = if (isHd) Qualities.P1080.value else Qualities.Unknown.value,
+                                type = ExtractorLinkType.M3U8,
+                                headers = m3u8Headers,
+                                extractorData = keyUrl // Pass key URL as extractorData
+                            )
                         )
                         Log.d("StreamedMediaExtractor", "Valid M3U8 URL added for $source/$streamNo: $testUrl")
                         return true
@@ -384,7 +372,7 @@ class StreamedMediaExtractor {
             } catch (e: Exception) {
                 Log.w("StreamedMediaExtractor", "Decryption attempt ${attempt + 1} failed: ${e.message}")
             }
-            if (attempt < maxRetries - 1) delay(1000)
+            if (attempt < maxRetries - 1) delay(1000L * (1 shl attempt)) // Exponential backoff
         }
         Log.e("StreamedMediaExtractor", "All decryption attempts failed")
         return null
