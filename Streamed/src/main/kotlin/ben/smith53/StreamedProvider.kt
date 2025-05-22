@@ -317,12 +317,13 @@ class StreamedMediaExtractor {
                                 source = "Streamed",
                                 name = "$source Stream $streamNo ($language${if (isHd) ", HD" else ""})",
                                 url = testUrl,
-                                type = ExtractorLinkType.M3U8,
-                                referer = embedReferer,
-                                quality = if (isHd) Qualities.P1080.value else Qualities.Unknown.value,
-                                headers = m3u8Headers,
-                                extractorData = keyUrl
-                            )
+                                type = ExtractorLinkType.M3U8
+                            ) {
+                                this.referer = embedReferer
+                                this.quality = if (isHd) Qualities.P1080.value else Qualities.Unknown.value
+                                this.headers = m3u8Headers
+                                this.extractorData = keyUrl
+                            }
                         )
                         Log.d("StreamedMediaExtractor", "Valid M3U8 URL added for $source/$streamNo: $testUrl")
                         return true
@@ -342,12 +343,13 @@ class StreamedMediaExtractor {
                 source = "Streamed",
                 name = "$source Stream $streamNo ($language${if (isHd) ", HD" else ""})",
                 url = m3u8Url,
-                type = ExtractorLinkType.M3U8,
-                referer = embedReferer,
-                quality = if (isHd) Qualities.P1080.value else Qualities.Unknown.value,
-                headers = m3u8Headers,
-                extractorData = keyUrl
-            )
+                type = ExtractorLinkType.M3U8
+            ) {
+                this.referer = embedReferer
+                this.quality = if (isHd) Qualities.P1080.value else Qualities.Unknown.value
+                this.headers = m3u8Headers
+                this.extractorData = keyUrl
+            }
         )
         Log.d("StreamedMediaExtractor", "M3U8 test failed but added anyway for $source/$streamNo: $m3u8Url")
         return true
