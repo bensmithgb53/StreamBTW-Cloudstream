@@ -10,8 +10,6 @@ import android.util.Log
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import java.util.Locale
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
@@ -103,8 +101,8 @@ class StreamedProvider : MainAPI() {
         return newLiveStreamLoadResponse(
             name = title,
             url = url,
-            dataUrl = url,
-            contentRating = null
+            apiName = this.name,
+            dataUrl = url
         ) {
             this.posterUrl = posterUrl
         }
@@ -196,8 +194,8 @@ class StreamedProvider : MainAPI() {
     data class StreamInfo(
         @JsonProperty("id") val id: String,
         @JsonProperty("streamNo") val streamNo: Int,
-        @JsonProperty("language") val language: String? = "Unknown",
-        @JsonProperty("hd") val hd: Boolean? = false,
+        @JsonProperty("language") val language: String? = null,
+        @JsonProperty("hd") val hd: Boolean? = null,
         @JsonProperty("embedUrl") val embedUrl: String,
         @JsonProperty("source") val source: String
     )
@@ -320,9 +318,9 @@ class StreamedMediaExtractor {
                                 source = "Streamed",
                                 name = "$source Stream $streamNo ($language${if (isHd) ", HD" else ""})",
                                 url = testUrl,
+                                type = ExtractorLinkType.M3U8,
                                 referer = embedReferer,
                                 quality = if (isHd) Qualities.P1080.value else Qualities.Unknown.value,
-                                type = ExtractorLinkType.M3U8,
                                 headers = m3u8Headers,
                                 extractorData = keyUrl
                             )
@@ -340,8 +338,20 @@ class StreamedMediaExtractor {
             }
         }
 
-        Log.w("StreamedMediaExtractor", "No valid M3U8 found for $source/$streamNo")
-        return false
+        callback.invoke(
+            newExtractorLink(
+                source = "Streamed",
+                name = "$source Stream $streamNo ($language${if (isHd) ", HD" else ""})",
+                url = m3u8Url,
+                type = ExtractorLinkType.M3U8,
+                referer = embedReferer,
+                quality = if (isHd) Qualities.P1080.value else Qualities.Unknown.value,
+                headers = m3u8Headers,
+                extractorData = keyUrl
+            )
+        )
+        Log.d("StreamedMediaExtractor", "M3U8 test failed but added anyway for $source/$streamNo: $m3u8Url")
+        return true
     }
 
     private suspend fun decryptWithRetry(encrypted: String, maxRetries: Int = 3): String? {
