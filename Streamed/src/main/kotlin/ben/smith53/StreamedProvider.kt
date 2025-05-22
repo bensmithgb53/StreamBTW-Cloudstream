@@ -104,7 +104,7 @@ class StreamedProvider : MainAPI() {
             name = title,
             url = url,
             dataUrl = url,
-            contentRating = null // Add contentRating for compatibility
+            contentRating = null
         ) {
             this.posterUrl = posterUrl
         }
@@ -122,7 +122,6 @@ class StreamedProvider : MainAPI() {
         var success = false
 
         sources.forEach { source ->
-            // Try API-fetched stream IDs
             val streamInfos = try {
                 val apiUrl = "$mainUrl/api/stream/$source/$normalizedMatchId"
                 val response = app.get(apiUrl, headers = baseHeaders, interceptor = cfKiller, timeout = defaultTimeout)
@@ -151,7 +150,6 @@ class StreamedProvider : MainAPI() {
                     }
                 }
             } else {
-                // Fallback to raw matchId
                 for (streamNo in 1..maxStreams) {
                     val streamUrl = "$mainUrl/watch/$matchId/$source/$streamNo"
                     val pageResponse = try {
@@ -237,7 +235,6 @@ class StreamedMediaExtractor {
     ): Boolean {
         Log.d("StreamedMediaExtractor", "Starting extraction for: $streamUrl (ID: $streamId)")
 
-        // Fetch stream page cookies
         val streamResponse = try {
             app.get(streamUrl, headers = baseHeaders, interceptor = cfKiller, timeout = defaultTimeout)
         } catch (e: Exception) {
@@ -247,11 +244,9 @@ class StreamedMediaExtractor {
         val streamCookies = streamResponse.cookies
         Log.d("StreamedMediaExtractor", "Stream cookies for $source/$streamNo: $streamCookies")
 
-        // Fetch event cookies
         val eventCookies = fetchEventCookies(streamUrl, streamUrl)
         Log.d("StreamedMediaExtractor", "Event cookies for $source/$streamNo: $eventCookies")
 
-        // Combine cookies
         val combinedCookies = buildString {
             if (streamCookies.isNotEmpty()) {
                 append(streamCookies.entries.joinToString("; ") { "${it.key}=${it.value}" })
@@ -267,7 +262,6 @@ class StreamedMediaExtractor {
         }
         Log.d("StreamedMediaExtractor", "Combined cookies for $source/$streamNo: $combinedCookies")
 
-        // POST to fetch encrypted string
         val postData = mapOf(
             "source" to source,
             "id" to streamId,
@@ -296,13 +290,11 @@ class StreamedMediaExtractor {
         }
         Log.d("StreamedMediaExtractor", "Encrypted response for $source/$streamNo: $encryptedResponse")
 
-        // Decrypt using Deno
         val decryptedPath = decryptWithRetry(encryptedResponse) ?: return false.also {
             Log.e("StreamedMediaExtractor", "Decryption failed for $source/$streamNo")
         }
         Log.d("StreamedMediaExtractor", "Decrypted path for $source/$streamNo: $decryptedPath")
 
-        // Construct and test M3U8 URL
         val m3u8Url = "https://rr.buytommy.top$decryptedPath"
         val keyUrl = "https://rr.buytommy.top/$source/key/$source-$streamId-$streamNo/f.key"
         val m3u8Headers = baseHeaders + mapOf(
@@ -315,7 +307,6 @@ class StreamedMediaExtractor {
                 val testUrl = m3u8Url.replace("rr.buytommy.top", domain)
                 val testResponse = app.get(testUrl, headers = m3u8Headers, interceptor = cfKiller, timeout = defaultTimeout)
                 if (testResponse.code == 200 && testResponse.text.contains("#EXTM3U")) {
-                    // Verify key availability
                     val keyAvailable = try {
                         val keyResponse = app.get(keyUrl, headers = m3u8Headers, interceptor = cfKiller, timeout = defaultTimeout)
                         keyResponse.code == 200 && keyResponse.text.isNotBlank()
@@ -333,7 +324,7 @@ class StreamedMediaExtractor {
                                 quality = if (isHd) Qualities.P1080.value else Qualities.Unknown.value,
                                 type = ExtractorLinkType.M3U8,
                                 headers = m3u8Headers,
-                                extractorData = keyUrl // Pass key URL as extractorData
+                                extractorData = keyUrl
                             )
                         )
                         Log.d("StreamedMediaExtractor", "Valid M3U8 URL added for $source/$streamNo: $testUrl")
@@ -372,7 +363,7 @@ class StreamedMediaExtractor {
             } catch (e: Exception) {
                 Log.w("StreamedMediaExtractor", "Decryption attempt ${attempt + 1} failed: ${e.message}")
             }
-            if (attempt < maxRetries - 1) delay(1000L * (1 shl attempt)) // Exponential backoff
+            if (attempt < maxRetries - 1) delay(1000L * (1 shl attempt))
         }
         Log.e("StreamedMediaExtractor", "All decryption attempts failed")
         return null
