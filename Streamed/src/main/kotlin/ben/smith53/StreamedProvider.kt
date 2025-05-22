@@ -101,7 +101,6 @@ class StreamedProvider : MainAPI() {
         return newLiveStreamLoadResponse(
             name = title,
             url = url,
-            apiName = this.name,
             dataUrl = url
         ) {
             this.posterUrl = posterUrl
