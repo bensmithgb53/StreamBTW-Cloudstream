@@ -21,12 +21,12 @@ class StreamedProvider : MainAPI() {
     override var supportedTypes = setOf(TvType.Live)
     override val hasMainPage = true
 
-    private val maxStreams = 4
+    private val maxStreams = 4 // Still a fallback/general max, less critical now
     private val fetchUrl = "https://embedstreams.top/fetch"
     private val cookieUrl = "https://fishy.streamed.su/api/event"
     private val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
     private val baseHeaders = mapOf(
-        "User-Agent" to "Mozilla/5.5 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36", // Changed User-Agent slightly
+        "User-Agent" to "Mozilla/5.5 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
         "Content-Type" to "application/json",
         "Accept" to "application/vnd.apple.mpegurl, */*",
         "Origin" to "https://embedstreams.top"
@@ -104,54 +104,48 @@ class StreamedProvider : MainAPI() {
             null
         }
 
-        val availableSources = matchDetails?.matchSources?.map { it.sourceName }?.toSet() ?: emptySet()
-        Log.d("StreamedProvider", "Available sources for $matchId: $availableSources")
-
-        val sourcesToProcess = if (availableSources.isNotEmpty()) {
-            availableSources.toList()
-        } else {
-            Log.w("StreamedProvider", "No specific sources found from API for $matchId, using general list.")
-            listOf("alpha", "bravo", "charlie", "delta", "echo", "foxtrot")
+        val matchSources = matchDetails?.matchSources ?: emptyList()
+        if (matchSources.isEmpty()) {
+            Log.w("StreamedProvider", "No specific sources reported by API for $matchId. Cannot find streams.")
+            return false
         }
 
-        for (source in sourcesToProcess) {
+        for (matchSource in matchSources) {
+            val sourceName = matchSource.sourceName
+            // Use the specific ID provided in matchSource for this source if available, otherwise fallback to matchId
+            // The network console output shows that bravo uses a different ID.
+            val apiStreamId = matchSource.id ?: matchId
+            
+            // Try to fetch specific stream info for this reported source and match ID
             val streamInfos = try {
-                // Corrected: Assign the result of app.get to a variable 'response'
-                val response = app.get("$mainUrl/api/stream/$source/$matchId", timeout = StreamedMediaExtractor.EXTRACTOR_TIMEOUT_MILLIS).text
+                val response = app.get("$mainUrl/api/stream/$sourceName/$apiStreamId", timeout = StreamedMediaExtractor.EXTRACTOR_TIMEOUT_MILLIS).text
                 parseJson<List<StreamInfo>>(response).filter { it.embedUrl.isNotBlank() }
             } catch (e: Exception) {
-                Log.w("StreamedProvider", "No stream info from API for $source ($matchId): ${e.message}")
+                Log.w("StreamedProvider", "No active stream info from API for source '$sourceName' (API ID: $apiStreamId): ${e.message}")
                 emptyList()
             }
 
             if (streamInfos.isNotEmpty()) {
                 streamInfos.forEach { stream ->
-                    val streamId = stream.id
+                    val streamIdForExtractor = stream.id // Use the ID provided in the StreamInfo for extraction
                     val streamNo = stream.streamNo
                     val language = stream.language
                     val isHd = stream.hd
-                    val streamUrl = "$mainUrl/watch/$matchId/$source/$streamNo"
-                    Log.d("StreamedProvider", "Processing stream URL: $streamUrl (ID: $streamId, Language: $language, HD: $isHd)")
-                    if (extractor.getUrl(streamUrl, streamId, source, streamNo, language, isHd, subtitleCallback, callback)) {
-                        success = true
-                    }
-                }
-            } else if (availableSources.isEmpty()) {
-                Log.w("StreamedProvider", "No stream info from API for $source ($matchId), trying fallback streamNo.")
-                for (streamNo in 1..maxStreams) {
-                    val streamUrl = "$mainUrl/watch/$matchId/$source/$streamNo"
-                    Log.d("StreamedProvider", "Processing fallback stream URL: $streamUrl (ID: $matchId)")
-                    if (extractor.getUrl(streamUrl, matchId, source, streamNo, "Unknown", false, subtitleCallback, callback)) {
+                    val streamUrl = "$mainUrl/watch/$matchId/$sourceName/$streamNo" // URL structure for the viewer page
+                    Log.d("StreamedProvider", "Processing stream URL: $streamUrl (API ID: $apiStreamId, StreamInfo ID: $streamIdForExtractor, Language: $language, HD: $isHd)")
+                    
+                    // Pass the streamIdForExtractor (from StreamInfo) to the extractor
+                    if (extractor.getUrl(streamUrl, streamIdForExtractor, sourceName, streamNo, language, isHd, subtitleCallback, callback)) {
                         success = true
                     }
                 }
             } else {
-                Log.d("StreamedProvider", "Source '$source' is reported as available but no stream info found from API for $matchId.")
+                Log.d("StreamedProvider", "Source '$sourceName' (API ID: $apiStreamId) is reported as available in match details but no active stream info found for it from API for $matchId.")
             }
         }
 
         if (!success) {
-            Log.e("StreamedProvider", "No links found for $matchId after all attempts.")
+            Log.e("StreamedProvider", "No working links found for $matchId after checking reported sources.")
         }
         return success
     }
@@ -166,11 +160,11 @@ class StreamedProvider : MainAPI() {
 
     data class MatchSource(
         @JsonProperty("source") val sourceName: String,
-        @JsonProperty("id") val id: String
+        @JsonProperty("id") val id: String // This is the source-specific ID to use in the /api/stream/{source}/{id} URL
     )
 
     data class StreamInfo(
-        @JsonProperty("id") val id: String,
+        @JsonProperty("id") val id: String, // This is the ID specific to the stream within that source
         @JsonProperty("streamNo") val streamNo: Int,
         @JsonProperty("language") val language: String,
         @JsonProperty("hd") val hd: Boolean,
@@ -184,7 +178,7 @@ class StreamedMediaExtractor {
     private val cookieUrl = "https://fishy.streamed.su/api/event"
     private val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
     private val baseHeaders = mapOf(
-        "User-Agent" to "Mozilla/5.5 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36", // Changed User-Agent slightly
+        "User-Agent" to "Mozilla/5.5 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
         "Content-Type" to "application/json",
         "Accept" to "application/vnd.apple.mpegurl, */*",
         "Origin" to "https://embedstreams.top"
@@ -194,12 +188,12 @@ class StreamedMediaExtractor {
 
     companion object {
         const val EXTRACTOR_TIMEOUT_SECONDS = 30
-        const val EXTRACTOR_TIMEOUT_MILLIS = EXTRACTOR_TIMEOUT_SECONDS * 1000L // Convert to Long milliseconds
+        const val EXTRACTOR_TIMEOUT_MILLIS = EXTRACTOR_TIMEOUT_SECONDS * 1000L
     }
 
     suspend fun getUrl(
         streamUrl: String,
-        streamId: String,
+        streamId: String, // This now consistently refers to the StreamInfo.id or MatchSource.id
         source: String,
         streamNo: Int,
         language: String,
@@ -207,9 +201,8 @@ class StreamedMediaExtractor {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        Log.d("StreamedMediaExtractor", "Starting extraction for: $streamUrl (ID: $streamId)")
+        Log.d("StreamedMediaExtractor", "Starting extraction for: $streamUrl (Stream ID for extraction: $streamId)")
 
-        // Fetch stream page cookies
         val streamResponse = try {
             app.get(streamUrl, headers = baseHeaders, timeout = EXTRACTOR_TIMEOUT_MILLIS)
         } catch (e: Exception) {
@@ -219,11 +212,9 @@ class StreamedMediaExtractor {
         val streamCookies = streamResponse.cookies
         Log.d("StreamedMediaExtractor", "Stream cookies for $source/$streamNo: $streamCookies")
 
-        // Fetch event cookies
         val eventCookies = fetchEventCookies(streamUrl, streamUrl)
         Log.d("StreamedMediaExtractor", "Event cookies for $source/$streamNo: $eventCookies")
 
-        // Combine cookies
         val combinedCookies = buildString {
             if (streamCookies.isNotEmpty()) {
                 append(streamCookies.entries.joinToString("; ") { "${it.key}=${it.value}" })
@@ -239,13 +230,12 @@ class StreamedMediaExtractor {
         }
         Log.d("StreamedMediaExtractor", "Combined cookies for $source/$streamNo: $combinedCookies")
 
-        // POST to fetch encrypted string
         val postData = mapOf(
             "source" to source,
-            "id" to streamId,
+            "id" to streamId, // Crucial: Use the specific streamId for this source
             "streamNo" to streamNo.toString()
         )
-        val embedReferer = "https://embedstreams.top/embed/$source/$streamId/$streamNo"
+        val embedReferer = "https://embedstreams.top/embed/$source/$streamId/$streamNo" // Referer also uses this ID
         val fetchHeaders = baseHeaders + mapOf(
             "Referer" to streamUrl,
             "Cookie" to combinedCookies
@@ -268,7 +258,6 @@ class StreamedMediaExtractor {
         }
         Log.d("StreamedMediaExtractor", "Encrypted response for $source/$streamNo: $encryptedResponse")
 
-        // Decrypt using Deno
         val decryptPostData = mapOf("encrypted" to encryptedResponse)
         val decryptResponse = try {
             app.post(decryptUrl, json = decryptPostData, headers = mapOf("Content-Type" to "application/json"), timeout = EXTRACTOR_TIMEOUT_MILLIS)
@@ -282,14 +271,12 @@ class StreamedMediaExtractor {
         }
         Log.d("StreamedMediaExtractor", "Decrypted path for $source/$streamNo: $decryptedPath")
 
-        // Construct M3U8 URL
         val m3u8Url = "https://rr.buytommy.top$decryptedPath"
         val m3u8Headers = baseHeaders + mapOf(
             "Referer" to embedReferer,
             "Cookie" to combinedCookies
         )
 
-        // Test M3U8 with fallbacks
         var linkFound = false
         for (domain in listOf("rr.buytommy.top") + fallbackDomains) {
             try {
@@ -310,30 +297,13 @@ class StreamedMediaExtractor {
                     )
                     Log.d("StreamedMediaExtractor", "M3U8 URL added for $source/$streamNo: $testUrl")
                     linkFound = true
-                    break // Stop after the first successful domain
+                    break
                 } else {
                     Log.w("StreamedMediaExtractor", "M3U8 test failed for $domain with code: ${testResponse.code}")
                 }
             } catch (e: Exception) {
                 Log.e("StreamedMediaExtractor", "M3U8 test failed for $domain: ${e.message}")
             }
-        }
-
-        if (!linkFound) {
-            callback.invoke(
-                newExtractorLink(
-                    source = "Streamed",
-                    name = "$source Stream $streamNo ($language${if (isHd) ", HD" else ""})",
-                    url = m3u8Url,
-                    type = ExtractorLinkType.M3U8
-                ) {
-                    this.referer = embedReferer
-                    this.quality = if (isHd) Qualities.P1080.value else Qualities.Unknown.value
-                    this.headers = m3u8Headers
-                }
-            )
-            Log.d("StreamedMediaExtractor", "M3U8 test failed but added original URL anyway for $source/$streamNo: $m3u8Url")
-            return true
         }
 
         return linkFound
