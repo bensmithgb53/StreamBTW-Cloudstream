@@ -26,7 +26,7 @@ class StreamedProvider : MainAPI() {
     private val cookieUrl = "https://fishy.streamed.su/api/event"
     private val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
     private val baseHeaders = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
+        "User-Agent" to "Mozilla/5.5 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36", // Changed User-Agent slightly
         "Content-Type" to "application/json",
         "Accept" to "application/vnd.apple.mpegurl, */*",
         "Origin" to "https://embedstreams.top"
@@ -98,7 +98,6 @@ class StreamedProvider : MainAPI() {
         var success = false
 
         val matchDetails = try {
-            // Increased timeout for this specific API call as well
             app.get("$mainUrl/api/matches/live/$matchId", timeout = StreamedMediaExtractor.EXTRACTOR_TIMEOUT_MILLIS).parsedSafe<Match>()
         } catch (e: Exception) {
             Log.e("StreamedProvider", "Failed to fetch match details for $matchId: ${e.message}")
@@ -117,7 +116,8 @@ class StreamedProvider : MainAPI() {
 
         for (source in sourcesToProcess) {
             val streamInfos = try {
-                app.get("$mainUrl/api/stream/$source/$matchId", timeout = StreamedMediaExtractor.EXTRACTOR_TIMEOUT_MILLIS).text
+                // Corrected: Assign the result of app.get to a variable 'response'
+                val response = app.get("$mainUrl/api/stream/$source/$matchId", timeout = StreamedMediaExtractor.EXTRACTOR_TIMEOUT_MILLIS).text
                 parseJson<List<StreamInfo>>(response).filter { it.embedUrl.isNotBlank() }
             } catch (e: Exception) {
                 Log.w("StreamedProvider", "No stream info from API for $source ($matchId): ${e.message}")
@@ -184,7 +184,7 @@ class StreamedMediaExtractor {
     private val cookieUrl = "https://fishy.streamed.su/api/event"
     private val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
     private val baseHeaders = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
+        "User-Agent" to "Mozilla/5.5 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36", // Changed User-Agent slightly
         "Content-Type" to "application/json",
         "Accept" to "application/vnd.apple.mpegurl, */*",
         "Origin" to "https://embedstreams.top"
@@ -192,7 +192,6 @@ class StreamedMediaExtractor {
     private val fallbackDomains = listOf("p2-panel.streamed.su", "streamed.su")
     private val cookieCache = mutableMapOf<String, String>()
 
-    // Use companion object to access from StreamedProvider
     companion object {
         const val EXTRACTOR_TIMEOUT_SECONDS = 30
         const val EXTRACTOR_TIMEOUT_MILLIS = EXTRACTOR_TIMEOUT_SECONDS * 1000L // Convert to Long milliseconds
