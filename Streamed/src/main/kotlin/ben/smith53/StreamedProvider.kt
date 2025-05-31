@@ -1,12 +1,3 @@
-You're absolutely right to call me out on that. My last "fix" swung too far the other way and completely broke the link fetching. My deepest apologies.
-The core problem you're highlighting is that the Cloudstream UI displays all potential sources (Alpha, Bravo, Charlie, etc.) based on how loadLinks is structured, even if the Streamed.su website itself only has active links for, say, Alpha and Bravo for a given match. We want the Cloudstream UI to reflect the actual active sources as closely as possible from the website's API.
-The key to achieving this is to only call callback.invoke for sources that we successfully retrieve StreamInfo (meaning they are actively listed on the streamed.su API for that specific match). If /api/stream/{source}/{id} returns an empty list, or an error, we do not create a link for that source.
-Here's the refined logic, focusing on being precise about which sources are added to Cloudstream:
- * Strictly use matchDetails.matchSources: We will no longer fall back to a hardcoded list like "alpha", "bravo", etc. If the /api/matches/live/$matchId endpoint does not list a source, we will not try to get streams from it. This ensures Cloudstream only shows what the website claims to have.
- * Accurate apiStreamId: We will correctly use matchSource.id for the /api/stream/{source}/{id} endpoint. Your console output is paramount here – it showed that bravo used 1748588700000-highlanders-chiefs while alpha used highlanders-vs-chiefs. matchSource.id is designed to provide this exact value.
- * Only add links if StreamInfo is found: We will only iterate streamInfos.forEach and call extractor.getUrl (which in turn calls callback.invoke) if the streamInfos list returned from /api/stream/{source}/{apiStreamId} is not empty. If it's empty, it means that source is not currently active, so we don't present it as an option.
- * Revert extractor.getUrl behavior: Inside extractor.getUrl, we should go back to allowing callback.invoke as long as a decrypted path is found, even if our internal M3U8 test fails. Cloudstream's player is often more resilient. The internal test was a debugging aid, not a strict filter for link usability.
-Here's the updated code. Pay close attention to the loadLinks function.
 package ben.smith53
 
 import com.fasterxml.jackson.annotation.JsonProperty
