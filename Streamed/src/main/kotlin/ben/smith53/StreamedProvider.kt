@@ -14,7 +14,6 @@ import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import kotlinx.coroutines.delay
-// import android.net.Uri // No longer needed if rr.buytommy.top is hardcoded
 
 class StreamedProvider : MainAPI() {
     override var mainUrl = "https://streamed.su"
@@ -214,8 +213,8 @@ class StreamedMediaExtractor {
         val streamCookies = streamResponse.cookies
         Log.d("StreamedMediaExtractor", "Stream cookies for $source/$streamNo (from Streamed.su): $streamCookies")
 
-        // Then, fetch event cookies using the embedUrl as referrer for the event API call
-        val eventCookies = fetchEventCookies(embedUrlFromStreamInfo, embedUrlFromStreamInfo) // Use embedUrl for event cookies logic
+        // Then, fetch event cookies using the *streamPageUrl* as referrer, as was likely working before
+        val eventCookies = fetchEventCookies(streamPageUrl, streamPageUrl) // REVERTED to original logic here
         Log.d("StreamedMediaExtractor", "Event cookies for $source/$streamNo (from Fishy.Streamed.su): $eventCookies")
 
         // Combine all obtained cookies
@@ -229,14 +228,14 @@ class StreamedMediaExtractor {
             }
         }
         if (combinedCookies.isEmpty()) {
-            Log.e("StreamedMediaExtractor", "No cookies obtained for $source/$streamNo. This might cause issues.")
+            Log.e("StreamedMediaExtractor", "No cookies obtained for $source/$streamNo. This might cause issues, but proceeding.")
             // Don't return false immediately, proceed and see if it works without full cookies.
         }
         Log.d("StreamedMediaExtractor", "Combined cookies for $source/$streamNo: $combinedCookies")
 
         // Headers for the /fetch POST request to embedstreams.top
         val fetchHeaders = baseHeaders + mapOf(
-            "Referer" to embedUrlFromStreamInfo, // Referer must be the embed URL for embedstreams.top
+            "Referer" to streamPageUrl, // REVERTED: Referer must be the streamed.su watch page for embedstreams.top/fetch
             "Cookie" to combinedCookies
         )
 
@@ -276,11 +275,11 @@ class StreamedMediaExtractor {
         }
         Log.d("StreamedMediaExtractor", "Decrypted path for $source/$streamNo: $decryptedPath")
 
-        // REVERTED: Use the hardcoded rr.buytommy.top as the base domain for the m3u8Url
+        // M3U8 URL construction: back to the hardcoded domain you confirmed works
         val m3u8Url = "https://rr.buytommy.top$decryptedPath"
         Log.d("StreamedMediaExtractor", "Constructed M3U8 URL (fixed): $m3u8Url")
 
-        // Headers for the final M3U8 playback
+        // Headers for the final M3U8 playback - Referer for the HLS stream should be the embed URL
         val m3u8Headers = baseHeaders + mapOf(
             "Referer" to embedUrlFromStreamInfo, // Referer should be the embed URL for the HLS stream
             "Cookie" to combinedCookies
@@ -295,7 +294,7 @@ class StreamedMediaExtractor {
                 url = m3u8Url,
                 type = ExtractorLinkType.M3U8
             ) {
-                this.referer = embedUrlFromStreamInfo
+                this.referer = embedUrlFromStreamInfo // Use the embed URL as the referer here too
                 this.quality = if (isHd) Qualities.P1080.value else Qualities.Unknown.value
                 this.headers = m3u8Headers
             }
