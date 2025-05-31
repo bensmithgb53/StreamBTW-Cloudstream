@@ -256,7 +256,7 @@ class StreamedMediaExtractor {
         )
 
         // Use AppUtils.toJson for consistent JSON serialization
-        val jsonStr = AppUtils.toJson(data) // Corrected toJson call
+        val jsonStr = com.lagradost.cloudstream3.utils.AppUtils.toJson(data) // Fully qualify the call
         Log.d("StreamedMediaExtractor", "X-TOK JSON String: $jsonStr")
 
         val digest = MessageDigest.getInstance("SHA-256")
@@ -372,7 +372,7 @@ class StreamedMediaExtractor {
         // Construct M3U8 URL
         val m3u8UrlBase = "https://rr.buytommy.top"
         val m3u8Url = "$m3u8UrlBase$decryptedPath"
-        val m3u8Headers = baseHeaders.toMutableMap().apply { // Corrected variable name from m3u38Headers to m3u8Headers
+        val m3u8Headers = baseHeaders.toMutableMap().apply {
             this["Referer"] = embedReferer
             this["Cookie"] = finalCombinedCookies
         }
@@ -384,7 +384,7 @@ class StreamedMediaExtractor {
             try {
                 val testUrl = m3u8Url.replace(m3u8UrlBase, "https://$domain")
                 Log.d("StreamedMediaExtractor", "Testing M3U8 URL: $testUrl with domain: $domain")
-                val testResponse = app.get(testUrl, headers = m3u8Headers, timeout = EXTRACTOR_TIMEOUT_MILLIS) // Corrected variable name
+                val testResponse = app.get(testUrl, headers = m3u8Headers, timeout = EXTRACTOR_TIMEOUT_MILLIS)
                 if (testResponse.code == 200) {
                     callback.invoke(
                         newExtractorLink(
@@ -395,7 +395,7 @@ class StreamedMediaExtractor {
                         ) {
                             this.referer = embedReferer
                             this.quality = if (isHd) Qualities.P1080.value else Qualities.Unknown.value
-                            this.headers = m3u8Headers // Corrected variable name
+                            this.headers = m3u8Headers
                         }
                     )
                     Log.d("StreamedMediaExtractor", "M3U8 URL added successfully for $source/$streamNo: $testUrl")
@@ -427,7 +427,7 @@ class StreamedMediaExtractor {
             try {
                 val response = app.post(
                     cookieUrl,
-                    data = mapOf(),
+                    data = mapOf(), // data is empty, requestBody is used
                     headers = mapOf("Content-Type" to "text/plain"),
                     requestBody = payload.toRequestBody("text/plain".toMediaType()),
                     timeout = EXTRACTOR_TIMEOUT_MILLIS
