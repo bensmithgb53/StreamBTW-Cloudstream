@@ -1,6 +1,7 @@
 package ben.smith53
 
 import com.fasterxml.jackson.annotation.JsonProperty
+import com.google.gson.Gson
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
@@ -14,8 +15,37 @@ import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import kotlinx.coroutines.delay
-import com.lagradost.cloudstream3.network.CloudflareKiller // Import CloudflareKiller
-import okhttp3.Interceptor // For adding interceptor
+import com.lagradost.cloudstream3.network.CloudflareKiller
+import okhttp3.Interceptor
+import java.security.MessageDigest // For SHA-256
+import java.util.TimeZone // For timezone info
+
+// For the dummy WebGL info, we'll need to mock some types or use simple data classes
+// No need to create actual canvas/GL context
+data class WebGLInfo(
+    val vendor: String,
+    val renderer: String,
+    val params: Map<String, Any>, // Params can be varied, using Any
+    val exts: List<String>
+)
+
+// Data class to represent the client fingerprint data for JSON stringification
+data class ClientFingerprintData(
+    val timezone: String,
+    val timezoneOffset: Int,
+    val userAgent: String,
+    val screenSize: String,
+    val pixelDepth: Int,
+    val touch: Boolean,
+    val deviceMemory: String, // Can be "none" or actual value
+    val platform: String,
+    val touchPoints: Int,
+    val hardwareConcurrency: Int,
+    val intlDisplayNames: String,
+    val mimeTypes: List<String>,
+    val plugins: List<String>,
+    val webgl: WebGLInfo
+)
 
 class StreamedProvider : MainAPI() {
     override var mainUrl = "https://streamed.su"
@@ -107,7 +137,7 @@ class StreamedProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean = withContext(Dispatchers.IO) {
         val matchId = data.substringAfterLast("/")
-        val extractor = StreamedMediaExtractor() // Creates an instance, which will run the init block for CloudflareKiller
+        val extractor = StreamedMediaExtractor()
         var success = false
 
         Log.d(TAG, "Attempting to load links for match ID: $matchId")
@@ -202,7 +232,7 @@ class StreamedMediaExtractor {
         private val DECRYPT_API_URL = StreamedProvider.DECRYPT_API_URL
         private val PRIMARY_M3U8_DOMAIN = StreamedProvider.PRIMARY_M3U8_DOMAIN
         private val FALLBACK_M3U8_DOMAINS = StreamedProvider.FALLBACK_M3U8_DOMAINS
-        private val BASE_HEADERS = StreamedProvider.BASE_HEADERS
+        internal val BASE_HEADERS = StreamedProvider.BASE_HEADERS // Make internal for X-TOK generation
         private val NETWORK_TIMEOUT_MILLIS = StreamedProvider.NETWORK_TIMEOUT_MILLIS
 
         const val EXTRACTOR_TIMEOUT_SECONDS = 30
@@ -213,6 +243,9 @@ class StreamedMediaExtractor {
         // Flag to ensure the interceptor is added only once globally
         @Volatile
         private var isInterceptorAdded = false
+
+        // Gson instance for JSON serialization
+        private val gson = Gson()
     }
 
     private val cookieCache = mutableMapOf<String, String>()
@@ -231,6 +264,112 @@ class StreamedMediaExtractor {
             }
         }
     }
+
+    // --- NEW: Replicating generateClient() for X-TOK ---
+    private fun getHash(message: String): String {
+        val md = MessageDigest.getInstance("SHA-256")
+        val hashBytes = md.digest(message.toByteArray(Charsets.UTF_8))
+        return hashBytes.joinToString("") { "%02x".format(it) }
+    }
+
+    // Helper for safe execution with fallback
+    private inline fun <T> safe(crossinline fn: () -> T, fallback: T): T {
+        return try {
+            fn() ?: fallback // Use ?: for null safety
+        } catch (e: Exception) {
+            Log.w(TAG, "Safe function failed: ${e.message}")
+            fallback
+        }
+    }
+
+    // Mocking WebGL Info - we can't get actual WebGL info on Android like a browser
+    private fun getWebGLInfo(): WebGLInfo {
+        return WebGLInfo(
+            vendor = safe({ (BASE_HEADERS["User-Agent"] ?: "none").contains("Chrome") then "Google Inc." else "none" }, "none"), // Simple guess
+            renderer = safe({ (BASE_HEADERS["User-Agent"] ?: "none").contains("Mobile") then "ANGLE (Google Inc., Google Play Services for AR, OpenGL ES 3.2)" else "none" }, "none"), // Common mobile renderer
+            params = mapOf(
+                "ALIASED_LINE_WIDTH_RANGE" to listOf(1.0, 1.0),
+                "ALIASED_POINT_SIZE_RANGE" to listOf(1.0, 100.0),
+                "ALPHA_BITS" to 8,
+                "BLUE_BITS" to 8,
+                "DEPTH_BITS" to 24,
+                "MAX_COMBINED_TEXTURE_IMAGE_UNITS" to 32,
+                "MAX_CUBE_MAP_TEXTURE_SIZE" to 16384,
+                "MAX_FRAGMENT_UNIFORM_VECTORS" to 1024,
+                "MAX_RENDERBUFFER_SIZE" to 16384,
+                "MAX_TEXTURE_IMAGE_UNITS" to 16,
+                "MAX_TEXTURE_SIZE" to 16384,
+                "MAX_VARYING_VECTORS" to 15,
+                "MAX_VERTEX_ATTRIBS" to 16,
+                "MAX_VERTEX_TEXTURE_IMAGE_UNITS" to 16,
+                "MAX_VERTEX_UNIFORM_VECTORS" to 1024,
+                "RED_BITS" to 8,
+                "RENDERER" to "Google Inc.", // Default Android renderer
+                "SHADING_LANGUAGE_VERSION" to "WebGL GLSL ES 3.00 (OpenGL ES GLSL ES 3.20)",
+                "STENCIL_BITS" to 0,
+                "VENDOR" to "Google Inc.",
+                "VERSION" to "WebGL 2.0 (OpenGL ES 3.20)",
+            ),
+            exts = listOf(
+                "ANGLE_instanced_arrays", "EXT_blend_minmax", "EXT_color_buffer_half_float",
+                "EXT_disjoint_timer_query", "EXT_float_blend", "EXT_frag_depth",
+                "EXT_shader_texture_lod", "EXT_sRGB", "EXT_texture_filter_anisotropic",
+                "WEBGL_compressed_texture_astc", "WEBGL_compressed_texture_etc", "WEBGL_compressed_texture_s3tc",
+                "WEBGL_debug_renderer_info", "WEBGL_debug_shaders", "WEBGL_lose_context",
+                "WEBGL_multi_draw", "OES_element_index_uint", "OES_fbo_render_mipmap",
+                "OES_standard_derivatives", "OES_texture_float", "OES_texture_float_linear",
+                "OES_texture_half_float", "OES_texture_half_float_linear", "OES_vertex_array_object"
+            )
+        )
+    }
+
+    // Mocking MimeTypes and Plugins - these are browser-specific and often dynamic
+    // We'll provide some common Android/mobile browser-like values
+    private fun getMimeTypes(): List<String> {
+        return listOf(
+            "application/pdf", "application/x-google-chrome-pdf",
+            "application/x-shockwave-flash", "application/x-java-applet",
+            "application/x-webkit-webarchive", "image/webp"
+        )
+    }
+
+    private fun getPlugins(): List<String> {
+        return listOf(
+            "Chrome PDF Viewer", "Chromium PDF Viewer",
+            "Widevine Content Decryption Module", "Adobe Flash Player"
+        )
+    }
+
+    private suspend fun generateXTok(): String = withContext(Dispatchers.Default) {
+        val currentLocale = Locale.getDefault()
+        val defaultTimezone = TimeZone.getDefault()
+        val timezoneOffsetMinutes = defaultTimezone.rawOffset / (1000 * 60) + defaultTimezone.dstSavings / (1000 * 60)
+
+        val userAgentString = BASE_HEADERS["User-Agent"] ?: "none" // Use our defined User-Agent
+
+        // These values are mocked to represent a typical Android device.
+        val data = ClientFingerprintData(
+            timezone = safe({ defaultTimezone.id }, "none"),
+            timezoneOffset = safe({ timezoneOffsetMinutes }, 0),
+            userAgent = userAgentString,
+            screenSize = safe({ "${AppUtils.get ; ; }px${AppUtils.get; ;}" }, "1920x1080"), // Placeholder for screen width/height, replace with actual if available
+            pixelDepth = safe({ 24 }, 24), // Common pixel depth
+            touch = safe({ true }, false), // Most Android devices have touch
+            deviceMemory = safe({ "8" }, "none"), // Common device memory value
+            platform = safe({ "Android" }, "none"), // Android platform
+            touchPoints = safe({ 5 }, 0), // Common touch points
+            hardwareConcurrency = safe({ 4 }, 2), // Common CPU cores
+            intlDisplayNames = safe({ "supported" }, "none"), // Assume modern Android supports this
+            mimeTypes = getMimeTypes(),
+            plugins = getPlugins(),
+            webgl = getWebGLInfo()
+        )
+
+        val jsonStr = gson.toJson(data)
+        Log.d(TAG, "X-TOK fingerprint JSON: $jsonStr")
+        return@withContext getHash(jsonStr)
+    }
+    // --- END NEW: Replicating generateClient() ---
 
     suspend fun getUrl(
         streamUrl: String,
@@ -272,33 +411,10 @@ class StreamedMediaExtractor {
         Log.d(TAG, "Combined explicit cookies for $source/$streamNo: $combinedCookiesForHeader")
 
 
-        // --- NEW STEP: Fetch the embed page to get the X-Tok header ---
-        var xTok: String? = null
-        try {
-            val embedPageResponse = app.get(embedReferer, headers = BASE_HEADERS, timeout = NETWORK_TIMEOUT_MILLIS)
-            if (embedPageResponse.code == 200) {
-                // Parse the HTML to find the X-Tok. This is a common pattern for tokens.
-                // We're looking for something like: X-Tok: "some_hex_string" or var tok = "some_hex_string";
-                // This regex is a guess, you might need to adjust it based on the actual JS on the page.
-                // It looks for `X-Tok: "..."` or `tok="..."` or similar assignments.
-                val regex = Regex("""X-Tok\s*:\s*["']?([a-fA-F0-9]+)["']?|tok\s*=\s*["']([a-fA-F0-9]+)["']""")
-                val match = regex.find(embedPageResponse.text)
-
-                xTok = match?.groupValues?.get(1) // Capture group 1 or 2 depending on the match.
-                    ?: match?.groupValues?.get(2) // Fallback for the second capture group in the regex.
-
-                if (xTok.isNullOrBlank()) {
-                    Log.w(TAG, "X-Tok not found in embed page HTML for $embedReferer.")
-                } else {
-                    Log.d(TAG, "Found X-Tok: $xTok")
-                }
-            } else {
-                Log.e(TAG, "Failed to fetch embed page $embedReferer with code: ${embedPageResponse.code}")
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Exception fetching embed page $embedReferer: ${e.message}", e)
-        }
-        // --- END NEW STEP ---
+        // --- NEW: Generate the X-TOK header using replicated logic ---
+        val xTok = generateXTok()
+        Log.d(TAG, "Generated X-TOK: $xTok")
+        // --- END NEW ---
 
 
         // 3. POST to fetch encrypted string from embedstreams.top/fetch
@@ -307,15 +423,11 @@ class StreamedMediaExtractor {
             "id" to streamId,
             "streamNo" to streamNo.toString()
         )
-        // Headers for the /fetch POST request. Add X-Tok if found.
+        // Headers for the /fetch POST request. Add X-Tok.
         val fetchHeaders = BASE_HEADERS.toMutableMap().apply {
-            this["Referer"] = embedReferer // Corrected Referer based on network logs
-            if (combinedCookiesForHeader.isNotEmpty()) {
-                this["Cookie"] = combinedCookiesForHeader
-            }
-            if (!xTok.isNullOrBlank()) {
-                this["X-Tok"] = xTok // Add the extracted X-Tok header
-            }
+            this["Referer"] = embedReferer
+            this["Cookie"] = combinedCookiesForHeader // Always send combined cookies
+            this["X-TOK"] = xTok // Add the generated X-Tok header
             this["Content-Type"] = "application/json"
         }.toMap()
 
@@ -379,7 +491,7 @@ class StreamedMediaExtractor {
                     m3u8Content = response.text
                     finalM3u8UrlUsed = currentM3u8Url
                     Log.d(TAG, "Successfully fetched M3U8 content from $domain.")
-                    break // Stop on first successful fetch
+                    break
                 } else {
                     Log.w(TAG, "Failed to fetch M3U8 content from $domain with code: ${response.code}")
                 }
@@ -440,7 +552,7 @@ class StreamedMediaExtractor {
                     ) {
                         this.referer = embedReferer
                         this.headers = m3u8Headers.toMutableMap()
-                        this.key = keyBytes // Pass the raw key bytes for decryption
+                        this.key = keyBytes
                         this.quality = if (isHd) Qualities.P1080.value else Qualities.Unknown.value
                     }
                 )
