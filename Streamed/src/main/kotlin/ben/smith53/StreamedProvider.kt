@@ -21,6 +21,7 @@ class StreamedProvider : MainAPI() {
     override var supportedTypes = setOf(TvType.Live)
     override val hasMainPage = true
 
+    private val maxStreams = 4 // General max for iterating stream numbers if API doesn't specify
     private val fetchUrl = "https://embedstreams.top/fetch"
     private val cookieUrl = "https://fishy.streamed.su/api/event"
     private val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
@@ -94,72 +95,76 @@ class StreamedProvider : MainAPI() {
     ): Boolean {
         val matchId = data.substringAfterLast("/")
         val extractor = StreamedMediaExtractor()
-        var linksFound = false // Renamed to linksFound to be more descriptive
+        var success = false
 
-        // Step 1: Fetch match details to get reported sources
         val matchDetails = try {
             app.get("$mainUrl/api/matches/live/$matchId", timeout = StreamedMediaExtractor.EXTRACTOR_TIMEOUT_MILLIS).parsedSafe<Match>()
         } catch (e: Exception) {
-            Log.e("StreamedProvider", "LOAD_LINKS_ERROR: Failed to fetch match details for $matchId. Error: ${e.message}. No sources can be identified.")
-            return false // Critical failure: cannot proceed without match details.
+            Log.e("StreamedProvider", "Failed to fetch match details for $matchId: ${e.message}")
+            null
         }
 
-        val matchSources = matchDetails?.matchSources ?: emptyList()
-        if (matchSources.isEmpty()) {
-            Log.w("StreamedProvider", "LOAD_LINKS_INFO: Match details for $matchId returned no reported sources. No links will be added.")
-            return false // No sources listed, so no links can be added.
+        val availableSources = matchDetails?.matchSources?.map { it.sourceName }?.toSet() ?: emptySet()
+        Log.d("StreamedProvider", "Available sources from match details for $matchId: $availableSources")
+
+        // Prioritize sources reported by the API.
+        val sourcesToTry = if (availableSources.isNotEmpty()) {
+            availableSources.toList()
+        } else {
+            // Fallback: If no specific sources are reported (e.g., API is down or changed), try common ones.
+            Log.w("StreamedProvider", "No specific sources found from API for $matchId, using general list as fallback.")
+            listOf("alpha", "bravo", "charlie", "delta", "echo", "foxtrot")
         }
 
-        // Step 2: Iterate through each reported source
-        for (matchSource in matchSources) {
-            val sourceName = matchSource.sourceName
-            val initialApiStreamId = matchSource.id // The ID provided by the /api/matches/live endpoint
-
-            // Try fetching stream info using the initialApiStreamId
-            var streamInfos = try {
-                val response = app.get("$mainUrl/api/stream/$sourceName/$initialApiStreamId", timeout = StreamedMediaExtractor.EXTRACTOR_TIMEOUT_MILLIS).text
+        for (source in sourcesToTry) {
+            // Determine the API ID to use for fetching stream info for this source.
+            // If matchSource.id is available, use it, otherwise fall back to the general matchId.
+            // This is the key correction for handling differing IDs per source.
+            val apiStreamId = matchDetails?.matchSources?.find { it.sourceName == source }?.id ?: matchId
+            
+            val streamInfos = try {
+                val response = app.get("$mainUrl/api/stream/$source/$apiStreamId", timeout = StreamedMediaExtractor.EXTRACTOR_TIMEOUT_MILLIS).text
                 parseJson<List<StreamInfo>>(response).filter { it.embedUrl.isNotBlank() }
             } catch (e: Exception) {
-                Log.w("StreamedProvider", "LOAD_LINKS_WARNING: Failed to get active stream info from API for source '$sourceName' using ID '$initialApiStreamId'. Error: ${e.message}. Attempting fallback ID.")
-                emptyList() // Treat as empty list if API call fails
+                Log.w("StreamedProvider", "No active stream info from API for source '$source' (API ID: $apiStreamId): ${e.message}")
+                emptyList() // Return empty list if API call fails or no info
             }
 
-            // Fallback: If initial attempt failed or returned empty, try with the main matchId
-            if (streamInfos.isEmpty() && initialApiStreamId != matchId) {
-                Log.w("StreamedProvider", "LOAD_LINKS_WARNING: Trying main matchId '$matchId' as fallback for source '$sourceName' as initial ID '$initialApiStreamId' failed.")
-                streamInfos = try {
-                    val response = app.get("$mainUrl/api/stream/$sourceName/$matchId", timeout = StreamedMediaExtractor.EXTRACTOR_TIMEOUT_MILLIS).text
-                    parseJson<List<StreamInfo>>(response).filter { it.embedUrl.isNotBlank() }
-                } catch (e: Exception) {
-                    Log.w("StreamedProvider", "LOAD_LINKS_WARNING: Fallback with main matchId '$matchId' also failed for source '$sourceName'. Error: ${e.message}. Skipping this source.")
-                    emptyList()
-                }
-            }
-            
-            // Step 3: Only process and add links if StreamInfo was successfully retrieved
             if (streamInfos.isNotEmpty()) {
-                Log.d("StreamedProvider", "LOAD_LINKS_SUCCESS: Found ${streamInfos.size} active streams for source '$sourceName'. Adding links to Cloudstream.")
                 streamInfos.forEach { stream ->
-                    val streamIdForExtractor = stream.id // The ID to use for the actual embed/decryption
+                    val streamIdForExtractor = stream.id // Use the ID *from the StreamInfo itself* for extraction
                     val streamNo = stream.streamNo
                     val language = stream.language
                     val isHd = stream.hd
-                    val streamUrl = "$mainUrl/watch/$matchId/$sourceName/$streamNo" // URL for the viewer page
+                    val streamUrl = "$mainUrl/watch/$matchId/$source/$streamNo" // URL structure for the viewer page
+                    Log.d("StreamedProvider", "Processing stream URL: $streamUrl (StreamInfo ID for extractor: $streamIdForExtractor, Source: $source, StreamNo: $streamNo, Language: $language, HD: $isHd)")
                     
-                    Log.d("StreamedProvider", "LOAD_LINKS_DEBUG: Calling extractor for StreamInfo ID: $streamIdForExtractor, Source: $sourceName, StreamNo: $streamNo")
-                    if (extractor.getUrl(streamUrl, streamIdForExtractor, sourceName, streamNo, language, isHd, subtitleCallback, callback)) {
-                        linksFound = true // Mark as true if at least one link is added by the extractor
+                    if (extractor.getUrl(streamUrl, streamIdForExtractor, source, streamNo, language, isHd, subtitleCallback, callback)) {
+                        success = true
+                    }
+                }
+            } else if (source !in availableSources) {
+                // If the source wasn't reported by the API, and we're using it as a general fallback,
+                // then we also need to try iterating through stream numbers if no specific StreamInfo was found.
+                // This is a safety net for non-API-listed sources.
+                Log.w("StreamedProvider", "Source '$source' not directly from API and no StreamInfo, trying fallback streamNo.")
+                for (streamNo in 1..maxStreams) {
+                    val streamUrl = "$mainUrl/watch/$matchId/$source/$streamNo"
+                    Log.d("StreamedProvider", "Processing fallback stream URL: $streamUrl (Match ID: $matchId, Source: $source, StreamNo: $streamNo)")
+                    // Use the general matchId for the extractor's streamId in this fallback scenario
+                    if (extractor.getUrl(streamUrl, matchId, source, streamNo, "Unknown", false, subtitleCallback, callback)) {
+                        success = true
                     }
                 }
             } else {
-                Log.d("StreamedProvider", "LOAD_LINKS_INFO: Source '$sourceName' was reported in match details but returned NO active streams from /api/stream with either ID. Not adding links for this source.")
+                Log.d("StreamedProvider", "Source '$source' (API ID: $apiStreamId) is reported as available but no active stream info found for it from API for $matchId.")
             }
         }
 
-        if (!linksFound) {
-            Log.e("StreamedProvider", "LOAD_LINKS_FINAL: No working links found for $matchId after checking all API-reported sources. This could mean no streams are currently active, or all extraction attempts failed.")
+        if (!success) {
+            Log.e("StreamedProvider", "No working links found for $matchId after all attempts.")
         }
-        return linksFound
+        return success
     }
 
     data class Match(
@@ -205,7 +210,7 @@ class StreamedMediaExtractor {
 
     suspend fun getUrl(
         streamUrl: String,
-        streamId: String, // This is the ID to be used in the POST data for decryption
+        streamId: String, // This now consistently refers to the StreamInfo.id or MatchSource.id
         source: String,
         streamNo: Int,
         language: String,
@@ -213,19 +218,19 @@ class StreamedMediaExtractor {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        Log.d("StreamedMediaExtractor", "EXTRACTOR_START: Starting extraction for: $streamUrl (Stream ID for extraction: $streamId)")
+        Log.d("StreamedMediaExtractor", "Starting extraction for: $streamUrl (Stream ID for extraction: $streamId)")
 
         val streamResponse = try {
             app.get(streamUrl, headers = baseHeaders, timeout = EXTRACTOR_TIMEOUT_MILLIS)
         } catch (e: Exception) {
-            Log.e("StreamedMediaExtractor", "EXTRACTOR_ERROR: Stream page fetch failed for $source/$streamNo: ${e.message}")
+            Log.e("StreamedMediaExtractor", "Stream page fetch failed for $source/$streamNo: ${e.message}")
             return false
         }
         val streamCookies = streamResponse.cookies
-        Log.d("StreamedMediaExtractor", "EXTRACTOR_DEBUG: Stream cookies for $source/$streamNo: $streamCookies")
+        Log.d("StreamedMediaExtractor", "Stream cookies for $source/$streamNo: $streamCookies")
 
         val eventCookies = fetchEventCookies(streamUrl, streamUrl)
-        Log.d("StreamedMediaExtractor", "EXTRACTOR_DEBUG: Event cookies for $source/$streamNo: $eventCookies")
+        Log.d("StreamedMediaExtractor", "Event cookies for $source/$streamNo: $eventCookies")
 
         val combinedCookies = buildString {
             if (streamCookies.isNotEmpty()) {
@@ -237,14 +242,14 @@ class StreamedMediaExtractor {
             }
         }
         if (combinedCookies.isEmpty()) {
-            Log.e("StreamedMediaExtractor", "EXTRACTOR_ERROR: No cookies obtained for $source/$streamNo")
+            Log.e("StreamedMediaExtractor", "No cookies obtained for $source/$streamNo")
             return false
         }
-        Log.d("StreamedMediaExtractor", "EXTRACTOR_DEBUG: Combined cookies for $source/$streamNo: $combinedCookies")
+        Log.d("StreamedMediaExtractor", "Combined cookies for $source/$streamNo: $combinedCookies")
 
         val postData = mapOf(
             "source" to source,
-            "id" to streamId, // Crucial: Use the specific streamId for this source in the POST request
+            "id" to streamId, // Crucial: Use the specific streamId for this source
             "streamNo" to streamNo.toString()
         )
         val embedReferer = "https://embedstreams.top/embed/$source/$streamId/$streamNo" // Referer also uses this ID
@@ -252,36 +257,36 @@ class StreamedMediaExtractor {
             "Referer" to streamUrl,
             "Cookie" to combinedCookies
         )
-        Log.d("StreamedMediaExtractor", "EXTRACTOR_DEBUG: Fetching encrypted string with data: $postData and headers: $fetchHeaders")
+        Log.d("StreamedMediaExtractor", "Fetching with data: $postData and headers: $fetchHeaders")
 
         val encryptedResponse = try {
             val response = app.post(fetchUrl, headers = fetchHeaders, json = postData, timeout = EXTRACTOR_TIMEOUT_MILLIS)
-            Log.d("StreamedMediaExtractor", "EXTRACTOR_DEBUG: Fetch response code for $source/$streamNo: ${response.code}")
+            Log.d("StreamedMediaExtractor", "Fetch response code for $source/$streamNo: ${response.code}")
             if (response.code != 200) {
-                Log.e("StreamedMediaExtractor", "EXTRACTOR_ERROR: Fetch failed for $source/$streamNo with code: ${response.code}")
+                Log.e("StreamedMediaExtractor", "Fetch failed for $source/$streamNo with code: ${response.code}")
                 return false
             }
             response.text.takeIf { it.isNotBlank() } ?: return false.also {
-                Log.e("StreamedMediaExtractor", "EXTRACTOR_ERROR: Empty encrypted response for $source/$streamNo")
+                Log.e("StreamedMediaExtractor", "Empty encrypted response for $source/$streamNo")
             }
         } catch (e: Exception) {
-            Log.e("StreamedMediaExtractor", "EXTRACTOR_ERROR: Fetch failed for $source/$streamNo: ${e.message}")
+            Log.e("StreamedMediaExtractor", "Fetch failed for $source/$streamNo: ${e.message}")
             return false
         }
-        Log.d("StreamedMediaExtractor", "EXTRACTOR_DEBUG: Encrypted response for $source/$streamNo: $encryptedResponse")
+        Log.d("StreamedMediaExtractor", "Encrypted response for $source/$streamNo: $encryptedResponse")
 
         val decryptPostData = mapOf("encrypted" to encryptedResponse)
         val decryptResponse = try {
             app.post(decryptUrl, json = decryptPostData, headers = mapOf("Content-Type" to "application/json"), timeout = EXTRACTOR_TIMEOUT_MILLIS)
                 .parsedSafe<Map<String, String>>()
         } catch (e: Exception) {
-            Log.e("StreamedMediaExtractor", "EXTRACTOR_ERROR: Decryption request failed for $source/$streamNo: ${e.message}")
+            Log.e("StreamedMediaExtractor", "Decryption request failed for $source/$streamNo: ${e.message}")
             return false
         }
         val decryptedPath = decryptResponse?.get("decrypted")?.takeIf { it.isNotBlank() } ?: return false.also {
-            Log.e("StreamedMediaExtractor", "EXTRACTOR_ERROR: Decryption failed or no 'decrypted' key for $source/$streamNo")
+            Log.e("StreamedMediaExtractor", "Decryption failed or no 'decrypted' key for $source/$streamNo")
         }
-        Log.d("StreamedMediaExtractor", "EXTRACTOR_SUCCESS: Decrypted path for $source/$streamNo: $decryptedPath")
+        Log.d("StreamedMediaExtractor", "Decrypted path for $source/$streamNo: $decryptedPath")
 
         val m3u8Url = "https://rr.buytommy.top$decryptedPath"
         val m3u8Headers = baseHeaders + mapOf(
@@ -289,39 +294,57 @@ class StreamedMediaExtractor {
             "Cookie" to combinedCookies
         )
 
-        // Always add the link if decryption was successful, regardless of our internal M3U8 test.
-        // Cloudstream's player might still play it.
-        callback.invoke(
-            newExtractorLink(
-                source = "Streamed",
-                name = "$source Stream $streamNo ($language${if (isHd) ", HD" else ""})",
-                url = m3u8Url,
-                type = ExtractorLinkType.M3U8
-            ) {
-                this.referer = embedReferer
-                this.quality = if (isHd) Qualities.P1080.value else Qualities.Unknown.value
-                this.headers = m3u8Headers
-            }
-        )
-        Log.d("StreamedMediaExtractor", "EXTRACTOR_LINK_ADDED: Added decrypted URL: $m3u8Url for $source/$streamNo")
-        
-        // This loop is now purely for logging if alternative domains also work, not for adding new links.
-        for (domain in fallbackDomains) {
-            if (m3u8Url.contains(domain)) continue // Skip if the URL already uses this domain
+        var linkAdded = false
+        // Always try to add the link if decryption was successful
+        // We will now always call callback.invoke, but log if the internal test failed.
+        for (domain in listOf("rr.buytommy.top") + fallbackDomains) {
             try {
                 val testUrl = m3u8Url.replace("rr.buytommy.top", domain)
                 val testResponse = app.get(testUrl, headers = m3u8Headers, timeout = EXTRACTOR_TIMEOUT_MILLIS)
                 if (testResponse.code == 200) {
-                     Log.d("StreamedMediaExtractor", "EXTRACTOR_DEBUG: Fallback domain $domain also works for $source/$streamNo: $testUrl")
+                    callback.invoke(
+                        newExtractorLink(
+                            source = "Streamed",
+                            name = "$source Stream $streamNo ($language${if (isHd) ", HD" else ""})",
+                            url = testUrl,
+                            type = ExtractorLinkType.M3U8
+                        ) {
+                            this.referer = embedReferer
+                            this.quality = if (isHd) Qualities.P1080.value else Qualities.Unknown.value
+                            this.headers = m3u8Headers
+                        }
+                    )
+                    Log.d("StreamedMediaExtractor", "M3U8 URL added for $source/$streamNo: $testUrl (TEST SUCCESS)")
+                    linkAdded = true
+                    break // Stop at the first working domain
                 } else {
-                    Log.w("StreamedMediaExtractor", "EXTRACTOR_DEBUG: M3U8 test failed for fallback domain $domain with code: ${testResponse.code}")
+                    Log.w("StreamedMediaExtractor", "M3U8 test failed for $domain with code: ${testResponse.code}")
                 }
             } catch (e: Exception) {
-                Log.e("StreamedMediaExtractor", "EXTRACTOR_DEBUG: M3U8 test failed for fallback domain $domain: ${e.message}")
+                Log.e("StreamedMediaExtractor", "M3U8 test failed for $domain: ${e.message}")
             }
         }
-        
-        return true // Return true because we successfully decrypted and added a link
+
+        // If no link was added from the domain tests, still try the original decrypted URL.
+        // This ensures a link is at least provided to Cloudstream if we got a decrypted path.
+        if (!linkAdded) {
+             callback.invoke(
+                newExtractorLink(
+                    source = "Streamed",
+                    name = "$source Stream $streamNo ($language${if (isHd) ", HD" else ""})",
+                    url = m3u8Url,
+                    type = ExtractorLinkType.M3U8
+                ) {
+                    this.referer = embedReferer
+                    this.quality = if (isHd) Qualities.P1080.value else Qualities.Unknown.value
+                    this.headers = m3u8Headers
+                }
+            )
+            Log.w("StreamedMediaExtractor", "No working domain found, adding original decrypted URL: $m3u8Url for $source/$streamNo (TEST FAILED)")
+            linkAdded = true // Mark as true because we added *a* link.
+        }
+
+        return linkAdded
     }
 
     private suspend fun fetchEventCookies(pageUrl: String, referrer: String): String {
@@ -346,7 +369,7 @@ class StreamedMediaExtractor {
                 return formattedCookies
             }
         } catch (e: Exception) {
-            Log.e("StreamedMediaExtractor", "EXTRACTOR_ERROR: Failed to fetch event cookies: ${e.message}")
+            Log.e("StreamedMediaExtractor", "Failed to fetch event cookies: ${e.message}")
         }
         return ""
     }
