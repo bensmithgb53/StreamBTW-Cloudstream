@@ -1,6 +1,7 @@
 package ben.smith53
 
 import com.fasterxml.jackson.annotation.JsonProperty
+import com.fasterxml.jackson.databind.ObjectMapper
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
@@ -138,7 +139,7 @@ class StreamedProvider : MainAPI() {
                 }
             } else {
                 Log.w("StreamedProvider", "Source '$source' is reported as available but no stream info found from API for $matchId")
-                // Optionally try fallback stream numbers if API is unreliable
+                // Try fallback stream numbers if API is unreliable
                 for (streamNo in 1..maxStreams) {
                     val streamUrl = "$mainUrl/watch/$matchId/$source/$streamNo"
                     Log.d("StreamedProvider", "Processing fallback stream URL: $streamUrl (ID: $matchId, Source: $source, StreamNo: $streamNo)")
@@ -190,6 +191,7 @@ class StreamedMediaExtractor {
     )
     private val fallbackDomains = listOf("rr.buytommy.top") // Removed invalid domains
     private val cookieCache = mutableMapOf<String, String>()
+    private val objectMapper = ObjectMapper()
 
     companion object {
         const val EXTRACTOR_TIMEOUT_SECONDS = 30
@@ -234,7 +236,7 @@ class StreamedMediaExtractor {
             "webgl" to webglInfo
         )
 
-        val jsonStr = AppUtils.toJson(data)
+        val jsonStr = objectMapper.writeValueAsString(data)
         Log.d("StreamedMediaExtractor", "X-TOK JSON String: $jsonStr")
         val digest = MessageDigest.getInstance("SHA-256")
         val hashBytes = digest.digest(jsonStr.toByteArray(Charsets.UTF_8))
