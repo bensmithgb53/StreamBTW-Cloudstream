@@ -3,6 +3,7 @@ package ben.smith53
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.network.CloudflareKiller
+import com.lagradost.cloudstream3.utils.AppUtils    // Import AppUtils class, not just toJson
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
@@ -25,14 +26,12 @@ class StreamedProvider : MainAPI() {
     override var supportedTypes = setOf(TvType.Live)
     override val hasMainPage = true
 
-    // CloudflareKiller to handle protections on involved domains
-    private val cfKiller = CloudflareKiller()
-
-    // Initialize app with CloudflareKiller
-    init {
-        // This makes sure our app client uses the CloudflareKiller logic
-        app.interceptors.add(cfKiller)
-    }
+    // CloudflareKiller should be integrated into the 'app' Session.
+    // The 'app' object itself handles interceptors globally.
+    // We don't directly add to app.interceptors within MainAPI classes.
+    // CloudStream3's core setup already includes the CloudflareKiller in its global app instance.
+    // So, we can remove the explicit `init { app.interceptors.add(cfKiller) }` block here.
+    // If Cloudflare issues persist, it means the global app instance isn't configured correctly in the CloudStream3 app itself.
 
     private val maxStreams = 4
     private val fetchUrl = "https://embedstreams.top/fetch"
@@ -187,7 +186,7 @@ class StreamedProvider : MainAPI() {
         @JsonProperty("streamNo") val streamNo: Int,
         @JsonProperty("language") val language: String,
         @JsonProperty("hd") val hd: Boolean,
-        @JsonProperty("embedUrl") val embedUrl: String, // Keep this, even if not directly used for fetch, it indicates the expected embed structure
+        @JsonProperty("embedUrl") val embedUrl: String,
         @JsonProperty("source") val source: String
     )
 }
@@ -202,7 +201,7 @@ class StreamedMediaExtractor {
         "Accept" to "application/vnd.apple.mpegurl, */*",
         "Origin" to "https://embedstreams.top"
     )
-    private val fallbackDomains = listOf("p2-panel.streamed.su", "streamed.su") // Add more if discovered
+    private val fallbackDomains = listOf("p2-panel.streamed.su", "streamed.su")
     private val cookieCache = mutableMapOf<String, String>()
 
     companion object {
@@ -212,13 +211,11 @@ class StreamedMediaExtractor {
 
     // New function to generate the X-TOK header based on the JavaScript logic
     private suspend fun generateXTok(): String = withContext(Dispatchers.IO) {
-        // These values are approximations of what a typical Android device/browser would report.
-        // They are static here but could be made dynamic if CloudStream3 exposed such APIs.
         val userAgent = baseHeaders["User-Agent"] ?: "Mozilla/5.5 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36"
-        val screenSize = "1920x1080" // Common screen size, adjust if needed
+        val screenSize = "1920x1080" // Placeholder, actual screen size might vary
         val pixelDepth = 24
         val touch = true // Assuming touch device
-        val deviceMemory = 8 // Common device memory
+        val deviceMemory = 8 // Common device memory, e.g., 8
         val platform = "Android"
         val touchPoints = 5 // Common touch points
         val hardwareConcurrency = 8 // Common CPU cores
@@ -226,7 +223,6 @@ class StreamedMediaExtractor {
 
         // WebGL info is complex to simulate accurately in Kotlin without a browser engine.
         // For now, we'll use "none" as a fallback, consistent with the JS safe() function.
-        // If streams fail due to this, a more advanced approach might be needed (e.g., WebView based extraction)
         val webglInfo = mapOf(
             "vendor" to "none",
             "renderer" to "none",
@@ -239,7 +235,7 @@ class StreamedMediaExtractor {
         val plugins = "none"
 
         // Timezone and timezoneOffset
-        val timezone = TimeZone.getDefault().id // e.g., "Asia/Shanghai"
+        val timezone = TimeZone.getDefault().id // e.g., "Asia/Shanghai" or "Europe/London"
         val timezoneOffset = TimeZone.getDefault().getOffset(System.currentTimeMillis()) / (1000 * 60) // in minutes
 
         val data = mapOf(
@@ -259,7 +255,8 @@ class StreamedMediaExtractor {
             "webgl" to webglInfo
         )
 
-        val jsonStr = com.lagradost.cloudstream3.utils.AppUtils.toJson(data)
+        // Use AppUtils.toJson for consistent JSON serialization
+        val jsonStr = AppUtils.toJson(data) // Corrected toJson call
         Log.d("StreamedMediaExtractor", "X-TOK JSON String: $jsonStr")
 
         val digest = MessageDigest.getInstance("SHA-256")
@@ -293,7 +290,6 @@ class StreamedMediaExtractor {
 
 
         // Fetch event cookies (from fishy.streamed.su)
-        // This is a separate cookie source, combine them later
         val eventCookies = fetchEventCookies(streamUrl, streamUrl)
         Log.d("StreamedMediaExtractor", "Event cookies for $source/$streamNo: $eventCookies")
 
@@ -305,7 +301,7 @@ class StreamedMediaExtractor {
         }
         if (eventCookies.isNotEmpty()) {
             // Ensure no duplicate keys if both sources provide the same cookie key
-            val existingKeys = streamCookies.keys
+            val existingKeys = streamCookies.keys // Keys from streamResponse (e.g., cf_clearance)
             val newEventCookies = eventCookies.split("; ").filter { cookie ->
                 val key = cookie.substringBefore("=")
                 !existingKeys.contains(key)
@@ -376,10 +372,9 @@ class StreamedMediaExtractor {
         // Construct M3U8 URL
         val m3u8UrlBase = "https://rr.buytommy.top"
         val m3u8Url = "$m3u8UrlBase$decryptedPath"
-        val m3u8Headers = baseHeaders.toMutableMap().apply {
+        val m3u8Headers = baseHeaders.toMutableMap().apply { // Corrected variable name from m3u38Headers to m3u8Headers
             this["Referer"] = embedReferer
             this["Cookie"] = finalCombinedCookies
-            // X-TOK is not strictly needed for the M3U8 GET request based on dev tools, but harmless to include.
         }
 
         // Test M3U8 with fallbacks
@@ -389,7 +384,7 @@ class StreamedMediaExtractor {
             try {
                 val testUrl = m3u8Url.replace(m3u8UrlBase, "https://$domain")
                 Log.d("StreamedMediaExtractor", "Testing M3U8 URL: $testUrl with domain: $domain")
-                val testResponse = app.get(testUrl, headers = m3u38Headers, timeout = EXTRACTOR_TIMEOUT_MILLIS)
+                val testResponse = app.get(testUrl, headers = m3u8Headers, timeout = EXTRACTOR_TIMEOUT_MILLIS) // Corrected variable name
                 if (testResponse.code == 200) {
                     callback.invoke(
                         newExtractorLink(
@@ -400,7 +395,7 @@ class StreamedMediaExtractor {
                         ) {
                             this.referer = embedReferer
                             this.quality = if (isHd) Qualities.P1080.value else Qualities.Unknown.value
-                            this.headers = m3u38Headers // Pass headers to extractor link
+                            this.headers = m3u8Headers // Corrected variable name
                         }
                     )
                     Log.d("StreamedMediaExtractor", "M3U8 URL added successfully for $source/$streamNo: $testUrl")
@@ -416,8 +411,6 @@ class StreamedMediaExtractor {
 
         if (!linkFound) {
             Log.e("StreamedMediaExtractor", "No working M3U8 link found for $source/$streamNo after all domain attempts.")
-            // Optionally, you could still add the original m3u8Url here as a last resort,
-            // but it's usually better to only add working links. For now, it's not added if no test passed.
         }
 
         return linkFound
@@ -434,7 +427,7 @@ class StreamedMediaExtractor {
             try {
                 val response = app.post(
                     cookieUrl,
-                    data = mapOf(), // data is empty, requestBody is used
+                    data = mapOf(),
                     headers = mapOf("Content-Type" to "text/plain"),
                     requestBody = payload.toRequestBody("text/plain".toMediaType()),
                     timeout = EXTRACTOR_TIMEOUT_MILLIS
