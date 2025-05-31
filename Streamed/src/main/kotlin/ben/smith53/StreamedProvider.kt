@@ -21,23 +21,24 @@ class StreamedProvider : MainAPI() {
     override val hasMainPage = true
 
     companion object {
-        const val TAG = "StreamedProvider"
-        private const val MAX_FALLBACK_STREAMS = 4
-        private const val EMBED_STREAMS_TOP_URL = "https://embedstreams.top"
-        private const val FETCH_URL = "$EMBED_STREAMS_TOP_URL/fetch"
-        private const val COOKIE_API_URL = "https://fishy.streamed.su/api/event"
-        private const val DECRYPT_API_URL = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
-        private const val DEFAULT_POSTER_PATH = "/api/images/poster/fallback.webp"
-        private const val PRIMARY_M3U8_DOMAIN = "rr.buytommy.top"
+        // Changed visibility from implicit private to internal for access from StreamedMediaExtractor
+        internal const val TAG = "StreamedProvider"
+        internal const val MAX_FALLBACK_STREAMS = 4
+        internal const val EMBED_STREAMS_TOP_URL = "https://embedstreams.top"
+        internal const val FETCH_URL = "$EMBED_STREAMS_TOP_URL/fetch"
+        internal const val COOKIE_API_URL = "https://fishy.streamed.su/api/event"
+        internal const val DECRYPT_API_URL = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
+        internal const val DEFAULT_POSTER_PATH = "/api/images/poster/fallback.webp"
+        internal const val PRIMARY_M3U8_DOMAIN = "rr.buytommy.top"
 
-        val BASE_HEADERS = mapOf(
+        internal val BASE_HEADERS = mapOf(
             "User-Agent" to "Mozilla/5.5 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
-            "Content-Type" to "application/json", // This is usually for POST requests with JSON body
+            "Content-Type" to "application/json",
             "Accept" to "application/vnd.apple.mpegurl, */*",
             "Origin" to EMBED_STREAMS_TOP_URL
         )
 
-        const val NETWORK_TIMEOUT_MILLIS = 20 * 1000L
+        internal const val NETWORK_TIMEOUT_MILLIS = 20 * 1000L
     }
 
     override val mainPage = mainPageOf(
@@ -99,11 +100,11 @@ class StreamedProvider : MainAPI() {
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
-        subtitleCallback: (SubtitleFile) -> Unit, // Not used here, but kept for signature
+        subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean = withContext(Dispatchers.IO) {
         val matchId = data.substringAfterLast("/")
-        val extractor = StreamedMediaExtractor(mainUrl)
+        val extractor = StreamedMediaExtractor() // Initialize without mainUrl, as it's not used in its methods
         var linksFound = false
 
         Log.d(TAG, "Attempting to load links for match ID: $matchId")
@@ -189,37 +190,33 @@ class StreamedProvider : MainAPI() {
     )
 }
 
-class StreamedMediaExtractor(private val mainUrl: String) {
+// No longer needs mainUrl in constructor if all URLs come from StreamedProvider.Companion
+class StreamedMediaExtractor {
 
+    // Access constants via StreamedProvider.Companion (now internal)
     companion object {
-        const val TAG = StreamedProvider.TAG
-        private const val EMBED_STREAMS_TOP_URL = StreamedProvider.EMBED_STREAMS_TOP_URL
-        private const val FETCH_URL = StreamedProvider.FETCH_URL
-        private const val COOKIE_API_URL = StreamedProvider.COOKIE_API_URL
-        private const val DECRYPT_API_URL = StreamedProvider.DECRYPT_API_URL
-        private const val PRIMARY_M3U8_DOMAIN = StreamedProvider.PRIMARY_M3U8_DOMAIN
+        private val TAG = StreamedProvider.TAG
+        private val EMBED_STREAMS_TOP_URL = StreamedProvider.EMBED_STREAMS_TOP_URL
+        private val FETCH_URL = StreamedProvider.FETCH_URL
+        private val COOKIE_API_URL = StreamedProvider.COOKIE_API_URL
+        private val DECRYPT_API_URL = StreamedProvider.DECRYPT_API_URL
+        private val PRIMARY_M3U8_DOMAIN = StreamedProvider.PRIMARY_M3U8_DOMAIN
         private val BASE_HEADERS = StreamedProvider.BASE_HEADERS
-        private const val NETWORK_TIMEOUT_MILLIS = StreamedProvider.NETWORK_TIMEOUT_MILLIS
+        private val NETWORK_TIMEOUT_MILLIS = StreamedProvider.NETWORK_TIMEOUT_MILLIS
         private val FALLBACK_M3U8_DOMAINS = listOf("p2-panel.streamed.su", "streamed.su")
     }
 
-    // This cache might not be strictly necessary if cf_clearance is the main issue
-    // and is handled by the global client. But keeping it for _ddg cookies.
     private val cookieCache = mutableMapOf<String, String>()
 
-    // New function to acquire Cloudflare bypass cookie for embedstreams.top
     suspend fun addCloudflareBypassCookie() = withContext(Dispatchers.IO) {
         Log.d(TAG, "Attempting to acquire Cloudflare bypass cookie for $EMBED_STREAMS_TOP_URL")
         try {
-            // Simply performing a GET request to the origin is often enough for Cloudstream's app.get
-            // to handle Cloudflare challenges and set the cf_clearance cookie in its internal client.
             app.get(EMBED_STREAMS_TOP_URL, timeout = NETWORK_TIMEOUT_MILLIS)
             Log.d(TAG, "Cloudflare bypass attempt for $EMBED_STREAMS_TOP_URL completed. Cookies should be in global client.")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to acquire Cloudflare bypass cookie for $EMBED_STREAMS_TOP_URL: ${e.message}", e)
         }
     }
-
 
     suspend fun extract(
         streamUrl: String,
@@ -231,6 +228,8 @@ class StreamedMediaExtractor(private val mainUrl: String) {
         callback: (ExtractorLink) -> Unit
     ): Boolean = withContext(Dispatchers.IO) {
         Log.d(TAG, "Starting extraction for streamUrl: $streamUrl (ID: $streamId, Source: $source, StreamNo: $streamNo)")
+
+        val embedReferer = "$EMBED_STREAMS_TOP_URL/embed/$source/$streamId/$streamNo"
 
         // 1. Fetch stream page cookies
         val streamResponse = try {
@@ -246,9 +245,6 @@ class StreamedMediaExtractor(private val mainUrl: String) {
         val eventCookiesString = fetchEventCookies(streamUrl, streamUrl)
         Log.d(TAG, "Event cookies fetched for $source/$streamNo: $eventCookiesString")
 
-        // Combine all cookies into a single string for the 'Cookie' header
-        // IMPORTANT: cf_clearance cookie is now expected to be managed by app.get's internal client,
-        // so we don't explicitly add it here. The global client should handle it.
         val combinedCookiesForHeader = buildString {
             if (streamCookiesMap.isNotEmpty()) {
                 append(streamCookiesMap.entries.joinToString("; ") { "${it.key}=${it.value}" })
@@ -259,10 +255,8 @@ class StreamedMediaExtractor(private val mainUrl: String) {
             }
         }
 
-        // We now rely on AppUtils.app.baseClient to automatically send the cf_clearance cookie
-        // if it was acquired by addCloudflareBypassCookie()
         val fetchHeaders = BASE_HEADERS.toMutableMap().apply {
-            this["Referer"] = "$EMBED_STREAMS_TOP_URL/embed/$source/$streamId/$streamNo"
+            this["Referer"] = embedReferer
             if (combinedCookiesForHeader.isNotEmpty()) {
                 this["Cookie"] = combinedCookiesForHeader
             }
@@ -274,7 +268,6 @@ class StreamedMediaExtractor(private val mainUrl: String) {
             "id" to streamId,
             "streamNo" to streamNo.toString()
         )
-        val embedReferer = "$EMBED_STREAMS_TOP_URL/embed/$source/$streamId/$streamNo"
 
         Log.d(TAG, "Fetching encrypted string with data: $postData and headers (partial): $fetchHeaders")
 
@@ -317,19 +310,14 @@ class StreamedMediaExtractor(private val mainUrl: String) {
         val baseM3u8Url = "https://$PRIMARY_M3U8_DOMAIN$decryptedPath"
         val m3u8Headers = BASE_HEADERS.toMutableMap().apply {
             this["Referer"] = embedReferer
-            // Only add these cookies if they are not already managed by the global client
             if (combinedCookiesForHeader.isNotEmpty()) {
                 this["Cookie"] = combinedCookiesForHeader
             }
-            // Add specific headers for the M3U8 request if needed, as seen in browser.
-            // Example: "Accept" header if the M3U8 itself is sensitive.
-            // Your baseHeaders already have "Accept" for mpegurl.
         }.toMap()
 
         var m3u8Content: String? = null
         var finalM3u8UrlUsed: String? = null
 
-        // Try to fetch M3U8 content from primary and fallback domains
         val domainsToTest = listOf(PRIMARY_M3U8_DOMAIN) + FALLBACK_M3U8_DOMAINS
         for (domain in domainsToTest) {
             val currentM3u8Url = baseM3u8Url.replace(PRIMARY_M3U8_DOMAIN, domain)
@@ -340,7 +328,7 @@ class StreamedMediaExtractor(private val mainUrl: String) {
                     m3u8Content = response.text
                     finalM3u8UrlUsed = currentM3u8Url
                     Log.d(TAG, "Successfully fetched M3U8 content from $domain.")
-                    break // Stop on first successful fetch
+                    break
                 } else {
                     Log.w(TAG, "Failed to fetch M3U8 content from $domain with code: ${response.code}")
                 }
@@ -360,24 +348,20 @@ class StreamedMediaExtractor(private val mainUrl: String) {
         val keyMatch = keyRegex.find(m3u8Content)
 
         if (keyMatch != null) {
-            val encryptionMethod = keyMatch.groupValues[1] // AES-128
-            val keyUri = keyMatch.groupValues[2] // e.g., /alpha/key/alpha-kyoto-sanga-vs-fc-tokyo-1/r05ujiy06axayu6eyexi/1748683238
+            val encryptionMethod = keyMatch.groupValues[1]
+            val keyUri = keyMatch.groupValues[2]
 
-            // Construct the absolute key URL. It seems to be relative to the M3U8's base URL.
-            // Assuming keyUri is relative to rr.buytommy.top
             keyUrl = if (keyUri.startsWith("/")) {
-                "https://$PRIMARY_M3U8_DOMAIN$keyUri" // Adjust if the key is relative to a different path
+                "https://$PRIMARY_M3U8_DOMAIN$keyUri"
             } else {
-                keyUri // Assume it's a full URL
+                keyUri
             }
 
             Log.d(TAG, "Detected HLS encryption. Key URI: $keyUri, Full Key URL: $keyUrl")
 
             val keyBytes: ByteArray? = try {
-                // Headers for key fetch: Referer should be the embed page, Origin embedstreams.top
                 val keyHeaders = BASE_HEADERS.toMutableMap().apply {
                     this["Referer"] = embedReferer
-                    // Add other headers if the key fetch requires them (e.g., specific Accept)
                 }.toMap()
 
                 val keyResponse = app.get(keyUrl, headers = keyHeaders, timeout = NETWORK_TIMEOUT_MILLIS)
@@ -393,18 +377,18 @@ class StreamedMediaExtractor(private val mainUrl: String) {
             }
 
             if (keyBytes != null) {
-                // 7. Add ExtractorLink with key data
+                // 7. Add ExtractorLink with key data - FIXED: Use lambda for quality and key
                 callback.invoke(
                     newExtractorLink(
                         source = "Streamed",
                         name = "$source Stream $streamNo (${language.replaceFirstChar { it.uppercase(Locale.ROOT) }}${if (isHd) ", HD" else ""})",
-                        url = finalM3u8UrlUsed, // The M3U8 URL we successfully fetched
-                        type = ExtractorLinkType.M3U8,
-                        quality = if (isHd) Qualities.P1080.value else Qualities.Unknown.value
+                        url = finalM3u8UrlUsed,
+                        type = ExtractorLinkType.M3U8
                     ) {
-                        this.referer = embedReferer // Referer for the main M3U8 and key
-                        this.headers = m3u8Headers.toMutableMap() // Pass headers for player to use
-                        this.key = keyBytes // Pass the raw key bytes for decryption
+                        this.referer = embedReferer
+                        this.headers = m3u8Headers.toMutableMap()
+                        this.key = keyBytes // FIXED: Set key inside lambda
+                        this.quality = if (isHd) Qualities.P1080.value else Qualities.Unknown.value // FIXED: Set quality inside lambda
                     }
                 )
                 Log.d(TAG, "Successfully added M3U8 URL with HLS key for $source/$streamNo.")
@@ -414,19 +398,17 @@ class StreamedMediaExtractor(private val mainUrl: String) {
                 return@withContext false
             }
         } else {
-            // If no EXT-X-KEY tag, it's likely not encrypted or uses a different method.
-            // Add the link directly without a key.
             Log.d(TAG, "No HLS encryption key found in M3U8. Adding direct link.")
             callback.invoke(
                 newExtractorLink(
                     source = "Streamed",
                     name = "$source Stream $streamNo (${language.replaceFirstChar { it.uppercase(Locale.ROOT) }}${if (isHd) ", HD" else ""})",
                     url = finalM3u8UrlUsed,
-                    type = ExtractorLinkType.M3U8,
-                    quality = if (isHd) Qualities.P1080.value else Qualities.Unknown.value
+                    type = ExtractorLinkType.M3U8
                 ) {
                     this.referer = embedReferer
                     this.headers = m3u8Headers.toMutableMap()
+                    this.quality = if (isHd) Qualities.P1080.value else Qualities.Unknown.value // FIXED: Set quality inside lambda
                 }
             )
             return@withContext true
