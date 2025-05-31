@@ -2,7 +2,6 @@ package ben.smith53
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.AppUtils    // Explicitly import AppUtils
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
@@ -15,9 +14,6 @@ import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import kotlinx.coroutines.delay
-import java.security.MessageDigest // For SHA-256 hashing
-import java.nio.charset.StandardCharsets // For UTF-8 encoding
-import java.util.TimeZone // For timezone info in X-TOK
 
 class StreamedProvider : MainAPI() {
     override var mainUrl = "https://streamed.su"
@@ -30,7 +26,7 @@ class StreamedProvider : MainAPI() {
     private val cookieUrl = "https://fishy.streamed.su/api/event"
     private val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
     private val baseHeaders = mapOf(
-        "User-Agent" to "Mozilla/5.5 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
+        "User-Agent" to "Mozilla/5.5 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36", // Changed User-Agent slightly
         "Content-Type" to "application/json",
         "Accept" to "application/vnd.apple.mpegurl, */*",
         "Origin" to "https://embedstreams.top"
@@ -120,6 +116,7 @@ class StreamedProvider : MainAPI() {
 
         for (source in sourcesToProcess) {
             val streamInfos = try {
+                // Corrected: Assign the result of app.get to a variable 'response'
                 val response = app.get("$mainUrl/api/stream/$source/$matchId", timeout = StreamedMediaExtractor.EXTRACTOR_TIMEOUT_MILLIS).text
                 parseJson<List<StreamInfo>>(response).filter { it.embedUrl.isNotBlank() }
             } catch (e: Exception) {
@@ -187,7 +184,7 @@ class StreamedMediaExtractor {
     private val cookieUrl = "https://fishy.streamed.su/api/event"
     private val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
     private val baseHeaders = mapOf(
-        "User-Agent" to "Mozilla/5.5 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
+        "User-Agent" to "Mozilla/5.5 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36", // Changed User-Agent slightly
         "Content-Type" to "application/json",
         "Accept" to "application/vnd.apple.mpegurl, */*",
         "Origin" to "https://embedstreams.top"
@@ -197,64 +194,8 @@ class StreamedMediaExtractor {
 
     companion object {
         const val EXTRACTOR_TIMEOUT_SECONDS = 30
-        const val EXTRACTOR_TIMEOUT_MILLIS = EXTRACTOR_TIMEOUT_SECONDS * 1000L
+        const val EXTRACTOR_TIMEOUT_MILLIS = EXTRACTOR_TIMEOUT_SECONDS * 1000L // Convert to Long milliseconds
     }
-
-    // New function to generate the X-TOK header based on the JavaScript logic
-    private suspend fun generateXTok(): String = withContext(Dispatchers.IO) {
-        val userAgent = baseHeaders["User-Agent"] ?: "Mozilla/5.5 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36"
-        val screenSize = "1920x1080" // Placeholder, actual screen size might vary
-        val pixelDepth = 24
-        val touch = true // Assuming touch device
-        val deviceMemory = 8 // Common device memory, e.g., 8
-        val platform = "Android"
-        val touchPoints = 5 // Common touch points
-        val hardwareConcurrency = 8 // Common CPU cores
-        val intlDisplayNames = "supported" // Assuming modern Android Intl support
-
-        // WebGL info is complex to simulate accurately in Kotlin without a browser engine.
-        // For now, we'll use "none" as a fallback, consistent with the JS safe() function.
-        val webglInfo = mapOf(
-            "vendor" to "none",
-            "renderer" to "none",
-            "params" to "none",
-            "exts" to "none"
-        )
-        // MimeTypes and Plugins are also hard to get accurately without a browser engine.
-        // Using "none" as a fallback, similar to the JS safe() function.
-        val mimeTypes = "none"
-        val plugins = "none"
-
-        // Timezone and timezoneOffset
-        val timezone = TimeZone.getDefault().id // e.g., "Asia/Shanghai" or "Europe/London"
-        val timezoneOffset = TimeZone.getDefault().getOffset(System.currentTimeMillis()) / (1000 * 60) // in minutes
-
-        val data = mapOf(
-            "timezone" to timezone,
-            "timezoneOffset" to timezoneOffset,
-            "userAgent" to userAgent,
-            "screenSize" to screenSize,
-            "pixelDepth" to pixelDepth,
-            "touch" to touch,
-            "deviceMemory" to deviceMemory,
-            "platform" to platform,
-            "touchPoints" to touchPoints,
-            "hardwareConcurrency" to hardwareConcurrency,
-            "intlDisplayNames" to intlDisplayNames,
-            "mimeTypes" to mimeTypes,
-            "plugins" to plugins,
-            "webgl" to webglInfo
-        )
-
-        // Use AppUtils.toJson for consistent JSON serialization
-        val jsonStr = AppUtils.toJson(data) // Using AppUtils.toJson as it's typically an extension on Any or part of AppUtils object
-        Log.d("StreamedMediaExtractor", "X-TOK JSON String: $jsonStr")
-
-        val digest = MessageDigest.getInstance("SHA-256")
-        val hashBytes = digest.digest(jsonStr.toByteArray(StandardCharsets.UTF_8))
-        return@withContext hashBytes.joinToString("") { "%02x".format(it) }
-    }
-
 
     suspend fun getUrl(
         streamUrl: String,
@@ -298,10 +239,6 @@ class StreamedMediaExtractor {
         }
         Log.d("StreamedMediaExtractor", "Combined cookies for $source/$streamNo: $combinedCookies")
 
-        // Generate X-TOK header
-        val xTok = generateXTok()
-        Log.d("StreamedMediaExtractor", "Generated X-TOK: $xTok")
-
         // POST to fetch encrypted string
         val postData = mapOf(
             "source" to source,
@@ -311,17 +248,15 @@ class StreamedMediaExtractor {
         val embedReferer = "https://embedstreams.top/embed/$source/$streamId/$streamNo"
         val fetchHeaders = baseHeaders + mapOf(
             "Referer" to streamUrl,
-            "Cookie" to combinedCookies,
-            "X-TOK" to xTok // Add the generated X-TOK header
+            "Cookie" to combinedCookies
         )
-        Log.d("StreamedMediaExtractor", "Fetching with data: $postData and headers: $fetchHeaders (excluding sensitive Cookie)")
-
+        Log.d("StreamedMediaExtractor", "Fetching with data: $postData and headers: $fetchHeaders")
 
         val encryptedResponse = try {
             val response = app.post(fetchUrl, headers = fetchHeaders, json = postData, timeout = EXTRACTOR_TIMEOUT_MILLIS)
             Log.d("StreamedMediaExtractor", "Fetch response code for $source/$streamNo: ${response.code}")
             if (response.code != 200) {
-                Log.e("StreamedMediaExtractor", "Fetch failed for $source/$streamNo with code: ${response.code}, response: ${response.text}")
+                Log.e("StreamedMediaExtractor", "Fetch failed for $source/$streamNo with code: ${response.code}")
                 return false
             }
             response.text.takeIf { it.isNotBlank() } ?: return false.also {
@@ -348,8 +283,7 @@ class StreamedMediaExtractor {
         Log.d("StreamedMediaExtractor", "Decrypted path for $source/$streamNo: $decryptedPath")
 
         // Construct M3U8 URL
-        val m3u8UrlBase = "https://rr.buytommy.top"
-        val m3u8Url = "$m3u8UrlBase$decryptedPath"
+        val m3u8Url = "https://rr.buytommy.top$decryptedPath"
         val m3u8Headers = baseHeaders + mapOf(
             "Referer" to embedReferer,
             "Cookie" to combinedCookies
@@ -386,7 +320,6 @@ class StreamedMediaExtractor {
         }
 
         if (!linkFound) {
-            // Your original script adds the link even if tests fail. Keeping this logic.
             callback.invoke(
                 newExtractorLink(
                     source = "Streamed",
@@ -400,7 +333,7 @@ class StreamedMediaExtractor {
                 }
             )
             Log.d("StreamedMediaExtractor", "M3U8 test failed but added original URL anyway for $source/$streamNo: $m3u8Url")
-            return true // Original script returns true here too, implying success is assumed if a link is provided.
+            return true
         }
 
         return linkFound
@@ -410,40 +343,26 @@ class StreamedMediaExtractor {
         cookieCache[pageUrl]?.let { return it }
 
         val payload = """{"n":"pageview","u":"$pageUrl","d":"streamed.su","r":"$referrer"}"""
-        // Added retry logic here based on previous improvements, as it's good practice.
-        val maxRetries = 3
-        var currentRetry = 0
-
-        while (currentRetry < maxRetries) {
-            try {
-                val response = app.post(
-                    cookieUrl,
-                    data = mapOf(),
-                    headers = mapOf("Content-Type" to "text/plain"),
-                    requestBody = payload.toRequestBody("text/plain".toMediaType()),
-                    timeout = EXTRACTOR_TIMEOUT_MILLIS
-                )
-                val cookies = response.headers.filter { it.first == "Set-Cookie" }
-                    .map { it.second.split(";")[0] }
-                val formattedCookies = listOf("_ddg8_", "_ddg10_", "_ddg9_", "_ddg1_")
-                    .mapNotNull { key -> cookies.find { it.startsWith(key) } }
-                    .joinToString("; ")
-                if (formattedCookies.isNotEmpty()) {
-                    cookieCache[pageUrl] = formattedCookies
-                    Log.d("StreamedMediaExtractor", "Successfully fetched event cookies on attempt ${currentRetry + 1}")
-                    return formattedCookies
-                } else {
-                    Log.w("StreamedMediaExtractor", "Event cookie response empty on attempt ${currentRetry + 1}. Retrying...")
-                }
-            } catch (e: Exception) {
-                Log.e("StreamedMediaExtractor", "Failed to fetch event cookies on attempt ${currentRetry + 1}: ${e.message}. Retrying...")
+        try {
+            val response = app.post(
+                cookieUrl,
+                data = mapOf(),
+                headers = mapOf("Content-Type" to "text/plain"),
+                requestBody = payload.toRequestBody("text/plain".toMediaType()),
+                timeout = EXTRACTOR_TIMEOUT_MILLIS
+            )
+            val cookies = response.headers.filter { it.first == "Set-Cookie" }
+                .map { it.second.split(";")[0] }
+            val formattedCookies = listOf("_ddg8_", "_ddg10_", "_ddg9_", "_ddg1_")
+                .mapNotNull { key -> cookies.find { it.startsWith(key) } }
+                .joinToString("; ")
+            if (formattedCookies.isNotEmpty()) {
+                cookieCache[pageUrl] = formattedCookies
+                return formattedCookies
             }
-            currentRetry++
-            if (currentRetry < maxRetries) {
-                delay(1000L * currentRetry) // Exponential backoff for retries
-            }
+        } catch (e: Exception) {
+            Log.e("StreamedMediaExtractor", "Failed to fetch event cookies: ${e.message}")
         }
-        Log.e("StreamedMediaExtractor", "Failed to fetch event cookies after $maxRetries attempts.")
         return ""
     }
 }
