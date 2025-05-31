@@ -107,14 +107,10 @@ class StreamedProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean = withContext(Dispatchers.IO) {
         val matchId = data.substringAfterLast("/")
-        val extractor = StreamedMediaExtractor()
+        val extractor = StreamedMediaExtractor() // Creates an instance, which will run the init block for CloudflareKiller
         var success = false
 
         Log.d(TAG, "Attempting to load links for match ID: $matchId")
-
-        // No need for explicit addCloudflareBypassCookie call here if CloudflareKiller is
-        // added as an interceptor to the global AppUtils.app.baseClient,
-        // as it will automatically intercept and handle Cloudflare challenges.
 
         val matchDetails = try {
             app.get("$mainUrl/api/matches/live/$matchId", timeout = NETWORK_TIMEOUT_MILLIS).parsedSafe<Match>()
@@ -209,33 +205,32 @@ class StreamedMediaExtractor {
         private val BASE_HEADERS = StreamedProvider.BASE_HEADERS
         private val NETWORK_TIMEOUT_MILLIS = StreamedProvider.NETWORK_TIMEOUT_MILLIS
 
-        // Keep this for consistency if other parts use it
         const val EXTRACTOR_TIMEOUT_SECONDS = 30
+
+        // Instantiate CloudflareKiller in companion object to make it a singleton for this class
+        private val cloudflareKiller = CloudflareKiller()
+
+        // Flag to ensure the interceptor is added only once globally
+        @Volatile
+        private var isInterceptorAdded = false
     }
 
     private val cookieCache = mutableMapOf<String, String>()
 
-    // Initialize CloudflareKiller once for this extractor
-    // It's more efficient to have one instance per extractor/session.
-    // If you need it globally for all requests in the app, you'd add it to AppUtils.app.baseClient directly.
-    private val cloudflareKiller = CloudflareKiller()
-
-    // Constructor block to add the CloudflareKiller interceptor
-    // This will ensure that any requests made through `app.get` or `app.post` will
-    // automatically attempt to bypass Cloudflare for domains handled by CloudflareKiller.
     init {
-        // Add the CloudflareKiller as a network interceptor.
-        // It will inspect responses for Cloudflare challenges and try to solve them.
-        // Make sure it's added only once globally or per session to avoid duplicates.
-        // For simplicity, we add it here, assuming this extractor is instantiated per loadLinks call.
-        // If you had a global AppUtils.app setup, you'd add it there.
-        // For a single extractor, it's safer to ensure it's only added once or manage its lifecycle.
-        // For now, let's assume it's acceptable for this scope.
-        Log.d(TAG, "Adding CloudflareKiller interceptor for $EMBED_STREAMS_TOP_URL")
-        app.baseClient.newBuilder().addInterceptor(cloudflareKiller.interceptor).build()
-        // No explicit call to `addCloudflareBypassCookie` needed here, as the interceptor will handle it on first challenge.
+        if (!isInterceptorAdded) {
+            synchronized(this) {
+                if (!isInterceptorAdded) {
+                    Log.d(TAG, "Adding CloudflareKiller interceptor for $EMBED_STREAMS_TOP_URL")
+                    app.baseClient = app.baseClient.newBuilder()
+                        .addInterceptor(cloudflareKiller.interceptor)
+                        .build()
+                    isInterceptorAdded = true
+                    Log.d(TAG, "CloudflareKiller interceptor added successfully.")
+                }
+            }
+        }
     }
-
 
     suspend fun getUrl(
         streamUrl: String,
@@ -252,8 +247,6 @@ class StreamedMediaExtractor {
         val embedReferer = "$EMBED_STREAMS_TOP_URL/embed/$source/$streamId/$streamNo"
 
         // 1. Fetch stream page cookies (from streamed.su)
-        // CloudflareKiller is now part of the AppUtils.app.baseClient via the init block.
-        // It should handle Cloudflare challenges for embedstreams.top automatically.
         val streamResponse = try {
             app.get(streamUrl, headers = BASE_HEADERS, timeout = NETWORK_TIMEOUT_MILLIS)
         } catch (e: Exception) {
@@ -276,19 +269,52 @@ class StreamedMediaExtractor {
                 append(eventCookiesString)
             }
         }
-        Log.d(TAG, "Combined explicit cookies for $source/$streamNo: $combinedCookiesForHeader (cf_clearance handled by interceptor)")
+        Log.d(TAG, "Combined explicit cookies for $source/$streamNo: $combinedCookiesForHeader")
 
 
-        // 3. POST to fetch encrypted string
+        // --- NEW STEP: Fetch the embed page to get the X-Tok header ---
+        var xTok: String? = null
+        try {
+            val embedPageResponse = app.get(embedReferer, headers = BASE_HEADERS, timeout = NETWORK_TIMEOUT_MILLIS)
+            if (embedPageResponse.code == 200) {
+                // Parse the HTML to find the X-Tok. This is a common pattern for tokens.
+                // We're looking for something like: X-Tok: "some_hex_string" or var tok = "some_hex_string";
+                // This regex is a guess, you might need to adjust it based on the actual JS on the page.
+                // It looks for `X-Tok: "..."` or `tok="..."` or similar assignments.
+                val regex = Regex("""X-Tok\s*:\s*["']?([a-fA-F0-9]+)["']?|tok\s*=\s*["']([a-fA-F0-9]+)["']""")
+                val match = regex.find(embedPageResponse.text)
+
+                xTok = match?.groupValues?.get(1) // Capture group 1 or 2 depending on the match.
+                    ?: match?.groupValues?.get(2) // Fallback for the second capture group in the regex.
+
+                if (xTok.isNullOrBlank()) {
+                    Log.w(TAG, "X-Tok not found in embed page HTML for $embedReferer.")
+                } else {
+                    Log.d(TAG, "Found X-Tok: $xTok")
+                }
+            } else {
+                Log.e(TAG, "Failed to fetch embed page $embedReferer with code: ${embedPageResponse.code}")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Exception fetching embed page $embedReferer: ${e.message}", e)
+        }
+        // --- END NEW STEP ---
+
+
+        // 3. POST to fetch encrypted string from embedstreams.top/fetch
         val postData = mapOf(
             "source" to source,
             "id" to streamId,
             "streamNo" to streamNo.toString()
         )
+        // Headers for the /fetch POST request. Add X-Tok if found.
         val fetchHeaders = BASE_HEADERS.toMutableMap().apply {
             this["Referer"] = embedReferer // Corrected Referer based on network logs
             if (combinedCookiesForHeader.isNotEmpty()) {
                 this["Cookie"] = combinedCookiesForHeader
+            }
+            if (!xTok.isNullOrBlank()) {
+                this["X-Tok"] = xTok // Add the extracted X-Tok header
             }
             this["Content-Type"] = "application/json"
         }.toMap()
@@ -342,6 +368,7 @@ class StreamedMediaExtractor {
         var m3u8Content: String? = null
         var finalM3u8UrlUsed: String? = null
 
+        // Try to fetch M3U8 content from primary and fallback domains
         val domainsToTest = listOf(PRIMARY_M3U8_DOMAIN) + FALLBACK_M3U8_DOMAINS
         for (domain in domainsToTest) {
             val currentM3u8Url = baseM3u8Url.replace(PRIMARY_M3U8_DOMAIN, domain)
@@ -352,7 +379,7 @@ class StreamedMediaExtractor {
                     m3u8Content = response.text
                     finalM3u8UrlUsed = currentM3u8Url
                     Log.d(TAG, "Successfully fetched M3U8 content from $domain.")
-                    break
+                    break // Stop on first successful fetch
                 } else {
                     Log.w(TAG, "Failed to fetch M3U8 content from $domain with code: ${response.code}")
                 }
