@@ -66,12 +66,12 @@ class StreamedProvider : MainAPI() {
                 }
             }.filterNotNull()
             return newHomePageResponse(
-                list = listOf(HomePageList(request.name, list, isHorizontalImages = true)),
+                list = HomePageList(request.name, list, isHorizontalImages = true),
                 hasNext = false
             )
         } catch (e: Exception) {
             Log.e("StreamedProvider", "Failed to load main page ${request.data}: ${e.message}")
-            return newHomePageResponse(list = emptyList(), hasNext = false)
+            return newHomePageResponse(emptyList(), hasNext = false)
         }
     }
 
@@ -90,6 +90,7 @@ class StreamedProvider : MainAPI() {
             return newLiveStreamLoadResponse(
                 name = title,
                 url = url,
+                apiName = this.name,
                 dataUrl = url
             ) {
                 this.posterUrl = validPosterUrl
@@ -348,7 +349,7 @@ class StreamedMediaExtractor {
         val queryParams = if (urlParts.size > 1) "?${urlParts[1]}" else ""
 
         // Construct M3U8 URL
-        val keySuffix = if (source == "bravo") "/g.key" else ""
+        val keySuffix = if (source == "bravo") "/b.key" else ""
         val m3u8BaseUrl = "https://rr.buytommy.top$basePath$keySuffix"
         val m3u8Headers = baseHeaders + mapOf(
             "Referer" to embedReferer,
