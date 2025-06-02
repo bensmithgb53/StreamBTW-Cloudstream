@@ -51,7 +51,7 @@ class StreamedProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         try {
-            val response = app.get(request.data, headers = baseHeaders, interceptor = cloudflareKiller, timeout = 15)
+            val response = app.get(request.data, headers = baseHeaders, interceptor = cloudflareKiller, timeout = 10)
             val listJson = parseJson<List<Match>>(response.text)
             val list = listJson.filter { it.matchSources.isNotEmpty() }.mapNotNull { match ->
                 match.id?.let { id ->
@@ -115,7 +115,7 @@ class StreamedProvider : MainAPI() {
         val fetchId = if (matchId.length > 50) matchId.take(50) else matchId
 
         val matchDetails = try {
-            app.get("$mainUrl/api/matches/live/$matchId", headers = baseHeaders, interceptor = cloudflareKiller, timeout = 15).parsedSafe<Match>()
+            app.get("$mainUrl/api/matches/live/$matchId", headers = baseHeaders, interceptor = cloudflareKiller, timeout = 10).parsedSafe<Match>()
         } catch (e: Exception) {
             Log.w("StreamedProvider", "Failed to fetch match details for $matchId: ${e.message}")
             null
@@ -125,10 +125,12 @@ class StreamedProvider : MainAPI() {
 
         for (source in sourcesToProcess) {
             val streamInfos = try {
-                val response = app.get("$mainUrl/api/stream/$source/$matchId", headers = baseHeaders, interceptor = cloudflareKiller, timeout = 15).text
-                parseJson<List<StreamInfo>>(response).filter { it.embedUrl.isNotBlank() }
+                val response = app.get("$mainUrl/api/stream/$source/$matchId", headers = baseHeaders, interceptor = cloudflareKiller, timeout = 10).text
+                val streams = parseJson<List<StreamInfo>>(response).filter { it.embedUrl.isNotBlank() }
+                Log.d("StreamedProvider", "Found ${streams.size} streams for $source/$matchId: $streams")
+                streams
             } catch (e: Exception) {
-                Log.w("StreamedProvider", "No stream info from API for $source ($matchId): ${e.message}")
+                Log.w("StreamedProvider", "No stream info for $source ($matchId): ${e.message}")
                 emptyList()
             }
 
@@ -137,9 +139,9 @@ class StreamedProvider : MainAPI() {
                     repeat(3) { attempt ->
                         try {
                             val streamUrl = "$mainUrl/watch/$matchId/$source/${stream.streamNo}"
+                            Log.d("StreamedProvider", "Attempt ${attempt + 1} for $streamUrl (ID: ${stream.id}, Language: ${stream.language}, HD: ${stream.hd})")
                             if (extractor.getUrl(streamUrl, fetchId, source, stream.streamNo, stream.language, stream.hd, subtitleCallback, callback)) {
                                 success = true
-                                return@repeat
                             }
                         } catch (e: Exception) {
                             Log.e("StreamedProvider", "Attempt ${attempt + 1} failed for $source stream ${stream.streamNo}: ${e.message}")
@@ -148,14 +150,13 @@ class StreamedProvider : MainAPI() {
                     }
                 }
             } else if (availableSources.isEmpty() && matchDetails != null) {
-                val maxFallbackStreams = streamInfos.maxOfOrNull { it.streamNo }?.coerceAtMost(3) ?: 3
-                for (streamNo in 1..maxFallbackStreams) {
+                for (streamNo in 1..5) { // Try up to 5 streams to catch all possible links
                     repeat(3) { attempt ->
                         try {
                             val streamUrl = "$mainUrl/watch/$matchId/$source/$streamNo"
+                            Log.d("StreamedProvider", "Attempt ${attempt + 1} for fallback $streamUrl")
                             if (extractor.getUrl(streamUrl, fetchId, source, streamNo, "Unknown", false, subtitleCallback, callback)) {
                                 success = true
-                                return@repeat
                             }
                         } catch (e: Exception) {
                             Log.e("StreamedProvider", "Attempt ${attempt + 1} failed for $source stream $streamNo: ${e.message}")
@@ -165,6 +166,7 @@ class StreamedProvider : MainAPI() {
                 }
             }
         }
+        Log.d("StreamedProvider", "Load links result for $matchId: success=$success")
         return success
     }
 
@@ -193,7 +195,6 @@ class StreamedProvider : MainAPI() {
 
 class StreamedMediaExtractor {
     private val fetchUrl = "https://embedstreams.top/fetch"
-    private val cookieUrl = "https://fishy.streamed.su/api/event"
     private val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
     private val cloudflareKiller by lazy { CloudflareKiller() }
     private val baseHeaders = mapOf(
@@ -206,9 +207,10 @@ class StreamedMediaExtractor {
         "Sec-Ch-Ua-Platform" to "\"Android\""
     )
     private val fallbackDomains = listOf("rr.buytommy.top", "p2-panel.streamed.su", "streamed.su", "embedstreams.top", "ann.embedstreams.top")
+    private val linkCache = mutableMapOf<String, ExtractorLink>()
 
     companion object {
-        const val TIMEOUT_SECONDS = 30
+        const val TIMEOUT_SECONDS = 10 // Reduced timeout
         const val TIMEOUT_MILLIS = TIMEOUT_SECONDS * 1000L
     }
 
@@ -224,9 +226,16 @@ class StreamedMediaExtractor {
     ): Boolean {
         Log.d("StreamedMediaExtractor", "Extracting: $streamUrl (ID: $streamId, Source: $source, StreamNo: $streamNo)")
 
+        // Check cache
+        linkCache[streamUrl]?.let {
+            callback(it)
+            Log.d("StreamedMediaExtractor", "Using cached link for $streamUrl")
+            return true
+        }
+
         // Check server availability
         try {
-            if (!app.head("https://streamed.su", headers = baseHeaders, interceptor = cloudflareKiller, timeout = 10).isSuccessful) {
+            if (!app.head("https://streamed.su", headers = baseHeaders, interceptor = cloudflareKiller, timeout = 5).isSuccessful) {
                 Log.e("StreamedMediaExtractor", "streamed.su is unreachable")
                 return false
             }
@@ -251,6 +260,7 @@ class StreamedMediaExtractor {
         val fetchHeaders = baseHeaders + mapOf("Referer" to streamUrl, "Cookie" to cookieString)
         val encryptedResponse = try {
             val response = app.post(fetchUrl, headers = fetchHeaders, json = postData, interceptor = cloudflareKiller, timeout = TIMEOUT_MILLIS)
+            Log.d("StreamedMediaExtractor", "Fetch response code: ${response.code}")
             if (response.code != 200) {
                 Log.e("StreamedMediaExtractor", "Fetch failed for $fetchUrl: code=${response.code}, body=${response.text.take(100)}")
                 return false
@@ -262,6 +272,7 @@ class StreamedMediaExtractor {
             Log.e("StreamedMediaExtractor", "Fetch failed: ${e.message}")
             return false
         }
+        Log.d("StreamedMediaExtractor", "Encrypted response: ${encryptedResponse.take(100)}")
 
         // Decrypt response
         val decryptResponse = try {
@@ -278,13 +289,18 @@ class StreamedMediaExtractor {
         val decryptedPath = decryptResponse?.get("decrypted")?.takeIf { it.isNotBlank() } ?: return false.also {
             Log.e("StreamedMediaExtractor", "No decrypted path")
         }
+        Log.d("StreamedMediaExtractor", "Decrypted path: $decryptedPath")
 
         // Construct M3U8 URL
         val urlParts = decryptedPath.split("?")
         val basePath = urlParts[0]
         val queryParams = if (urlParts.size > 1) "?${urlParts[1]}" else ""
-        val keySuffix = if (source == "bravo" && app.head("https://rr.buytommy.top$basePath/b.key", headers = baseHeaders, interceptor = cloudflareKiller, timeout = 5).isSuccessful) {
-            "/b.key"
+        val keySuffix = if (source == "bravo") {
+            try {
+                if (app.head("https://rr.buytommy.top$basePath/b.key", headers = baseHeaders, interceptor = cloudflareKiller, timeout = 5).isSuccessful) "/b.key" else ""
+            } catch (e: Exception) {
+                ""
+            }
         } else {
             ""
         }
@@ -298,22 +314,23 @@ class StreamedMediaExtractor {
             try {
                 val response = app.get(testUrl, headers = m3u8Headers, interceptor = cloudflareKiller, timeout = TIMEOUT_MILLIS)
                 if (response.code == 200 && response.text.contains("#EXTM3U")) {
-                    callback.invoke(
-                        newExtractorLink(
-                            source = "Streamed",
-                            name = "$source Stream $streamNo ($language${if (isHd) ", HD" else ""})",
-                            url = testUrl,
-                            type = ExtractorLinkType.M3U8
-                        ) {
-                            this.referer = embedReferer
-                            this.quality = if (isHd) Qualities.P1080.value else Qualities.Unknown.value
-                            this.headers = m3u8Headers
-                        }
-                    )
+                    val link = newExtractorLink(
+                        source = "Streamed",
+                        name = "$source Stream $streamNo ($language${if (isHd) ", HD" else ""})",
+                        url = testUrl,
+                        type = ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = embedReferer
+                        this.quality = if (isHd) Qualities.P1080.value else Qualities.Unknown.value
+                        this.headers = m3u8Headers
+                    }
+                    callback(link)
+                    linkCache[streamUrl] = link
+                    Log.d("StreamedMediaExtractor", "M3U8 added: $testUrl")
                     linkFound = true
                     break
                 } else {
-                    Log.w("StreamedMediaExtractor", "Invalid M3U8 for $testUrl: code=${response.code}")
+                    Log.w("StreamedMediaExtractor", "Invalid M3U8 for $testUrl: code=${response.code}, body=${response.text.take(100)}")
                 }
             } catch (e: Exception) {
                 Log.e("StreamedMediaExtractor", "M3U8 test failed for $domain: ${e.message}")
@@ -323,18 +340,19 @@ class StreamedMediaExtractor {
         // Fallback if no valid M3U8
         if (!linkFound) {
             val fallbackUrl = m3u8BaseUrl + queryParams
-            callback.invoke(
-                newExtractorLink(
-                    source = "Streamed",
-                    name = "$source Stream $streamNo ($language${if (isHd) ", HD" else ""})",
-                    url = fallbackUrl,
-                    type = ExtractorLinkType.M3U8
-                ) {
-                    this.referer = embedReferer
-                    this.quality = if (isHd) Qualities.P1080.value else Qualities.Unknown.value
-                    this.headers = m3u8Headers
-                }
-            )
+            val link = newExtractorLink(
+                source = "Streamed",
+                name = "$source Stream $streamNo ($language${if (isHd) ", HD" else ""})",
+                url = fallbackUrl,
+                type = ExtractorLinkType.M3U8
+            ) {
+                this.referer = embedReferer
+                this.quality = if (isHd) Qualities.P1080.value else Qualities.Unknown.value
+                this.headers = m3u8Headers
+            }
+            callback(link)
+            linkCache[streamUrl] = link
+            Log.d("StreamedMediaExtractor", "Added fallback M3U8: $fallbackUrl")
             linkFound = true
         }
 
