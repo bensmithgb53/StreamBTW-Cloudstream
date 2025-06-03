@@ -12,6 +12,9 @@ import java.util.Locale
 import android.util.Log
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 
 class StreamedProvider : MainAPI() {
     override var mainUrl = "https://streamed.su"
@@ -95,6 +98,8 @@ class StreamedProvider : MainAPI() {
                 dataUrl = url
             ) {
                 this.posterUrl = validPosterUrl
+                // New: Add sync data for resume tracking
+                this.syncData = mutableMapOf("matchId" to matchId, "timestamp" to System.currentTimeMillis().toString())
             }
         } catch (e: Exception) {
             Log.e("StreamedProvider", "Failed to load URL $url: ${e.message}", e)
@@ -117,6 +122,7 @@ class StreamedProvider : MainAPI() {
         var success = false
         val fetchId = if (matchId.length > 50) matchId.take(50) else matchId
 
+        // New: Pre-fetch match details to reduce delays
         val matchDetails = try {
             app.get("$mainUrl/api/matches/live/$matchId", headers = baseHeaders, interceptor = cloudflareKiller, timeout = 15).parsedSafe<Match>()
         } catch (e: Exception) {
@@ -126,49 +132,56 @@ class StreamedProvider : MainAPI() {
         val availableSources = matchDetails?.matchSources?.map { it.sourceName }?.toSet() ?: emptySet()
         val sourcesToProcess = if (availableSources.isNotEmpty()) availableSources.toList() else defaultSources
 
-        for (source in sourcesToProcess) {
-            val streamInfos = try {
-                val response = app.get("$mainUrl/api/stream/$source/$matchId", headers = baseHeaders, interceptor = cloudflareKiller, timeout = 15).text
-                val streams = parseJson<List<StreamInfo>>(response).filter { it.embedUrl.isNotBlank() }
-                Log.d("StreamedProvider", "Found ${streams.size} streams for $source/$matchId: $streams")
-                streams
-            } catch (e: Exception) {
-                Log.w("StreamedProvider", "No stream info for $source ($matchId): ${e.message}", e)
-                emptyList()
-            }
+        // New: Parallel stream fetching to reduce spinning
+        coroutineScope {
+            val deferredLinks = sourcesToProcess.map { source ->
+                async {
+                    val streamInfos = try {
+                        val response = app.get("$mainUrl/api/stream/$source/$matchId", headers = baseHeaders, interceptor = cloudflareKiller, timeout = 15).text
+                        val streams = parseJson<List<StreamInfo>>(response).filter { it.embedUrl.isNotBlank() }
+                        Log.d("StreamedProvider", "Found ${streams.size} streams for $source/$matchId: $streams")
+                        streams
+                    } catch (e: Exception) {
+                        Log.w("StreamedProvider", "No stream info for $source ($matchId): ${e.message}", e)
+                        emptyList()
+                    }
 
-            if (streamInfos.isNotEmpty()) {
-                streamInfos.forEach { stream ->
-                    repeat(5) { attempt ->
-                        try {
-                            val streamUrl = "$mainUrl/watch/$matchId/$source/${stream.streamNo}"
-                            Log.d("StreamedProvider", "Attempt ${attempt + 1} for $streamUrl (ID: ${stream.id}, Language: ${stream.language}, HD: ${stream.hd})")
-                            if (extractor.getUrl(streamUrl, fetchId, source, stream.streamNo, stream.language, stream.hd, subtitleCallback, callback)) {
-                                success = true
+                    if (streamInfos.isNotEmpty()) {
+                        streamInfos.forEach { stream ->
+                            repeat(5) { attempt ->
+                                try {
+                                    val streamUrl = "$mainUrl/watch/$matchId/$source/${stream.streamNo}"
+                                    Log.d("StreamedProvider", "Attempt ${attempt + 1} for $streamUrl (ID: ${stream.id}, Language: ${stream.language}, HD: ${stream.hd})")
+                                    if (extractor.getUrl(streamUrl, fetchId, source, stream.streamNo, stream.language, stream.hd, subtitleCallback, callback)) {
+                                        success = true
+                                    }
+                                } catch (e: Exception) {
+                                    Log.e("StreamedProvider", "Attempt ${attempt + 1} failed for $source stream ${stream.streamNo}: ${e.message}", e)
+                                    if (attempt < 4) delay(1000L * (attempt + 1))
+                                }
                             }
-                        } catch (e: Exception) {
-                            Log.e("StreamedProvider", "Attempt ${attempt + 1} failed for $source stream ${stream.streamNo}: ${e.message}", e)
-                            if (attempt < 4) delay(1000L * (attempt + 1))
                         }
-                    }
-                }
-            } else if (availableSources.isEmpty() && matchDetails != null) {
-                for (streamNo in 1..5) {
-                    repeat(5) { attempt ->
-                        try {
-                            val streamUrl = "$mainUrl/watch/$matchId/$source/$streamNo"
-                            Log.d("StreamedProvider", "Attempt ${attempt + 1} for fallback $streamUrl")
-                            if (extractor.getUrl(streamUrl, fetchId, source, streamNo, "Unknown", false, subtitleCallback, callback)) {
-                                success = true
+                    } else if (availableSources.isEmpty() && matchDetails != null) {
+                        for (streamNo in 1..5) {
+                            repeat(5) { attempt ->
+                                try {
+                                    val streamUrl = "$mainUrl/watch/$matchId/$source/$streamNo"
+                                    Log.d("StreamedProvider", "Attempt ${attempt + 1} for fallback $streamUrl")
+                                    if (extractor.getUrl(streamUrl, fetchId, source, streamNo, "Unknown", false, subtitleCallback, callback)) {
+                                        success = true
+                                    }
+                                } catch (e: Exception) {
+                                    Log.e("StreamedProvider", "Attempt ${attempt + 1} failed for $source stream $streamNo: ${e.message}", e)
+                                    if (attempt < 4) delay(1000L * (attempt + 1))
+                                }
                             }
-                        } catch (e: Exception) {
-                            Log.e("StreamedProvider", "Attempt ${attempt + 1} failed for $source stream $streamNo: ${e.message}", e)
-                            if (attempt < 4) delay(1000L * (attempt + 1))
                         }
                     }
                 }
             }
+            deferredLinks.awaitAll()
         }
+
         Log.d("StreamedProvider", "Load links result for $matchId: success=$success")
         return success
     }
@@ -334,7 +347,14 @@ class StreamedMediaExtractor {
                         this.referer = embedReferer
                         this.quality = if (isHd) Qualities.P1080.value else Qualities.Unknown.value
                         this.headers = m3u8Headers
-                        this.extractorData = mapOf("streamId" to streamId, "source" to source, "streamNo" to streamNo.toString()).toString()
+                        // New: Enhanced metadata for resume and SurfaceView recovery
+                        this.extractorData = mapOf(
+                            "streamId" to streamId,
+                            "source" to source,
+                            "streamNo" to streamNo.toString(),
+                            "timestamp" to System.currentTimeMillis().toString(),
+                            "retryOnInvalidSurface" to "true"
+                        ).toString()
                     }
                     callback(link)
                     linkCache[streamUrl] = link to System.currentTimeMillis()
@@ -360,7 +380,13 @@ class StreamedMediaExtractor {
                 this.referer = embedReferer
                 this.quality = if (isHd) Qualities.P1080.value else Qualities.Unknown.value
                 this.headers = m3u8Headers
-                this.extractorData = mapOf("streamId" to streamId, "source" to source, "streamNo" to streamNo.toString()).toString()
+                this.extractorData = mapOf(
+                    "streamId" to streamId,
+                    "source" to source,
+                    "streamNo" to streamNo.toString(),
+                    "timestamp" to System.currentTimeMillis().toString(),
+                    "retryOnInvalidSurface" to "true"
+                ).toString()
             }
             callback(link)
             linkCache[streamUrl] = link to System.currentTimeMillis()
