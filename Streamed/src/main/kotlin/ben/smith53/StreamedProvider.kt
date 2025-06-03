@@ -11,6 +11,7 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import java.util.Locale
 import android.util.Log
 import kotlinx.coroutines.delay
+import android.net.Uri // Import for Uri.encode
 
 class StreamedProvider : MainAPI() {
     override var mainUrl = "https://streamed.su"
@@ -21,7 +22,7 @@ class StreamedProvider : MainAPI() {
     private val defaultSources = listOf("alpha", "bravo", "charlie", "delta", "echo", "foxtrot")
     private val cloudflareKiller by lazy { CloudflareKiller() }
     private val baseHeaders = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
+        "User-Agent" to "Mozilla/55.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
         "Accept" to "application/vnd.apple.mpegurl, */*",
         "Origin" to "https://embedstreams.top",
         "Accept-Language" to "en-GB,en-US;q=0.9,en;q=0.8",
@@ -112,7 +113,7 @@ class StreamedProvider : MainAPI() {
         }
         val extractor = StreamedMediaExtractor()
         var success = false
-        val fetchId = if (matchId.length > 50) matchId.take(50) else matchId
+        val fetchId = if (matchId.length > 50) matchId.take(50) else matchId // Note: passing full matchId to extractor now
 
         val matchDetails = try {
             app.get("$mainUrl/api/matches/live/$matchId", headers = baseHeaders, interceptor = cloudflareKiller, timeout = 10).parsedSafe<Match>()
@@ -140,7 +141,6 @@ class StreamedProvider : MainAPI() {
                         try {
                             val streamUrl = "$mainUrl/watch/$matchId/$source/${stream.streamNo}"
                             Log.d("StreamedProvider", "Attempt ${attempt + 1} for $streamUrl (ID: ${stream.id}, Language: ${stream.language}, HD: ${stream.hd})")
-                            // Pass the matchId to the extractor
                             if (extractor.getUrl(streamUrl, matchId, source, stream.streamNo, stream.language, stream.hd, subtitleCallback, callback)) {
                                 success = true
                             }
@@ -156,7 +156,6 @@ class StreamedProvider : MainAPI() {
                         try {
                             val streamUrl = "$mainUrl/watch/$matchId/$source/$streamNo"
                             Log.d("StreamedProvider", "Attempt ${attempt + 1} for fallback $streamUrl")
-                            // Pass the matchId to the extractor for fallback
                             if (extractor.getUrl(streamUrl, matchId, source, streamNo, "Unknown", false, subtitleCallback, callback)) {
                                 success = true
                             }
@@ -200,7 +199,7 @@ class StreamedMediaExtractor {
     private val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
     private val cloudflareKiller by lazy { CloudflareKiller() }
     private val baseHeaders = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
+        "User-Agent" to "Mozilla/55.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
         "Accept" to "application/vnd.apple.mpegurl, */*",
         "Origin" to "https://embedstreams.top",
         "Accept-Language" to "en-GB,en-US;q=0.9,en;q=0.8",
@@ -208,21 +207,22 @@ class StreamedMediaExtractor {
         "Sec-Ch-Ua-Mobile" to "?1",
         "Sec-Ch-Ua-Platform" to "\"Android\""
     )
-    // IMPORTANT: Change this to your local machine's IP address where the Python proxy is running
-    // If running on the same device as Cloudstream, use "127.0.0.1" (localhost)
-    // If running on a different device on the same network, use its internal IP (e.g., "192.168.1.100")
-    private val LOCAL_PROXY_IP = "127.0.0.1" // Change this!
-    private val LOCAL_PROXY_PORT = 8000 // Ensure this matches your Python script's PORT
+
+    // *** Configuration for local proxy on the same device ***
+    private val LOCAL_PROXY_HOST = "127.0.0.1" // Localhost IP
+    private val LOCAL_PROXY_PORT = 8000 // Port must match your Python script's PORT
+    // ******************************************************
+
     private val linkCache = mutableMapOf<String, ExtractorLink>()
 
     companion object {
-        const val TIMEOUT_SECONDS = 10 // Reduced timeout
+        const val TIMEOUT_SECONDS = 10
         const val TIMEOUT_MILLIS = TIMEOUT_SECONDS * 1000L
     }
 
     suspend fun getUrl(
         streamUrl: String,
-        matchId: String, // Added matchId parameter
+        matchId: String, // Correctly pass matchId
         source: String,
         streamNo: Int,
         language: String,
@@ -232,16 +232,11 @@ class StreamedMediaExtractor {
     ): Boolean {
         Log.d("StreamedMediaExtractor", "Extracting: $streamUrl (ID: $matchId, Source: $source, StreamNo: $streamNo)")
 
-        // Check cache
         linkCache[streamUrl]?.let {
             callback(it)
             Log.d("StreamedMediaExtractor", "Using cached link for $streamUrl")
             return true
         }
-
-        // The logic for fetching the decrypted path remains the same as it needs to interact with streamed.su
-        // and your decrypt API to get the *original* M3U8 path.
-        // We will then craft a URL to your local proxy using this original path.
 
         // Check server availability
         try {
@@ -302,21 +297,18 @@ class StreamedMediaExtractor {
         Log.d("StreamedMediaExtractor", "Decrypted path: $decryptedPath")
 
         // Construct M3U8 URL pointing to your local proxy
-        // This is the crucial change. You need to ensure your Python proxy can handle
-        // requests to this specific path and then fetch the actual M3U8.
-        val localProxyM3u8Url = "http://$LOCAL_PROXY_IP:$LOCAL_PROXY_PORT/playlist.m3u8?original_path=${urllib.parse.quote(decryptedPath)}"
+        val localProxyM3u8Url = "http://$LOCAL_PROXY_HOST:$LOCAL_PROXY_PORT/playlist.m3u8?original_path=${Uri.encode(decryptedPath)}"
         Log.d("StreamedMediaExtractor", "Constructed Local Proxy M3U8 URL: $localProxyM3u8Url")
 
-        // Add the local proxy link
         val link = newExtractorLink(
-            source = "Streamed (Proxy)", // Indicate it's coming from your proxy
+            source = "Streamed (Local Proxy)",
             name = "$source Stream $streamNo ($language${if (isHd) ", HD" else ""})",
             url = localProxyM3u8Url,
             type = ExtractorLinkType.M3U8
         ) {
-            this.referer = embedReferer // Keep original referer if needed by the proxy
+            this.referer = embedReferer
             this.quality = if (isHd) Qualities.P1080.value else Qualities.Unknown.value
-            // No custom headers are typically needed here as the proxy handles the actual fetching
+            this.headers = mapOf() // No special headers needed for localhost call
         }
         callback(link)
         linkCache[streamUrl] = link
