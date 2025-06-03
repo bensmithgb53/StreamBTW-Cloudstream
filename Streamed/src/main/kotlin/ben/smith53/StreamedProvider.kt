@@ -9,9 +9,9 @@ import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import java.util.Locale
-import android.util.Log
+import android.util.Log // Ensure this is imported
 import kotlinx.coroutines.delay
-import android.net.Uri // Import for Uri.encode
+import android.net.Uri
 
 class StreamedProvider : MainAPI() {
     override var mainUrl = "https://streamed.su"
@@ -113,7 +113,7 @@ class StreamedProvider : MainAPI() {
         }
         val extractor = StreamedMediaExtractor()
         var success = false
-        val fetchId = if (matchId.length > 50) matchId.take(50) else matchId // Note: passing full matchId to extractor now
+        val fetchId = if (matchId.length > 50) matchId.take(50) else matchId
 
         val matchDetails = try {
             app.get("$mainUrl/api/matches/live/$matchId", headers = baseHeaders, interceptor = cloudflareKiller, timeout = 10).parsedSafe<Match>()
@@ -151,7 +151,7 @@ class StreamedProvider : MainAPI() {
                     }
                 }
             } else if (availableSources.isEmpty() && matchDetails != null) {
-                for (streamNo in 1..5) { // Try up to 5 streams to catch all possible links
+                for (streamNo in 1..5) {
                     repeat(3) { attempt ->
                         try {
                             val streamUrl = "$mainUrl/watch/$matchId/$source/$streamNo"
@@ -222,7 +222,7 @@ class StreamedMediaExtractor {
 
     suspend fun getUrl(
         streamUrl: String,
-        matchId: String, // Correctly pass matchId
+        matchId: String,
         source: String,
         streamNo: Int,
         language: String,
@@ -310,6 +310,10 @@ class StreamedMediaExtractor {
             this.quality = if (isHd) Qualities.P1080.value else Qualities.Unknown.value
             this.headers = mapOf() // No special headers needed for localhost call
         }
+        // >>> ADDED THIS DEBUG LINE <<<
+        Log.d("StreamedMediaExtractor", "DEBUG: Generated ExtractorLink URL: $localProxyM3u8Url")
+        // >>> END ADDED DEBUG LINE <<<
+
         callback(link)
         linkCache[streamUrl] = link
         Log.d("StreamedMediaExtractor", "Local Proxy M3U8 added: $localProxyM3u8Url")
