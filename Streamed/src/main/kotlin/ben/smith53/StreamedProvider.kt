@@ -23,12 +23,12 @@ class StreamedProvider : MainAPI() {
     private val maxStreams = 4
     private val defaultSources = listOf("alpha", "bravo", "charlie", "delta", "echo", "foxtrot")
     private val baseHeaders = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
+        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
         "Content-Type" to "application/json",
         "Accept" to "application/vnd.apple.mpegurl, */*",
         "Origin" to "https://embedstreams.top",
         "Accept-Language" to "en-GB,en-US;q=0.9,en;q=0.8",
-        "Sec-Ch-Ua" to "\"Not A(Brand\";v=\"8\", \"Chromium\";v=\"132\"",
+        "Sec-Ch-Ua" to "\"Chromium\";v=\"137\", \"Not/A)Brand\";v=\"24\"",
         "Sec-Ch-Ua-Mobile" to "?1",
         "Sec-Ch-Ua-Platform" to "\"Android\""
     )
@@ -196,16 +196,16 @@ class StreamedProvider : MainAPI() {
 class StreamedMediaExtractor {
     private val fetchUrl = "https://embedstreams.top/fetch"
     private val cookieUrl = "https://fishy.streamed.su/api/event"
-    private val proxyUrl = "https://owen-proxyts-97.deno.dev/proxy" // Your Deno proxy
+    private val proxyUrl = "https://owen-proxyts-97.deno.dev/proxy"
     private val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
     private val challengeBaseUrl = "https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/g"
     private val baseHeaders = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
+        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
         "Content-Type" to "application/json",
         "Accept" to "application/vnd.apple.mpegurl, */*",
         "Origin" to "https://embedstreams.top",
         "Accept-Language" to "en-GB,en-US;q=0.9,en;q=0.8",
-        "Sec-Ch-Ua" to "\"Not A(Brand\";v=\"8\", \"Chromium\";v=\"132\"",
+        "Sec-Ch-Ua" to "\"Chromium\";v=\"137\", \"Not/A)Brand\";v=\"24\"",
         "Sec-Ch-Ua-Mobile" to "?1",
         "Sec-Ch-Ua-Platform" to "\"Android\""
     )
@@ -329,8 +329,9 @@ class StreamedMediaExtractor {
             "cookies" to combinedCookies
         )
         val proxyResponse = try {
-            app.post(proxyUrl, json = proxyPostData, headers = baseHeaders, timeout = EXTRACTOR_TIMEOUT_MILLIS)
-                .parsedSafe<Map<String, String>>()
+            val response = app.post(proxyUrl, json = proxyPostData, headers = baseHeaders, timeout = EXTRACTOR_TIMEOUT_MILLIS)
+            Log.d("StreamedMediaExtractor", "Proxy response code: ${response.code}")
+            response.parsedSafe<Map<String, String>>()
         } catch (e: Exception) {
             Log.e("StreamedMediaExtractor", "Proxy request failed: ${e.message}")
             return false
