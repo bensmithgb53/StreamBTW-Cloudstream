@@ -23,12 +23,12 @@ class StreamedProvider : MainAPI() {
     private val maxStreams = 4
     private val defaultSources = listOf("alpha", "bravo", "charlie", "delta", "echo", "foxtrot")
     private val baseHeaders = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
+        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
         "Content-Type" to "application/json",
         "Accept" to "application/vnd.apple.mpegurl, */*",
         "Origin" to "https://embedstreams.top",
         "Accept-Language" to "en-GB,en-US;q=0.9,en;q=0.8",
-        "Sec-Ch-Ua" to "\"Chromium\";v=\"137\", \"Not/A)Brand\";v=\"24\"",
+        "Sec-Ch-Ua" to "\"Not A(Brand\";v=\"8\", \"Chromium\";v=\"132\"",
         "Sec-Ch-Ua-Mobile" to "?1",
         "Sec-Ch-Ua-Platform" to "\"Android\""
     )
@@ -83,6 +83,7 @@ class StreamedProvider : MainAPI() {
                 .replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.ROOT) else it.toString() }
                 .replace(Regex("-\\d+$"), "")
             val posterUrl = "$mainUrl/api/images/poster/$matchId.webp"
+            // Verify poster URL
             val validPosterUrl = try {
                 app.head(posterUrl).isSuccessful.let { if (it) posterUrl else "$mainUrl/api/images/poster/fallback.webp" }
             } catch (e: Exception) {
@@ -115,6 +116,7 @@ class StreamedProvider : MainAPI() {
         val extractor = StreamedMediaExtractor()
         var success = false
 
+        // Fetch match details
         val matchDetails = try {
             app.get("$mainUrl/api/matches/live/$matchId", timeout = StreamedMediaExtractor.EXTRACTOR_TIMEOUT_MILLIS).parsedSafe<Match>()
         } catch (e: Exception) {
@@ -126,6 +128,7 @@ class StreamedProvider : MainAPI() {
 
         val sourcesToProcess = if (availableSources.isNotEmpty()) availableSources.toList() else defaultSources
         for (source in sourcesToProcess) {
+            // Fetch stream info
             val streamInfos = try {
                 val response = app.get("$mainUrl/api/stream/$source/$matchId", timeout = StreamedMediaExtractor.EXTRACTOR_TIMEOUT_MILLIS).text
                 parseJson<List<StreamInfo>>(response).filter { it.embedUrl.isNotBlank() }
@@ -136,10 +139,10 @@ class StreamedProvider : MainAPI() {
 
             if (streamInfos.isNotEmpty()) {
                 streamInfos.forEach { stream ->
-                    repeat(2) { attempt ->
+                    repeat(2) { attempt -> // Retry once
                         try {
                             val streamUrl = "$mainUrl/watch/$matchId/$source/${stream.streamNo}"
-                            Log.d("StreamedProvider", "Attempt ${attempt + 1} for $streamUrl")
+                            Log.d("StreamedProvider", "Attempt ${attempt + 1} for $streamUrl (ID: ${stream.id}, Language: ${stream.language}, HD: ${stream.hd})")
                             if (extractor.getUrl(streamUrl, stream.id, source, stream.streamNo, stream.language, stream.hd, subtitleCallback, callback)) {
                                 success = true
                                 return@repeat
@@ -196,19 +199,19 @@ class StreamedProvider : MainAPI() {
 class StreamedMediaExtractor {
     private val fetchUrl = "https://embedstreams.top/fetch"
     private val cookieUrl = "https://fishy.streamed.su/api/event"
-    private val proxyUrl = "https://owen-proxyts-97.deno.dev/proxy"
     private val decryptUrl = "https://bensmithgb53-decrypt-13.deno.dev/decrypt"
     private val challengeBaseUrl = "https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/g"
     private val baseHeaders = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
+        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
         "Content-Type" to "application/json",
         "Accept" to "application/vnd.apple.mpegurl, */*",
         "Origin" to "https://embedstreams.top",
         "Accept-Language" to "en-GB,en-US;q=0.9,en;q=0.8",
-        "Sec-Ch-Ua" to "\"Chromium\";v=\"137\", \"Not/A)Brand\";v=\"24\"",
+        "Sec-Ch-Ua" to "\"Not A(Brand\";v=\"8\", \"Chromium\";v=\"132\"",
         "Sec-Ch-Ua-Mobile" to "?1",
         "Sec-Ch-Ua-Platform" to "\"Android\""
     )
+    private val fallbackDomains = listOf("rr.buytommy.top", "p2-panel.streamed.su", "streamed.su", "embedstreams.top", "ann.embedstreams.top")
     private val cookieCache = mutableMapOf<String, String>()
     private var cfClearance: String? = null
 
@@ -280,6 +283,9 @@ class StreamedMediaExtractor {
                 append("cf_clearance=$it")
             }
         }
+        if (combinedCookies.isEmpty()) {
+            Log.w("StreamedMediaExtractor", "No cookies obtained for $source/$streamNo")
+        }
         Log.d("StreamedMediaExtractor", "Combined cookies for $source/$streamNo: $combinedCookies")
 
         // POST to fetch encrypted string
@@ -293,20 +299,23 @@ class StreamedMediaExtractor {
             "Referer" to streamUrl,
             "Cookie" to combinedCookies
         )
+        Log.d("StreamedMediaExtractor", "Fetching with data: $postData and headers: $fetchHeaders")
+
         val encryptedResponse = try {
             val response = app.post(fetchUrl, headers = fetchHeaders, json = postData, timeout = EXTRACTOR_TIMEOUT_MILLIS)
             Log.d("StreamedMediaExtractor", "Fetch response code for $source/$streamNo: ${response.code}")
             if (response.code != 200) {
-                Log.e("StreamedMediaExtractor", "Fetch failed with code: ${response.code}")
+                Log.e("StreamedMediaExtractor", "Fetch failed for $source/$streamNo with code: ${response.code}, body: ${response.text.take(100)}")
                 return false
             }
             response.text.takeIf { it.isNotBlank() } ?: return false.also {
-                Log.e("StreamedMediaExtractor", "Empty encrypted response")
+                Log.e("StreamedMediaExtractor", "Empty encrypted response for $source/$streamNo")
             }
         } catch (e: Exception) {
             Log.e("StreamedMediaExtractor", "Fetch failed for $source/$streamNo: ${e.message}")
             return false
         }
+        Log.d("StreamedMediaExtractor", "Encrypted response for $source/$streamNo: ${encryptedResponse.take(100)}")
 
         // Decrypt using Deno
         val decryptPostData = mapOf("encrypted" to encryptedResponse)
@@ -318,43 +327,73 @@ class StreamedMediaExtractor {
             return false
         }
         val decryptedPath = decryptResponse?.get("decrypted")?.takeIf { it.isNotBlank() } ?: return false.also {
-            Log.e("StreamedMediaExtractor", "Decryption failed or no 'decrypted' key")
+            Log.e("StreamedMediaExtractor", "Decryption failed or no 'decrypted' key for $source/$streamNo")
         }
+        Log.d("StreamedMediaExtractor", "Decrypted path for $source/$streamNo: $decryptedPath")
 
-        // Construct m3u8 URL and send to proxy
-        val m3u8BaseUrl = "https://rr.buytommy.top$decryptedPath"
-        val proxyPostData = mapOf(
-            "m3u8Url" to m3u8BaseUrl,
-            "referer" to embedReferer,
-            "cookies" to combinedCookies
+        // Parse query parameters
+        val urlParts = decryptedPath.split("?")
+        val basePath = urlParts[0]
+        val queryParams = if (urlParts.size > 1) "?${urlParts[1]}" else ""
+        Log.d("StreamedMediaExtractor", "Base path: $basePath, Query params: $queryParams")
+
+        // Construct M3U8 URL
+        val m3u8BaseUrl = "https://rr.buytommy.top$basePath"
+        val m3u8Headers = baseHeaders + mapOf(
+            "Referer" to embedReferer,
+            "Cookie" to combinedCookies
         )
-        val proxyResponse = try {
-            val response = app.post(proxyUrl, json = proxyPostData, headers = baseHeaders, timeout = EXTRACTOR_TIMEOUT_MILLIS)
-            Log.d("StreamedMediaExtractor", "Proxy response code: ${response.code}")
-            response.parsedSafe<Map<String, String>>()
-        } catch (e: Exception) {
-            Log.e("StreamedMediaExtractor", "Proxy request failed: ${e.message}")
-            return false
-        }
-        val proxiedUrl = proxyResponse?.get("proxiedUrl")?.takeIf { it.isNotBlank() } ?: return false.also {
-            Log.e("StreamedMediaExtractor", "Proxy returned no valid URL")
-        }
 
-        // Pass proxied URL to Cloudstream3
-        callback.invoke(
-            newExtractorLink(
-                source = "StreamedProxy",
-                name = "$source Stream $streamNo ($language${if (isHd) ", HD" else ""})",
-                url = proxiedUrl,
-                type = ExtractorLinkType.M3U8
-            ) {
-                this.referer = embedReferer
-                this.quality = if (isHd) Qualities.P1080.value else Qualities.Unknown.value
-                this.headers = baseHeaders
+        // Test M3U8 with fallbacks
+        var linkFound = false
+        for (domain in fallbackDomains) {
+            try {
+                val testUrl = m3u8BaseUrl.replace("rr.buytommy.top", domain) + queryParams
+                Log.d("StreamedMediaExtractor", "Testing M3U8 URL: $testUrl")
+                val testResponse = app.get(testUrl, headers = m3u8Headers, timeout = EXTRACTOR_TIMEOUT_MILLIS)
+                Log.d("StreamedMediaExtractor", "M3U8 response code for $domain: ${testResponse.code}, body: ${testResponse.text.take(100)}")
+                if (testResponse.code == 200 && testResponse.text.contains("#EXTM3U")) {
+                    callback.invoke(
+                        newExtractorLink(
+                            source = "Streamed",
+                            name = "$source Stream $streamNo ($language${if (isHd) ", HD" else ""})",
+                            url = testUrl,
+                            type = ExtractorLinkType.M3U8
+                        ) {
+                            this.referer = embedReferer
+                            this.quality = if (isHd) Qualities.P1080.value else Qualities.Unknown.value
+                            this.headers = m3u8Headers
+                        }
+                    )
+                    Log.d("StreamedMediaExtractor", "M3U8 URL added for $source/$streamNo: $testUrl")
+                    linkFound = true
+                    break
+                }
+            } catch (e: Exception) {
+                Log.e("StreamedMediaExtractor", "M3U8 test failed for $domain: ${e.message}")
             }
-        )
-        Log.d("StreamedMediaExtractor", "Proxied M3U8 URL added: $proxiedUrl")
-        return true
+        }
+
+        // Fallback: Add original URL if no test succeeds
+        if (!linkFound) {
+            val fallbackUrl = m3u8BaseUrl + queryParams
+            callback.invoke(
+                newExtractorLink(
+                    source = "Streamed",
+                    name = "$source Stream $streamNo ($language${if (isHd) ", HD" else ""})",
+                    url = fallbackUrl,
+                    type = ExtractorLinkType.M3U8
+                ) {
+                    this.referer = embedReferer
+                    this.quality = if (isHd) Qualities.P1080.value else Qualities.Unknown.value
+                    this.headers = m3u8Headers
+                }
+            )
+            Log.d("StreamedMediaExtractor", "M3U8 test failed, added fallback URL for $source/$streamNo: $fallbackUrl")
+            linkFound = true
+        }
+
+        return linkFound
     }
 
     private suspend fun fetchCloudflareClearance(streamUrl: String): Boolean {
@@ -373,10 +412,11 @@ class StreamedMediaExtractor {
             Log.e("StreamedMediaExtractor", "Turnstile failed with code: ${turnstileResponse.code}")
             return false
         }
+
+        // Extract flow URL (simplified, replace with regex parsing if needed)
         val flowUrlMatch = Regex("""action="(/flow/ov1/[^"]+)"""").find(turnstileResponse.text)
-        val flowUrl = flowUrlMatch?.groupValues?.get(1)?.let { "$challengeBaseUrl$it" } ?: return false.also {
-            Log.e("StreamedMediaExtractor", "Failed to extract flow URL")
-        }
+        val flowUrl = flowUrlMatch?.groupValues?.get(1)?.let { "$challengeBaseUrl$it" }
+            ?: return false.also { Log.e("StreamedMediaExtractor", "Failed to extract flow URL") }
         val flowHeaders = baseHeaders + mapOf(
             "Referer" to turnstileUrl,
             "Content-Type" to "text/plain;charset=UTF-8",
