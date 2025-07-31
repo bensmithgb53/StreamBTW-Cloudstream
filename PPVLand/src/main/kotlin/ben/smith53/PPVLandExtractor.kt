@@ -7,7 +7,7 @@ import com.fasterxml.jackson.module.kotlin.readValue
 
 class PPVLandExtractor : ExtractorApi() {
     override val name = "PPVLandExtractor"
-    override val mainUrl = "https://ppv.wtf"
+    override val mainUrl = "https://ppv.to"
     override val requiresReferer = true
 
     private val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0"
