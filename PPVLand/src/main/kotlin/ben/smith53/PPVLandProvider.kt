@@ -2,6 +2,8 @@ package ben.smith53
 
 import com.lagradost.cloudstream3.HomePageList
 import com.lagradost.cloudstream3.HomePageResponse
+import com.lagradost.cloudstream3.LiveSearchResponse
+import com.lagradost.cloudstream3.LiveStreamLoadResponse
 import com.lagradost.cloudstream3.LoadResponse
 import com.lagradost.cloudstream3.MainAPI
 import com.lagradost.cloudstream3.MainPageRequest
@@ -12,7 +14,6 @@ import com.lagradost.cloudstream3.VPNStatus
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.newHomePageResponse
 import com.lagradost.cloudstream3.newLiveSearchResponse
-import com.lagradost.cloudstream3.newLiveStreamLoadResponse
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
@@ -36,13 +37,22 @@ class PPVLandProvider : MainAPI() {
         "Accept" to "*/*",
         "Connection" to "keep-alive",
         "Accept-Language" to "en-US,en;q=0.5",
-        "X-FS-Client" to "FS WebClient 1.0"
+        "X-FS-Client" to "FS WebClient 1.0",
+        // Keep cookie if you want, but not strictly required for many endpoints:
+        "Cookie" to "cf_clearance=..."
     )
+
+    companion object {
+        private const val posterUrl = "https://ppv.land/assets/img/ppvland.png"
+    }
 
     private fun normalizePoster(raw: String?): String? {
         if (raw.isNullOrBlank()) return null
+        // Unescape JSON-escaped slashes and fix relative paths
         var p = raw.replace("\\/", "/")
-        if (p.startsWith("/")) p = "$mainUrl$p"
+        if (p.startsWith("/")) {
+            p = "$mainUrl$p"
+        }
         return p
     }
 
@@ -50,7 +60,7 @@ class PPVLandProvider : MainAPI() {
         val apiUrl = "$mainUrl/api/streams"
         try {
             val response = app.get(apiUrl, headers = headers, timeout = 15)
-            var decompressedText = if (response.headers["Content-Encoding"] == "gzip") {
+            val decompressedText = if (response.headers["Content-Encoding"] == "gzip") {
                 GZIPInputStream(response.body.byteStream()).bufferedReader().use { it.readText() }
             } else {
                 response.text
@@ -61,10 +71,12 @@ class PPVLandProvider : MainAPI() {
                     HomePageList(
                         name = "API Error",
                         list = listOf(
-                            newLiveSearchResponse("API Failed", mainUrl) {
-                                this.apiName = this@PPVLandProvider.name
-                                this.posterUrl = null
-                            }
+                            LiveSearchResponse(
+                                name = "API Failed",
+                                url = mainUrl,
+                                apiName = this.name,
+                                posterUrl = posterUrl
+                            )
                         ),
                         isHorizontalImages = false
                     )
@@ -73,12 +85,14 @@ class PPVLandProvider : MainAPI() {
 
             val json = JSONObject(decompressedText)
             val streamsArray = json.optJSONArray("streams") ?: return emptyList()
-            val categoryMap = mutableMapOf<String, MutableList<com.lagradost.cloudstream3.LiveSearchResponse>>()
+
+            val categoryMap = mutableMapOf<String, MutableList<LiveSearchResponse>>()
 
             for (i in 0 until streamsArray.length()) {
                 val categoryData = streamsArray.getJSONObject(i)
                 val categoryName = categoryData.optString("category", "Other")
                 val streams = categoryData.optJSONArray("streams") ?: continue
+
                 val categoryEvents = categoryMap.getOrPut(categoryName) { mutableListOf() }
 
                 for (j in 0 until streams.length()) {
@@ -86,19 +100,30 @@ class PPVLandProvider : MainAPI() {
                     val eventName = stream.optString("name", "Unknown")
                     val streamId = stream.optString("id", "")
                     val posterRaw = stream.optString("poster", "")
-                    val poster = normalizePoster(posterRaw)
+                    val poster = normalizePoster(posterRaw) ?: posterUrl
+                    val startsAt = stream.optLong("starts_at", 0L)
 
-                    val event = newLiveSearchResponse(eventName, streamId) {
-                        this.apiName = this@PPVLandProvider.name
-                        this.posterUrl = poster
-                    }
+                    // Accept events even when poster is a data URI (some entries use inline images),
+                    // but prefer external images if available.
+                    val event = LiveSearchResponse(
+                        name = eventName,
+                        url = streamId, // keep the stream ID; extractor will resolve API/embed
+                        apiName = this.name,
+                        posterUrl = poster
+                    )
                     categoryEvents.add(event)
                 }
             }
 
-            return categoryMap.map { (name, events) ->
-                HomePageList(name = name, list = events, isHorizontalImages = false)
-            }
+            val homePageLists = categoryMap.map { (name, events) ->
+                HomePageList(
+                    name = name,
+                    list = events,
+                    isHorizontalImages = false
+                )
+            }.toMutableList()
+
+            return homePageLists
         } catch (e: Exception) {
             return listOf(
                 HomePageList(
@@ -125,11 +150,12 @@ class PPVLandProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
+        // url comes in as stream id or something similar; normalize
         val streamId = url.substringAfterLast("/").substringAfterLast(":").trim()
         val apiUrl = "$mainUrl/api/streams/$streamId"
-
         val response = app.get(apiUrl, headers = headers, timeout = 15)
-        var decompressedText = if (response.headers["Content-Encoding"] == "gzip") {
+
+        val decompressedText = if (response.headers["Content-Encoding"] == "gzip") {
             GZIPInputStream(response.body.byteStream()).bufferedReader().use { it.readText() }
         } else {
             response.text
@@ -142,36 +168,20 @@ class PPVLandProvider : MainAPI() {
         val json = JSONObject(decompressedText)
         val dataObj = json.optJSONObject("data")
         val streamName = dataObj?.optString("name") ?: json.optString("name", "Stream $streamId")
+        val poster = dataObj?.optString("poster") ?: json.optString("poster", posterUrl)
+        val description = dataObj?.optString("description") ?: json.optString("description", "No description available.")
 
-        var m3u8Url: String? = dataObj?.optString("m3u8")?.takeIf { it.isNotBlank() }
-            ?: json.optString("m3u8").takeIf { it.isNotBlank() }
-
-        if (m3u8Url.isNullOrBlank()) {
-            val sources = dataObj?.optJSONArray("sources")
-            if (sources != null) {
-                for (i in 0 until sources.length()) {
-                    val s = sources.getJSONObject(i)
-                    val sdata = s.optString("data", "")
-                    val stype = s.optString("type", "")
-                    if (sdata.contains(".m3u8")) {
-                        m3u8Url = sdata
-                        break
-                    } else if (stype.equals("iframe", true) || sdata.contains("/embed/")) {
-                        m3u8Url = sdata
-                        break
-                    }
-                }
-            }
-        }
-
-        if (m3u8Url.isNullOrBlank()) {
-            throw Exception("No m3u8 or embed source found for stream $streamId")
-        }
-
-        m3u8Url = m3u8Url.replace("\\/", "/")
-
-        return newLiveStreamLoadResponse(streamName, m3u8Url, m3u8Url) {
-            this.contentRating = null
+        // The URL passed to loadLinks should be the API URL, not the m3u8.
+        // The Extractor will then handle the API call to get the m3u8.
+        val finalUrl = "$mainUrl/api/streams/$streamId"
+        
+        return newLiveStreamLoadResponse(
+            streamName,
+            finalUrl
+        ) {
+            // This is how you set the data and other properties correctly
+            this.posterUrl = normalizePoster(poster)
+            this.plot = description
         }
     }
 
@@ -181,8 +191,15 @@ class PPVLandProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        // The data passed here is the API URL from the load function
+        // The extractor will now handle getting the final video link
         callback.invoke(
-            newExtractorLink(this.name, "PPVLand", url = data, type = ExtractorLinkType.M3U8) {
+            newExtractorLink(
+                this.name,
+                "PPVLand",
+                url = data,
+                ExtractorLinkType.M3U8
+            ) {
                 this.referer = mainUrl
                 this.quality = Qualities.Unknown.value
             }
