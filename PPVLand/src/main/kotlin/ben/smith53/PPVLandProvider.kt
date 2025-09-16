@@ -232,11 +232,36 @@ class PPVLandProvider : MainAPI() {
             return true
         }
         
-        // If it's an iframe URL, use the extractor to resolve it
+        // If it's an iframe URL, extract the m3u8 URL directly
+        if (data.contains("ppvs.su") || data.contains("/embed/")) {
+            println("Extracting m3u8 from iframe URL: $data")
+            try {
+                val m3u8Url = extractM3u8FromIframe(data)
+                if (m3u8Url != null) {
+                    callback.invoke(
+                        newExtractorLink(
+                            this.name,
+                            "PPVLand",
+                            url = m3u8Url,
+                            ExtractorLinkType.M3U8
+                        ) {
+                            this.referer = data
+                            this.quality = Qualities.Unknown.value
+                        }
+                    )
+                    println("Successfully extracted m3u8 URL: $m3u8Url")
+                    return true
+                }
+            } catch (e: Exception) {
+                println("Failed to extract m3u8 from iframe: ${e.message}")
+            }
+        }
+        
+        // Fallback: return the original URL
         callback.invoke(
             newExtractorLink(
                 this.name,
-                "PPVLandExtractor",
+                "PPVLand",
                 url = data,
                 ExtractorLinkType.M3U8
             ) {
@@ -244,7 +269,52 @@ class PPVLandProvider : MainAPI() {
                 this.quality = Qualities.Unknown.value
             }
         )
-        println("Provided iframe link for extraction: $data")
+        println("Provided fallback link: $data")
         return true
+    }
+    
+    private suspend fun extractM3u8FromIframe(iframeUrl: String): String? {
+        try {
+            println("Fetching iframe content from: $iframeUrl")
+            val response = app.get(iframeUrl, headers = getHeaders(), referer = mainUrl)
+            val html = response.text
+            println("Iframe response length: ${html.length}")
+            
+            // Look for m3u8 URLs in JavaScript playlist configurations
+            val playlistPatterns = listOf(
+                Regex("""playlist:\s*\[\s*\{\s*file:\s*['"]([^'"]*\.m3u8[^'"]*)['"]"""),
+                Regex("""file:\s*['"]([^'"]*\.m3u8[^'"]*)['"]"""),
+                Regex("""['"]([^'"]*\.m3u8[^'"]*)['"]""")
+            )
+            
+            for (pattern in playlistPatterns) {
+                val match = pattern.find(html)
+                if (match != null) {
+                    val m3u8Url = match.groupValues[1]
+                    if (m3u8Url.isNotEmpty() && !m3u8Url.contains("preset-") && m3u8Url.startsWith("http")) {
+                        println("Found m3u8 URL in iframe: $m3u8Url")
+                        return m3u8Url
+                    }
+                }
+            }
+            
+            // Look for general m3u8 URLs
+            val m3u8Pattern = Regex("""["']([^"']*\.m3u8[^"']*)["']""")
+            val m3u8Matches = m3u8Pattern.findAll(html)
+            
+            for (match in m3u8Matches) {
+                val m3u8Url = match.groupValues[1]
+                if (m3u8Url.isNotEmpty() && !m3u8Url.contains("preset-") && m3u8Url.startsWith("http")) {
+                    println("Found m3u8 URL in iframe: $m3u8Url")
+                    return m3u8Url
+                }
+            }
+            
+            println("No m3u8 URL found in iframe content")
+            return null
+        } catch (e: Exception) {
+            println("Error extracting m3u8 from iframe: ${e.message}")
+            return null
+        }
     }
 }
