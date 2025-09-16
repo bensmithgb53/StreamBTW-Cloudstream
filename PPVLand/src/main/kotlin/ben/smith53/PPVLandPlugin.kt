@@ -3,6 +3,7 @@ package ben.smith53
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 import com.lagradost.cloudstream3.plugins.Plugin
 import android.content.Context
+import ben.smith53.PPVLandProvider
 import ben.smith53.extractors.PPVLandExtractor
 
 @CloudstreamPlugin
