@@ -32,8 +32,10 @@ class PPVLandExtractor : ExtractorApi() {
 
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
         try {
+            println("PPVLandExtractor: Processing URL: $url")
             // Check if it's an iframe URL (ppvs.su domain)
             if (url.contains("ppvs.su") || url.contains("/embed/")) {
+                println("PPVLandExtractor: Detected iframe URL, processing...")
                 return handleIframeUrl(url, referer)
             }
             
