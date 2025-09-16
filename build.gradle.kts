@@ -7,7 +7,6 @@ buildscript {
         mavenCentral()
         maven("https://jitpack.io")
     }
-
     dependencies {
         classpath("com.android.tools.build:gradle:8.6.0")
         classpath("com.github.recloudstream:gradle:-SNAPSHOT")
@@ -40,19 +39,17 @@ subprojects {
         namespace = "ben.smith53"
         defaultConfig {
             minSdk = 21
-            compileSdkVersion(35)
+            compileSdk = 35
             targetSdk = 35
         }
-
         compileOptions {
             sourceCompatibility = JavaVersion.VERSION_1_8
             targetCompatibility = JavaVersion.VERSION_1_8
         }
-
         tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
-            compilerOptions {
-                jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_1_8)
-                freeCompilerArgs.addAll(
+            kotlinOptions {
+                jvmTarget = "1.8"
+                freeCompilerArgs = freeCompilerArgs + listOf(
                     "-Xno-call-assertions",
                     "-Xno-param-assertions",
                     "-Xno-receiver-assertions"
@@ -64,20 +61,18 @@ subprojects {
     dependencies {
         val apk by configurations
         val implementation by configurations
-
-        apk("com.lagradost:cloudstream3:pre-release")
+        apk("com.github.recloudstream:cloudstream:3.3.0") // Replace with stable version or commit
         implementation(kotlin("stdlib"))
         implementation("com.github.Blatzar:NiceHttp:0.4.11")
         implementation("org.jsoup:jsoup:1.18.1")
         implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.16.0")
         implementation("com.fasterxml.jackson.core:jackson-databind:2.16.0")
         implementation("com.squareup.okhttp3:okhttp:4.12.0")
-        // Added kotlinx-coroutines dependencies
         implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
         implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     }
 }
 
-task<Delete>("clean") {
-    delete(project.layout.buildDirectory)
+tasks.register<Delete>("clean") {
+    delete(rootProject.buildDir)
 }
