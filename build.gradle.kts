@@ -1,5 +1,5 @@
-import com.lagradost.cloudstream3.gradle.CloudstreamExtension
 import com.android.build.gradle.BaseExtension
+import com.lagradost.cloudstream3.gradle.CloudstreamExtension
 
 buildscript {
     repositories {
@@ -39,7 +39,7 @@ subprojects {
         namespace = "ben.smith53"
         defaultConfig {
             minSdk = 21
-            compileSdk = 35
+            compileSdkVersion(35)
             targetSdk = 35
         }
         compileOptions {
