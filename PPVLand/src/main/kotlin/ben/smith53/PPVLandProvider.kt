@@ -22,9 +22,7 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import org.json.JSONObject
 import java.util.zip.GZIPInputStream
 
-class PPVillustr
-
-System: PPVLandProvider : MainAPI() {
+class PPVLandProvider : MainAPI() {
     override var mainUrl = "https://ppv.wtf"
     override var name = "PPV Land"
     override val supportedTypes = setOf(TvType.Live)
@@ -74,7 +72,7 @@ System: PPVLandProvider : MainAPI() {
                             newLiveSearchResponse(
                                 name = "API Failed",
                                 url = mainUrl,
-                                contentRating = "NR" // Added contentRating as required
+                                contentRating = "NR"
                             )
                         ),
                         isHorizontalImages = false
@@ -108,7 +106,8 @@ System: PPVLandProvider : MainAPI() {
                         val event = newLiveSearchResponse(
                             name = eventName,
                             url = streamId,
-                            contentRating = "NR" // Added contentRating
+                            contentRating = "NR",
+                            posterUrl = poster
                         )
                         categoryEvents.add(event)
                     }
@@ -136,7 +135,7 @@ System: PPVLandProvider : MainAPI() {
                         newLiveSearchResponse(
                             name = "Failed to load events: ${e.message}",
                             url = mainUrl,
-                            contentRating = "NR" // Added contentRating
+                            contentRating = "NR"
                         )
                     ),
                     isHorizontalImages = false
@@ -192,7 +191,7 @@ System: PPVLandProvider : MainAPI() {
             name = streamName,
             url = m3u8Url,
             dataUrl = m3u8Url,
-            contentRating = "NR" // Added contentRating
+            contentRating = "NR"
         )
     }
 
