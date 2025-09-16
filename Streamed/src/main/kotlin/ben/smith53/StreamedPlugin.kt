@@ -8,6 +8,6 @@ import android.content.Context
 class StreamedPlugin : Plugin() {
     override fun load(context: Context) {
         registerMainAPI(StreamedProvider())
-registerMainAPI(StreamedMediaExtractor())
+        registerExtractorAPI(StreamedMediaExtractor())
     }
 }
