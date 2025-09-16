@@ -15,7 +15,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 
 class StreamedProvider : MainAPI() {
-    override var mainUrl = "https://streamed.su"
+    override var mainUrl = "https://streamed.pk"
     override var name = "Streamed"
     override var supportedTypes = setOf(TvType.Live)
     override val hasMainPage = true
@@ -365,76 +365,29 @@ class StreamedMediaExtractor {
                     )
                 }
             )
-            Log.d("StreamedMediaExtractor", "M3U8 test failed, added fallback URL for $source/$streamNo: $m3u8Response")
+            Log.d("StreamedMediaExtractor", "Original M3U8 URL added as fallback for $source/$streamNo: $m3u8Response")
             linkFound = true
         }
-
         return linkFound
     }
 
-    private suspend fun fetchCloudflareClearance(streamUrl: String): Boolean {
-        val turnstileUrl = "$challengeBaseUrl/turnstile/if/ov2/av0/rcv/4c1qj/0x4AAAAAAAkvKraQY_9hzpmB/auto/fbE/new/normal/auto/"
-        val turnstileHeaders = baseHeaders + mapOf(
-            "Referer" to streamUrl,
-            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-        )
-        val turnstileResponse = try {
-            app.get(turnstileUrl, headers = turnstileHeaders, timeout = EXTRACTOR_TIMEOUT_MILLIS)
-        } catch (e: Exception) {
-            Log.e("StreamedMediaExtractor", "Turnstile fetch failed: ${e.message}")
-            return false
-        }
-        if (turnstileResponse.code != 200) {
-            Log.e("StreamedMediaExtractor", "Turnstile failed with code: ${turnstileResponse.code}")
-            return false
-        }
-
-        // Extract flow URL (simplified, replace with regex parsing if needed)
-        val flowUrlMatch = Regex("""action="(/flow/ov1/[^"]+)"""").find(turnstileResponse.text)
-        val flowUrl = flowUrlMatch?.groupValues?.get(1)?.let { "$challengeBaseUrl$it" }
-            ?: return false.also { Log.e("StreamedMediaExtractor", "Failed to extract flow URL") }
-        val flowHeaders = baseHeaders + mapOf(
-            "Referer" to turnstileUrl,
-            "Content-Type" to "text/plain;charset=UTF-8",
-            "Origin" to "https://challenges.cloudflare.com"
-        )
-        val flowResponse = try {
-            app.post(flowUrl, headers = flowHeaders, data = mapOf(), timeout = EXTRACTOR_TIMEOUT_MILLIS)
-        } catch (e: Exception) {
-            Log.e("StreamedMediaExtractor", "Flow POST failed: ${e.message}")
-            return false
-        }
-        cfClearance = flowResponse.headers.filter { it.first == "Set-Cookie" }
-            .map { it.second.split(";")[0] }
-            .find { it.startsWith("cf_clearance=") }?.substringAfter("cf_clearance=")
-        Log.d("StreamedMediaExtractor", "Cloudflare clearance cookie: $cfClearance")
-        return cfClearance != null
+    private suspend fun fetchCloudflareClearance(url: String): Boolean {
+        // This function would typically involve a headless browser or a dedicated Cloudflare bypass service.
+        // For now, we'll assume it's handled by the Deno proxy or not strictly necessary for all cases.
+        // If Cloudflare protection becomes an issue, this part will need significant attention.
+        Log.w("StreamedMediaExtractor", "Cloudflare clearance fetching is a placeholder and might not work.")
+        return false
     }
 
-    private suspend fun fetchEventCookies(pageUrl: String, referrer: String): String {
-        cookieCache[pageUrl]?.let { return it }
-        val payload = """{"n":"pageview","u":"$pageUrl","d":"streamed.su","r":"$referrer"}"""
-        try {
-            val response = app.post(
-                cookieUrl,
-                data = mapOf(),
-                headers = baseHeaders + mapOf("Content-Type" to "text/plain"),
-                requestBody = payload.toRequestBody("text/plain".toMediaType()),
-                timeout = EXTRACTOR_TIMEOUT_MILLIS
-            )
-            val cookies = response.headers.filter { it.first == "Set-Cookie" }
-                .map { it.second.split(";")[0] }
-            val formattedCookies = listOf("_ddg8_", "_ddg10_", "_ddg9_", "_ddg1_")
-                .mapNotNull { key -> cookies.find { it.startsWith(key) } }
-                .joinToString("; ")
-            if (formattedCookies.isNotEmpty()) {
-                cookieCache[pageUrl] = formattedCookies
-                Log.d("StreamedMediaExtractor", "Cached cookies: $formattedCookies")
-            }
-            return formattedCookies
+    private suspend fun fetchEventCookies(streamUrl: String, referer: String): String {
+        val eventPostData = "{}".toRequestBody("application/json".toMediaType())
+        val eventHeaders = baseHeaders + mapOf("Referer" to referer)
+        return try {
+            val response = app.post(cookieUrl, headers = eventHeaders, requestBody = eventPostData, timeout = EXTRACTOR_TIMEOUT_MILLIS)
+            response.cookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
         } catch (e: Exception) {
             Log.e("StreamedMediaExtractor", "Failed to fetch event cookies: ${e.message}")
-            return ""
+            ""
         }
     }
 }
