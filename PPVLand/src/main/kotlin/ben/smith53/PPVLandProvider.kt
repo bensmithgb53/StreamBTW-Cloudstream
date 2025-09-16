@@ -37,7 +37,6 @@ class PPVLandProvider : MainAPI() {
         "Connection" to "keep-alive",
         "Accept-Language" to "en-US,en;q=0.5",
         "X-FS-Client" to "FS WebClient 1.0"
-        // Optionally include cf_clearance cookie if you require it
     )
 
     private fun normalizePoster(raw: String?): String? {
@@ -51,7 +50,6 @@ class PPVLandProvider : MainAPI() {
         val apiUrl = "$mainUrl/api/streams"
         try {
             val response = app.get(apiUrl, headers = headers, timeout = 15)
-            // FIX: Use 'var' instead of 'val'
             var decompressedText = if (response.headers["Content-Encoding"] == "gzip") {
                 GZIPInputStream(response.body.byteStream()).bufferedReader().use { it.readText() }
             } else {
@@ -131,7 +129,6 @@ class PPVLandProvider : MainAPI() {
         val apiUrl = "$mainUrl/api/streams/$streamId"
 
         val response = app.get(apiUrl, headers = headers, timeout = 15)
-        // FIX: Use 'var' instead of 'val'
         var decompressedText = if (response.headers["Content-Encoding"] == "gzip") {
             GZIPInputStream(response.body.byteStream()).bufferedReader().use { it.readText() }
         } else {
@@ -146,8 +143,6 @@ class PPVLandProvider : MainAPI() {
         val dataObj = json.optJSONObject("data")
         val streamName = dataObj?.optString("name") ?: json.optString("name", "Stream $streamId")
 
-        // Prefer direct m3u8 if present, else extract embed/source
-        // FIX: Use 'var' instead of 'val'
         var m3u8Url: String? = dataObj?.optString("m3u8")?.takeIf { it.isNotBlank() }
             ?: json.optString("m3u8").takeIf { it.isNotBlank() }
 
