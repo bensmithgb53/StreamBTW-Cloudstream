@@ -77,7 +77,7 @@ class PPVLandProvider : MainAPI() {
                     HomePageList(
                         name = "API Error",
                         list = listOf(
-                            LiveSearchResponse(
+                            newLiveSearchResponse(
                                 name = "API Failed",
                                 url = mainUrl,
                                 apiName = this.name,
@@ -106,7 +106,7 @@ class PPVLandProvider : MainAPI() {
                     val startsAt = stream.getLong("starts_at")
                     println("Stream: $eventName, ID: $streamId, Starts At: $startsAt")
                     if (!poster.contains("data:image")) {
-                        val event = LiveSearchResponse(
+                        val event = newLiveSearchResponse(
                             name = eventName,
                             url = streamId,
                             apiName = this.name,
@@ -169,7 +169,7 @@ class PPVLandProvider : MainAPI() {
         val m3u8Url = json.optJSONObject("data")?.optString("m3u8") ?: json.optString("m3u8") ?: throw Exception("No m3u8 URL found in response")
         val streamName = json.optJSONObject("data")?.optString("name") ?: json.optString("name", "Stream $streamId")
         println("Found m3u8 URL: $m3u8Url")
-        return newLiveStreamLoadResponse(streamName, m3u8Url, m3u8Url)
+        return newLiveStreamLoadResponse(streamName, m3u8Url, m3u8Url, contentRating = null) // Assuming no content rating is available or needed for live streams
     }
 
     override suspend fun loadLinks(
