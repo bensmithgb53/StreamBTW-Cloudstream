@@ -3,6 +3,7 @@ package ben.smith53
 import com.lagradost.cloudstream3.HomePageList
 import com.lagradost.cloudstream3.HomePageResponse
 import com.lagradost.cloudstream3.LiveSearchResponse
+import com.lagradost.cloudstream3.LiveStreamLoadResponse
 import com.lagradost.cloudstream3.LoadResponse
 import com.lagradost.cloudstream3.MainAPI
 import com.lagradost.cloudstream3.MainPageRequest
@@ -20,6 +21,10 @@ import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import org.json.JSONObject
 import java.util.zip.GZIPInputStream
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 
 class PPVLandProvider : MainAPI() {
     override var mainUrl = "https://ppv.to"
@@ -46,6 +51,9 @@ class PPVLandProvider : MainAPI() {
         "X-CID" to generateXCID()
     )
 
+    companion object {
+        private const val posterUrl = "https://ppv.land/assets/img/ppvland.png"
+    }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val homePageLists = fetchEvents()
@@ -76,10 +84,10 @@ class PPVLandProvider : MainAPI() {
                             newLiveSearchResponse(
                                 name = "API Failed",
                                 url = mainUrl,
-                                type = TvType.Live
-                            ) {
-                                posterUrl = "https://ppv.land/assets/img/ppvland.png"
-                            }
+                                apiName = this.name,
+                                type = TvType.Live,
+                                posterUrl = posterUrl
+                            )
                         ),
                         isHorizontalImages = false
                     )
@@ -89,6 +97,8 @@ class PPVLandProvider : MainAPI() {
             val streamsArray = json.getJSONArray("streams")
             println("Found ${streamsArray.length()} categories")
             val categoryMap = mutableMapOf<String, MutableList<LiveSearchResponse>>()
+            val currentTime = System.currentTimeMillis() / 1000 // Current time in seconds
+
             for (i in 0 until streamsArray.length()) {
                 val categoryData = streamsArray.getJSONObject(i)
                 val categoryName = categoryData.getString("category")
@@ -101,15 +111,27 @@ class PPVLandProvider : MainAPI() {
                     val streamId = stream.getString("id")
                     val poster = stream.getString("poster")
                     val startsAt = stream.getLong("starts_at")
-                    println("Stream: $eventName, ID: $streamId, Starts At: $startsAt")
+
+                    val isComingSoon = startsAt > currentTime
+                    val displayTitle = if (isComingSoon) {
+                        val date = Date(startsAt * 1000L)
+                        val formatter = SimpleDateFormat("MMM dd, HH:mm z", Locale.getDefault())
+                        formatter.timeZone = TimeZone.getDefault()
+                        "$eventName (Starts ${formatter.format(date)})"
+                    } else {
+                        eventName
+                    }
+
+                    println("Stream: $eventName, ID: $streamId, Starts At: $startsAt, Coming Soon: $isComingSoon")
                     if (!poster.contains("data:image")) {
                         val event = newLiveSearchResponse(
-                            name = eventName,
+                            name = displayTitle,
                             url = streamId,
-                            type = TvType.Live
-                        ) {
-                            posterUrl = poster
-                        }
+                            apiName = this.name,
+                            type = TvType.Live,
+                            posterUrl = poster,
+                            comingSoon = isComingSoon
+                        )
                         categoryEvents.add(event)
                     }
                 }
@@ -130,7 +152,7 @@ class PPVLandProvider : MainAPI() {
                 HomePageList(
                     name = "Error",
                     list = listOf(
-                        newLiveSearchResponse("Failed to load events: ${e.message}", mainUrl, TvType.Live)
+                        newLiveSearchResponse("Failed to load events: ${e.message}", mainUrl, this.name, TvType.Live)
                     ),
                     isHorizontalImages = false
                 )
@@ -164,17 +186,42 @@ class PPVLandProvider : MainAPI() {
         if (!json.optBoolean("success", true)) {
             throw Exception("API Error: ${json.optString("error", "Unknown error")}")
         }
-        val m3u8Url = json.optJSONObject("data")?.optString("m3u8") ?: json.optString("m3u8") ?: throw Exception("No m3u8 URL found in response")
+        val m3u8Url = json.optJSONObject("data")?.optString("m3u8")
         val streamName = json.optJSONObject("data")?.optString("name") ?: json.optString("name", "Stream $streamId")
+        val startsAt = json.optJSONObject("data")?.optLong("starts_at") ?: 0L
+        val currentTime = System.currentTimeMillis() / 1000 // Current time in seconds
+        val isComingSoon = startsAt > currentTime
+
+        if (m3u8Url == null || isComingSoon) {
+            val displayTitle = if (isComingSoon) {
+                val date = Date(startsAt * 1000L)
+                val formatter = SimpleDateFormat("MMM dd, HH:mm z", Locale.getDefault())
+                formatter.timeZone = TimeZone.getDefault()
+                "$streamName (Starts ${formatter.format(date)})"
+            } else {
+                streamName
+            }
+            return newLiveStreamLoadResponse(
+                name = displayTitle,
+                url = url,
+                apiName = this.name,
+                dataUrl = url,
+                type = TvType.Live,
+                contentRating = null,
+                comingSoon = true,
+                plot = if (isComingSoon) "This event will start at ${SimpleDateFormat("MMM dd, HH:mm z", Locale.getDefault()).format(Date(startsAt * 1000L))}" else "Stream not available yet."
+            )
+        }
+
         println("Found m3u8 URL: $m3u8Url")
         return newLiveStreamLoadResponse(
             name = streamName,
             url = m3u8Url,
-            dataUrl = m3u8Url
-        ) {
-            // contentRating is no longer a direct parameter, set within lambda if needed
-            // this.contentRating = null
-        }
+            apiName = this.name,
+            dataUrl = m3u8Url,
+            type = TvType.Live,
+            contentRating = null
+        )
     }
 
     override suspend fun loadLinks(
