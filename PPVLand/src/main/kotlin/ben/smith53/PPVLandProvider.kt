@@ -21,7 +21,8 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import org.json.JSONObject
 import java.util.zip.GZIPInputStream
 class PPVLandProvider : MainAPI() {
-override var mainUrl = "https://ppv.to"override var name = "PPV Land"
+override var mainUrl = "https://ppv.to"
+override var name = "PPV Land"
 override val supportedTypes = setOf(TvType.Live)
 override var lang = "en"
 override val hasMainPage = true
@@ -29,7 +30,7 @@ override val vpnStatus = VPNStatus.MightBeNeeded
 override val hasDownloadSupport = false
 override val instantLinkLoading = true
 private val userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0"
-private fun generateXCID(): String {
+    private fun generateXCID(): String {
         return "b127ebf6d409d51e7e1f1f2989081d687bb9c7a6589056efd2948810aaac19c4"
     }
 
