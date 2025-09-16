@@ -1,142 +1,45 @@
-package ben.smith53.extractors
-
+package ben.smith53
+import com.lagradost.cloudstream3.HomePageList
+import com.lagradost.cloudstream3.HomePageResponse
+import com.lagradost.cloudstream3.LiveSearchResponse
+import com.lagradost.cloudstream3.LiveStreamLoadResponse
+import com.lagradost.cloudstream3.LoadResponse
+import com.lagradost.cloudstream3.MainAPI
+import com.lagradost.cloudstream3.MainPageRequest
+import com.lagradost.cloudstream3.SearchResponse
+import com.lagradost.cloudstream3.SubtitleFile
+import com.lagradost.cloudstream3.TvType
+import com.lagradost.cloudstream3.VPNStatus
 import com.lagradost.cloudstream3.app
-import com.lagradost.cloudstream3.utils.*
+import com.lagradost.cloudstream3.newHomePageResponse
+import com.lagradost.cloudstream3.newLiveSearchResponse
+import com.lagradost.cloudstream3.newLiveStreamLoadResponse
+import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.Qualities
+import com.lagradost.cloudstream3.utils.newExtractorLink
 import org.json.JSONObject
+import java.util.zip.GZIPInputStream
+class PPVLandProvider : MainAPI() {
+override var mainUrl = "https://ppv.to"override var name = "PPV Land"
+override val supportedTypes = setOf(TvType.Live)
+override var lang = "en"
+override val hasMainPage = true
+override val vpnStatus = VPNStatus.MightBeNeeded
+override val hasDownloadSupport = false
+override val instantLinkLoading = true
+private val userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0"
+private fun generateXCID(): String {
+        return "b127ebf6d409d51e7e1f1f2989081d687bb9c7a6589056efd2948810aaac19c4"
+    }
 
-class PPVLandExtractor : ExtractorApi() {
-    override val name = "PPVLandExtractor"
-    override val mainUrl = "https://ppv.wtf" // Corrected from ppv.to
-    override val requiresReferer = true
-
-    private val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0"
-    private val HEADERS = mapOf(
-        "User-Agent" to USER_AGENT,
+    private val headers = mapOf(
+        "User-Agent" to userAgent,
         "Accept" to "*/*",
-        "Accept-Encoding" to "gzip, deflate, br, zstd",
         "Connection" to "keep-alive",
         "Accept-Language" to "en-US,en;q=0.5",
         "X-FS-Client" to "FS WebClient 1.0",
-        "Cookie" to "cf_clearance=..."
+        "X-CID" to generateXCID()
     )
-
-    override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
-        try {
-            // Check if the URL is an API stream URL
-            if (url.contains("/api/streams/")) {
-                val response = app.get(url, headers = HEADERS, referer = referer ?: "$mainUrl/")
-                val json = JSONObject(response.text)
-                val dataObj = json.optJSONObject("data") ?: json
-
-                // Try direct m3u8 link from the JSON data
-                val m3u8Url = dataObj.optString("m3u8").takeIf { it.isNotBlank() }
-                if (m3u8Url != null) {
-                    return listOf(
-                        newExtractorLink(
-                            source = this.name,
-                            name = this.name,
-                            url = m3u8Url.replace("\\/", "/"),
-                            type = ExtractorLinkType.M3U8
-                        ) {
-                            this.referer = "$mainUrl/"
-                            this.quality = Qualities.Unknown.value
-                        }
-                    )
-                }
-
-                // If no m3u8, check the sources array for an embed or m3u8
-                val sourcesArray = dataObj.optJSONArray("sources")
-                if (sourcesArray != null) {
-                    for (i in 0 until sourcesArray.length()) {
-                        val source = sourcesArray.optJSONObject(i) ?: continue
-                        val sdata = source.optString("data").takeIf { it.isNotBlank() }
-                        if (sdata != null) {
-                            // If it's an m3u8, return it
-                            if (sdata.contains(".m3u8")) {
-                                return listOf(
-                                    newExtractorLink(
-                                        source = this.name,
-                                        name = this.name,
-                                        url = sdata.replace("\\/", "/"),
-                                        type = ExtractorLinkType.M3U8
-                                    ) {
-                                        this.referer = "$mainUrl/"
-                                        this.quality = Qualities.Unknown.value
-                                    }
-                                )
-                            }
-                            // If it's an iframe embed, try to extract from it
-                            val stype = source.optString("type")
-                            if (stype.equals("iframe", true) || sdata.contains("/embed/")) {
-                                return extractFromEmbed(sdata, referer)
-                            }
-                        }
-                    }
-                }
-            }
-
-            // If the URL is already an embed page or a direct m3u8, handle that
-            if (url.contains("/embed/") || url.contains(".m3u8")) {
-                return extractFromEmbed(url, referer)
-            }
-
-            return null
-        } catch (e: Exception) {
-            e.printStackTrace()
-            return null
-        }
-    }
-
-    private suspend fun extractFromEmbed(embedUrl: String, referer: String?): List<ExtractorLink>? {
-        try {
-            val fixed = embedUrl.replace("\\/", "/")
-            val resp = app.get(fixed, headers = HEADERS, referer = referer ?: "$mainUrl/").text
-
-            // Try several regex patterns to find an .m3u8 url inside javascript configuration
-            // 1) search for file: "https://...m3u8"
-            val patterns = listOf(
-                "\"(https?://[^\"]+?\\.m3u8[^\"]*)\"",
-                "'(https?://[^']+?\\.m3u8[^']*)'",
-                "file\\s*:\\s*\"(https?://[^\"]+?\\.m3u8[^\"]*)\"",
-                "file\\s*:\\s*'(https?://[^']+?\\.m3u8[^']*)'",
-                "playlist\\s*:\\s*\\[\\s*\\{[^}]*file\\s*:\\s*\"(https?://[^\"]+?\\.m3u8[^\"]*)\"",
-                "src\\s*=\\s*\"(https?://[^\"]+?\\.m3u8[^\"]*)\"",
-                "(https?://[\\w\\d\\.\\-:/_%]+\\.m3u8[\\w\\d\\-\\?=&_%]*)"
-            )
-
-            for (p in patterns) {
-                val regex = Regex(p)
-                val match = regex.find(resp)
-                if (match != null && match.groupValues.size >= 2) {
-                    val found = match.groupValues[1].replace("\\/", "/")
-                    return listOf(
-                        newExtractorLink(
-                            source = this.name,
-                            name = this.name,
-                            url = found,
-                            type = ExtractorLinkType.M3U8
-                        ) {
-                            this.referer = fixed
-                            this.quality = Qualities.Unknown.value
-                        }
-                    )
-                }
-            }
-
-            // If no .m3u8 found but embed page contains another iframe, try to follow it
-            val iframeRegex = Regex("<iframe[^>]+src\\s*=\\s*[\"']([^\"']+)[\"']", RegexOption.IGNORE_CASE)
-            val iframeMatch = iframeRegex.find(resp)
-            if (iframeMatch != null) {
-                val iframeSrc = iframeMatch.groupValues[1].replace("\\/", "/")
-                if (iframeSrc != fixed && iframeSrc.contains("http")) {
-                    return extractFromEmbed(iframeSrc, fixed)
-                }
-            }
-
-            return null
-        } catch (e: Exception) {
-            e.printStackTrace()
-            return null
-        }
-    }
+ companion object { private const val posterUrl = "https://ppv.land/assets/img/ppvland.png" } private suspend fun fetchEvents(): List<HomePageList> { val apiUrl = "$mainUrl/api/streams" println("Fetching all streams from: $apiUrl") println("Request Headers: $headers") try { val response = app.get(apiUrl, headers = headers, timeout = 15) println("Main API Status Code: ${response.code}") // Decompress gzip response val decompressedText = if (response.headers["Content-Encoding"] == "gzip") { GZIPInputStream(response.body.byteStream()).bufferedReader().use { it.readText() } } else { response.text } println("Main API Response Body: $decompressedText") if (response.code != 200) { println("API Error: Received status code ${response.code}") return listOf( HomePageList( name = "API Error", list = listOf( LiveSearchResponse( name = "API Failed", url = mainUrl, apiName = this.name, posterUrl = posterUrl ) ), isHorizontalImages = false ) ) } val json = JSONObject(decompressedText) val streamsArray = json.getJSONArray("streams") println("Found ${streamsArray.length()} categories") val categoryMap = mutableMapOf<String, MutableList<LiveSearchResponse>>() for (i in 0 until streamsArray.length()) { val categoryData = streamsArray.getJSONObject(i) val categoryName = categoryData.getString("category") val streams = categoryData.getJSONArray("streams") println("Processing Category: $categoryName with ${streams.length()} streams") val categoryEvents = categoryMap.getOrPut(categoryName) { mutableListOf() } for (j in 0 until streams.length()) { val stream = streams.getJSONObject(j) val eventName = stream.getString("name") val streamId = stream.getString("id") val poster = stream.getString("poster") val startsAt = stream.getLong("starts_at") println("Stream: $eventName, ID: $streamId, Starts At: $startsAt") if (!poster.contains("data:image")) { val event = LiveSearchResponse( name = eventName, url = streamId, apiName = this.name, posterUrl = poster ) categoryEvents.add(event) } } } val homePageLists = categoryMap.map { (name, events) -> println("Adding category: $name with ${events.size} events") HomePageList( name = name, list = events, isHorizontalImages = false ) }.toMutableList() println("Total categories: ${homePageLists.size}") return homePageLists } catch (e: Exception) { println("fetchEvents failed: ${e.message}") return listOf( HomePageList( name = "Error", list = listOf( newLiveSearchResponse("Failed to load events: ${e.message}",mainUrl) ), isHorizontalImages = false ) ) } } override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse { val homePageLists = fetchEvents() println("Returning ${homePageLists.size} categories to Cloudstream") return newHomePageResponse(homePageLists) } override suspend fun search(query: String): List<SearchResponse> { val homePageLists = fetchEvents() return homePageLists.flatMap { it.list }.filter { query.lowercase().replace(" ", "") in it.name.lowercase().replace(" ", "") } } override suspend fun load(url: String): LoadResponse { val streamId = url.substringAfterLast("/").substringAfterLast(":") val apiUrl = "$mainUrl/api/streams/$streamId" println("Fetching m3u8 for stream ID $streamId: $apiUrl") println("Request Headers: $headers") val response = app.get(apiUrl, headers = headers, timeout = 15) println("Stream API Status Code: ${response.code}") // Decompress gzip response val decompressedText = if (response.headers["Content-Encoding"] == "gzip") { GZIPInputStream(response.body.byteStream()).bufferedReader().use { it.readText() } } else { response.text } println("Stream API Response Body: $decompressedText") if (response.code != 200) { throw Exception("Failed to load stream details: HTTP ${response.code}") } val json = JSONObject(decompressedText) if (!json.optBoolean("success", true)) { throw Exception("API Error: ${json.optString("error", "Unknown error")}") } val m3u8Url = json.optJSONObject("data")?.optString("m3u8") ?: json.optString("m3u8") ?: throw Exception("No m3u8 URL found in response") val streamName = json.optJSONObject("data")?.optString("name") ?: json.optString("name", "Stream $streamId") println("Found m3u8 URL: $m3u8Url") return newLiveStreamLoadResponse(streamName,m3u8Url,m3u8Url) } override suspend fun loadLinks( data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit ): Boolean { callback.invoke( newExtractorLink( this.name, "PPVLand", url = data, ExtractorLinkType.M3U8 ) { this.referer = mainUrl this.quality = Qualities.Unknown.value } ) println("Provided m3u8 link: $data") return true } 
 }
