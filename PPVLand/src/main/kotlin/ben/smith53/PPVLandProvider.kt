@@ -1,23 +1,3 @@
-Nice — thanks for the details. I analyzed the files you uploaded (the api/streams/11432.html JSON and the embed/.../2886-wsh.html embed page) and updated your Kotlin provider + extractor to handle the site changes:
-
-The API no longer always returns an m3u8; instead data.sources commonly contains an iframe (an embed URL) which in turn contains the real m3u8 (inside JavaScript such as a JWPlayer config or playlist: [{ file: "https://...index.m3u8" }]).
-
-Poster image URLs are escaped (e.g. https:\/\/ppv.to\/assets\/...) and sometimes relative. The provider now unescapes and normalizes poster URLs.
-
-The provider no longer fails when m3u8 is empty: it falls back to sources -> iframe or data fields and returns that embed URL as the stream target so the extractor can fetch the actual .m3u8.
-
-The extractor now supports both: (A) calling the /api/streams/{id} endpoint and extracting data.m3u8 or data.sources[*].data (iframe), and (B) fetching embed pages (iframe URLs like https://ppvs.su/embed/...) and extracting .m3u8 links from the embed HTML/JS using robust regexes that look for jwplayer / file: / playlist / direct .m3u8.
-
-Added safe unescaping and small resilience improvements (try-catch and blank-checks).
-
-
-Below are the updated Kotlin sources. Replace your existing files with these versions.
-
-
----
-
-1) PPVLandProvider.kt (updated)
-
 package ben.smith53
 
 import com.lagradost.cloudstream3.HomePageList
