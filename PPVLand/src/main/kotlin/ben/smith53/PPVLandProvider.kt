@@ -80,7 +80,7 @@ class PPVLandProvider : MainAPI() {
                             newLiveSearchResponse(
                                 name = "API Failed",
                                 url = mainUrl,
-                                apiName = this.name,
+                                // apiName = this.name, // Removed as per new API signature
                                 posterUrl = posterUrl
                             )
                         ),
@@ -109,7 +109,7 @@ class PPVLandProvider : MainAPI() {
                         val event = newLiveSearchResponse(
                             name = eventName,
                             url = streamId,
-                            apiName = this.name,
+                            // apiName = this.name, // Removed as per new API signature
                             posterUrl = poster
                         )
                         categoryEvents.add(event)
@@ -169,7 +169,7 @@ class PPVLandProvider : MainAPI() {
         val m3u8Url = json.optJSONObject("data")?.optString("m3u8") ?: json.optString("m3u8") ?: throw Exception("No m3u8 URL found in response")
         val streamName = json.optJSONObject("data")?.optString("name") ?: json.optString("name", "Stream $streamId")
         println("Found m3u8 URL: $m3u8Url")
-        return newLiveStreamLoadResponse(streamName, m3u8Url, m3u8Url, contentRating = null) // Assuming no content rating is available or needed for live streams
+        return newLiveStreamLoadResponse(streamName, m3u8Url, m3u8Url, contentRating = null)
     }
 
     override suspend fun loadLinks(
