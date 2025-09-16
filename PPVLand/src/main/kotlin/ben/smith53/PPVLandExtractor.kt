@@ -7,6 +7,10 @@ import com.fasterxml.jackson.module.kotlin.readValue
 
 class PPVLandExtractor : ExtractorApi() {
     override val name = "PPVLandExtractor"
+    
+    init {
+        println("PPVLandExtractor: Initialized")
+    }
     override val mainUrl = "https://ppv.to"
     override val requiresReferer = true
 
@@ -20,7 +24,7 @@ class PPVLandExtractor : ExtractorApi() {
         return "${userAgentHash}${timestamp}${random}".take(64).padEnd(64, '0')
     }
     
-    private val HEADERS = mapOf(
+    private fun getHeaders(): Map<String, String> = mapOf(
         "User-Agent" to USER_AGENT,
         "Accept" to "*/*",
         "Accept-Encoding" to "gzip, deflate, br, zstd",
@@ -47,7 +51,7 @@ class PPVLandExtractor : ExtractorApi() {
                 "$mainUrl/api/streams/$streamId"
             }
             
-            val response = app.get(apiUrl, headers = HEADERS, referer = referer ?: "$mainUrl/").text
+            val response = app.get(apiUrl, headers = getHeaders(), referer = referer ?: "$mainUrl/").text
             val mapper = jacksonObjectMapper()
             val jsonData = mapper.readValue<Map<String, Any>>(response)
             @Suppress("UNCHECKED_CAST")
@@ -95,7 +99,7 @@ class PPVLandExtractor : ExtractorApi() {
             println("Handling iframe URL: $iframeUrl")
             
             // Try to extract the stream from the iframe page
-            val response = app.get(iframeUrl, headers = HEADERS, referer = referer ?: "$mainUrl/")
+            val response = app.get(iframeUrl, headers = getHeaders(), referer = referer ?: "$mainUrl/")
             val html = response.text
             
             // Look for m3u8 URLs in the HTML
@@ -149,7 +153,7 @@ class PPVLandExtractor : ExtractorApi() {
             }
             
             // Look for JSON data with stream information
-            val jsonPattern = Regex("""var\s+data\s*=\s*({.*?});""")
+            val jsonPattern = Regex("""var\s+data\s*=\s*(\{.*?\});""")
             val jsonMatch = jsonPattern.find(html)
             if (jsonMatch != null) {
                 val jsonStr = jsonMatch.groupValues[1]
