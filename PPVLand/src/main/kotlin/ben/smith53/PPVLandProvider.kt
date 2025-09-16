@@ -3,6 +3,7 @@ package ben.smith53
 import com.lagradost.cloudstream3.HomePageList
 import com.lagradost.cloudstream3.HomePageResponse
 import com.lagradost.cloudstream3.LiveSearchResponse
+import com.lagradost.cloudstream3.LiveStreamLoadResponse
 import com.lagradost.cloudstream3.LoadResponse
 import com.lagradost.cloudstream3.MainAPI
 import com.lagradost.cloudstream3.MainPageRequest
@@ -34,10 +35,14 @@ class PPVLandProvider : MainAPI() {
     private val userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0"
 
     private fun generateXCID(): String {
-        return "b127ebf6d409d51e7e1f1f2989081d687bb9c7a6589056efd2948810aaac19c4"
+        // Generate a more realistic client ID based on browser fingerprinting
+        val timestamp = System.currentTimeMillis()
+        val random = (Math.random() * 1000000).toInt()
+        val userAgentHash = userAgent.hashCode().toString(16)
+        return "${userAgentHash}${timestamp}${random}".take(64).padEnd(64, '0')
     }
 
-    private val headers: Map<String, String> = mapOf(
+    private fun getHeaders(): Map<String, String> = mapOf(
         "User-Agent" to userAgent,
         "Accept" to "*/*",
         "Connection" to "keep-alive",
@@ -46,6 +51,9 @@ class PPVLandProvider : MainAPI() {
         "X-CID" to generateXCID()
     )
 
+    companion object {
+        private const val posterUrl = "https://ppv.land/assets/img/ppvland.png"
+    }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val homePageLists = fetchEvents()
@@ -56,9 +64,9 @@ class PPVLandProvider : MainAPI() {
     private suspend fun fetchEvents(): List<HomePageList> {
         val apiUrl = "$mainUrl/api/streams"
         println("Fetching all streams from: $apiUrl")
-        println("Request Headers: $headers")
+        println("Request Headers: ${getHeaders()}")
         try {
-            val response = app.get(apiUrl, headers = headers, timeout = 15)
+            val response = app.get(apiUrl, headers = getHeaders(), timeout = 15)
             println("Main API Status Code: ${response.code}")
             // Decompress gzip response
             val decompressedText = if (response.headers["Content-Encoding"] == "gzip") {
@@ -78,7 +86,7 @@ class PPVLandProvider : MainAPI() {
                                 url = mainUrl,
                                 type = TvType.Live
                             ) {
-                                posterUrl = "https://ppv.land/assets/img/ppvland.png"
+                                posterUrl = posterUrl
                             }
                         ),
                         isHorizontalImages = false
@@ -146,9 +154,9 @@ class PPVLandProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse {
         val streamId = url.substringAfterLast("/").substringAfterLast(":")
         val apiUrl = "$mainUrl/api/streams/$streamId"
-        println("Fetching m3u8 for stream ID $streamId: $apiUrl")
-        println("Request Headers: $headers")
-        val response = app.get(apiUrl, headers = headers, timeout = 15)
+        println("Fetching stream details for stream ID $streamId: $apiUrl")
+        println("Request Headers: ${getHeaders()}")
+        val response = app.get(apiUrl, headers = getHeaders(), timeout = 15)
         println("Stream API Status Code: ${response.code}")
         // Decompress gzip response
         val decompressedText = if (response.headers["Content-Encoding"] == "gzip") {
@@ -164,17 +172,41 @@ class PPVLandProvider : MainAPI() {
         if (!json.optBoolean("success", true)) {
             throw Exception("API Error: ${json.optString("error", "Unknown error")}")
         }
-        val m3u8Url = json.optJSONObject("data")?.optString("m3u8") ?: json.optString("m3u8") ?: throw Exception("No m3u8 URL found in response")
-        val streamName = json.optJSONObject("data")?.optString("name") ?: json.optString("name", "Stream $streamId")
-        println("Found m3u8 URL: $m3u8Url")
-        return newLiveStreamLoadResponse(
-            name = streamName,
-            url = m3u8Url,
-            dataUrl = m3u8Url
-        ) {
-            // contentRating is no longer a direct parameter, set within lambda if needed
-            // this.contentRating = null
+        val data = json.optJSONObject("data") ?: throw Exception("No data field in response")
+        val streamName = data.optString("name", "Stream $streamId")
+        
+        // Check for direct m3u8 URL first
+        val m3u8Url = data.optString("m3u8")
+        if (m3u8Url.isNotEmpty()) {
+            println("Found direct m3u8 URL: $m3u8Url")
+            return newLiveStreamLoadResponse(
+                name = streamName,
+                url = m3u8Url,
+                dataUrl = m3u8Url
+            )
         }
+        
+        // Check for sources array with iframe embeds
+        val sources = data.optJSONArray("sources")
+        if (sources != null && sources.length() > 0) {
+            for (i in 0 until sources.length()) {
+                val source = sources.getJSONObject(i)
+                val sourceType = source.optString("type", "")
+                val sourceData = source.optString("data", "")
+                
+                if (sourceType == "iframe" && sourceData.isNotEmpty()) {
+                    println("Found iframe source: $sourceData")
+                    // Use the iframe URL as the data URL - the extractor will handle resolving it
+                    return newLiveStreamLoadResponse(
+                        name = streamName,
+                        url = sourceData,
+                        dataUrl = sourceData
+                    )
+                }
+            }
+        }
+        
+        throw Exception("No valid stream source found in response")
     }
 
     override suspend fun loadLinks(
@@ -183,6 +215,24 @@ class PPVLandProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        // Check if it's a direct m3u8 URL
+        if (data.endsWith(".m3u8") || data.contains("m3u8")) {
+            callback.invoke(
+                newExtractorLink(
+                    this.name,
+                    "PPVLand",
+                    url = data,
+                    ExtractorLinkType.M3U8
+                ) {
+                    this.referer = mainUrl
+                    this.quality = Qualities.Unknown.value
+                }
+            )
+            println("Provided direct m3u8 link: $data")
+            return true
+        }
+        
+        // If it's an iframe URL, use the extractor to resolve it
         callback.invoke(
             newExtractorLink(
                 this.name,
@@ -194,7 +244,7 @@ class PPVLandProvider : MainAPI() {
                 this.quality = Qualities.Unknown.value
             }
         )
-        println("Provided m3u8 link: $data")
+        println("Provided iframe link for extraction: $data")
         return true
     }
 }
