@@ -178,8 +178,8 @@ class PPVLandProvider : MainAPI() {
         return newLiveStreamLoadResponse(
             name = streamName,
             url = m3u8Url,
-            dataUrl = m3u8Url,
             apiName = this.name,
+            dataUrl = m3u8Url,
             type = TvType.Live
         ) {
             // contentRating is no longer a direct parameter, set within lambda if needed
