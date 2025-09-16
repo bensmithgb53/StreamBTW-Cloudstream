@@ -61,7 +61,7 @@ subprojects {
     dependencies {
         val apk by configurations
         val implementation by configurations
-        apk("com.github.recloudstream:cloudstream:3.3.0") // Replace with stable version or commit
+        apk("com.lagradost:cloudstream3:pre-release") // Replace with stable version or commit
         implementation(kotlin("stdlib"))
         implementation("com.github.Blatzar:NiceHttp:0.4.11")
         implementation("org.jsoup:jsoup:1.18.1")
