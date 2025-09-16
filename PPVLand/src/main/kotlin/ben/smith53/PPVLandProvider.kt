@@ -22,7 +22,7 @@ import org.json.JSONObject
 import java.util.zip.GZIPInputStream
 
 class PPVLandProvider : MainAPI() {
-    override var mainUrl = "https://ppv.wtf"
+    override var mainUrl = "https://ppv.to"
     override var name = "PPV Land"
     override val supportedTypes = setOf(TvType.Live)
     override var lang = "en"
