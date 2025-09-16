@@ -9,7 +9,6 @@ import ben.smith53.extractors.PPVLandExtractor
 class PPVLandPlugin : Plugin() {
     override fun load(context: Context) {
         registerMainAPI(PPVLandProvider())
-        // re-enable extractor registration
         registerExtractorAPI(PPVLandExtractor())
     }
 }
