@@ -51,7 +51,8 @@ class PPVLandProvider : MainAPI() {
         val apiUrl = "$mainUrl/api/streams"
         try {
             val response = app.get(apiUrl, headers = headers, timeout = 15)
-            val decompressedText = if (response.headers["Content-Encoding"] == "gzip") {
+            // FIX: Use 'var' instead of 'val'
+            var decompressedText = if (response.headers["Content-Encoding"] == "gzip") {
                 GZIPInputStream(response.body.byteStream()).bufferedReader().use { it.readText() }
             } else {
                 response.text
@@ -130,7 +131,8 @@ class PPVLandProvider : MainAPI() {
         val apiUrl = "$mainUrl/api/streams/$streamId"
 
         val response = app.get(apiUrl, headers = headers, timeout = 15)
-        val decompressedText = if (response.headers["Content-Encoding"] == "gzip") {
+        // FIX: Use 'var' instead of 'val'
+        var decompressedText = if (response.headers["Content-Encoding"] == "gzip") {
             GZIPInputStream(response.body.byteStream()).bufferedReader().use { it.readText() }
         } else {
             response.text
@@ -145,6 +147,7 @@ class PPVLandProvider : MainAPI() {
         val streamName = dataObj?.optString("name") ?: json.optString("name", "Stream $streamId")
 
         // Prefer direct m3u8 if present, else extract embed/source
+        // FIX: Use 'var' instead of 'val'
         var m3u8Url: String? = dataObj?.optString("m3u8")?.takeIf { it.isNotBlank() }
             ?: json.optString("m3u8").takeIf { it.isNotBlank() }
 
