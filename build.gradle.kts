@@ -37,9 +37,9 @@ subprojects {
 
     android {
         namespace = "ben.smith53"
+        compileSdk = 35  // Moved to android block
         defaultConfig {
             minSdk = 21
-            compileSdk = 35
             targetSdk = 35
         }
         compileOptions {
@@ -47,9 +47,9 @@ subprojects {
             targetCompatibility = JavaVersion.VERSION_1_8
         }
         tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
-            kotlinOptions {
-                jvmTarget = "1.8"
-                freeCompilerArgs = freeCompilerArgs + listOf(
+            compilerOptions {
+                jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_1_8)
+                freeCompilerArgs.addAll(
                     "-Xno-call-assertions",
                     "-Xno-param-assertions",
                     "-Xno-receiver-assertions"
@@ -61,7 +61,7 @@ subprojects {
     dependencies {
         val apk by configurations
         val implementation by configurations
-        apk("com.github.recloudstream:cloudstream:3.3.0") // Replace with stable version or commit
+        apk("com.github.recloudstream:cloudstream:3.3.0") // Replaced pre-release with stable version
         implementation(kotlin("stdlib"))
         implementation("com.github.Blatzar:NiceHttp:0.4.11")
         implementation("org.jsoup:jsoup:1.18.1")
@@ -74,5 +74,5 @@ subprojects {
 }
 
 tasks.register<Delete>("clean") {
-    delete(rootProject.buildDir)
+    delete(rootProject.layout.buildDirectory)
 }
