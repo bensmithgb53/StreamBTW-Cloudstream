@@ -12,7 +12,7 @@ class StreamedProvider : MainAPI() {
     override val hasMainPage = true
     override val hasDownloadSupport = false
     override val supportedTypes = setOf(TvType.Live)
-    override val lang = "en"
+    override var lang = "en"
 
     override val mainPage = mainPageOf(
         "$mainUrl/api/matches/live/popular.json" to "Popular Live",
@@ -42,7 +42,7 @@ class StreamedProvider : MainAPI() {
                         val title = match.title ?: "Unknown Event"
                         val category = match.category?.replaceFirstChar { it.uppercase() } ?: "Live"
                         
-                        LiveSearchResponse(
+                        newLiveSearchResponse(
                             name = title,
                             url = "$mainUrl/watch/${match.id}",
                             apiName = this.name,
@@ -51,7 +51,7 @@ class StreamedProvider : MainAPI() {
                             plot = "Live $category event"
                         )
                     } catch (e: Exception) {
-                        logError(e)
+                        currentLogger().d(e.stackTraceToString())
                         null
                     }
                 }
@@ -61,7 +61,7 @@ class StreamedProvider : MainAPI() {
                 }
             }
         } catch (e: Exception) {
-            logError(e)
+            currentLogger().d(e.stackTraceToString())
         }
         
         return HomePageResponse(items)
@@ -100,11 +100,11 @@ class StreamedProvider : MainAPI() {
                         }
                     }
                 } catch (e: Exception) {
-                    logError(e)
+                    currentLogger().d(e.stackTraceToString())
                 }
             }
         } catch (e: Exception) {
-            logError(e)
+            currentLogger().d(e.stackTraceToString())
         }
         
         return searchResults
@@ -128,7 +128,7 @@ class StreamedProvider : MainAPI() {
                     eventDetails = response?.find { it.id == eventId }
                     if (eventDetails != null) break
                 } catch (e: Exception) {
-                    logError(e)
+                    currentLogger().d(e.stackTraceToString())
                 }
             }
             
@@ -150,7 +150,7 @@ class StreamedProvider : MainAPI() {
                 }
             }
             
-            return LiveStreamLoadResponse(
+            return newLiveStreamLoadResponse(
                 name = title,
                 url = url,
                 apiName = this.name,
@@ -159,7 +159,7 @@ class StreamedProvider : MainAPI() {
                 plot = plot.ifEmpty { "Live streaming event" }
             )
         } catch (e: Exception) {
-            logError(e)
+            currentLogger().d(e.stackTraceToString())
             return null
         }
     }
@@ -233,13 +233,13 @@ class StreamedProvider : MainAPI() {
                         }
                     }
                 } catch (e: Exception) {
-                    logError(e)
+                    currentLogger().d(e.stackTraceToString())
                 }
             }
             
             return true
         } catch (e: Exception) {
-            logError(e)
+            currentLogger().d(e.stackTraceToString())
             return false
         }
     }
@@ -272,7 +272,7 @@ class StreamedProvider : MainAPI() {
             
             return "https://embedsports.top/embed/$sourceType/$eventId/$streamNumber"
         } catch (e: Exception) {
-            logError(e)
+            currentLogger().d(e.stackTraceToString())
             return null
         }
     }
