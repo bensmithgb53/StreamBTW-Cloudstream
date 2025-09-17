@@ -5,7 +5,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 
 class StreamedExtractor : ExtractorApi() {
     override val name = "StreamedExtractor"
-    override val mainUrl = "https://streamed.su"
+    override val mainUrl = "https://streamed.pk"
     override val requiresReferer = true
 
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {

@@ -390,13 +390,74 @@ class StreamedProvider : MainAPI() {
                     continue
                 }
                 
-                val streamInfos = parseJson<List<StreamInfo>>(streamResponse.text)
+                val streamResponseText = streamResponse.text
+                Log.d("StreamedProvider", "Stream API response for $source: $streamResponseText")
+                
+                val streamInfos = parseJson<List<StreamInfo>>(streamResponseText)
                 Log.d("StreamedProvider", "Found ${streamInfos.size} streams for $source")
                 
-                // Try each stream
-                for (streamInfo in streamInfos) {
+                // If no streams found, try to create a fallback stream
+                if (streamInfos.isEmpty()) {
+                    Log.w("StreamedProvider", "No streams found for $source, trying fallback approach")
+                    
+                    // Try to create a basic stream info based on common patterns
+                    val fallbackStreamInfo = StreamInfo(
+                        id = matchId,
+                        streamNo = 1,
+                        language = "Unknown",
+                        hd = false,
+                        embedUrl = "$mainUrl/embed/$source/$matchId/1",
+                        source = source
+                    )
+                    
+                    Log.d("StreamedProvider", "Created fallback stream for $source")
+                    
+                    // Try the fallback stream
                     try {
-                        Log.d("StreamedProvider", "Trying stream ${streamInfo.streamNo} from $source")
+                        Log.d("StreamedProvider", "Trying fallback stream for $source")
+                        
+                        // Generate m3u8 URL using the correct pattern
+                        val m3u8Url = generateM3u8Url("fallback-key", source, matchId, 1)
+                        Log.d("StreamedProvider", "Generated fallback m3u8 URL: $m3u8Url")
+                        
+                        // Test the m3u8 URL
+                        val testResponse = try {
+                            app.head(m3u8Url, headers = ipv4Headers, timeout = 10000)
+                        } catch (e: Exception) {
+                            Log.w("StreamedProvider", "IPv4 m3u8 test failed, trying base headers: ${e.message}")
+                            app.head(m3u8Url, headers = baseHeaders, timeout = 10000)
+                        }
+                        
+                        if (testResponse.isSuccessful) {
+                            Log.d("StreamedProvider", "Successfully found working fallback m3u8 URL")
+                            
+                            // Create the extractor link
+                            callback.invoke(
+                                newExtractorLink(
+                                    source = "Streamed",
+                                    name = "$source Stream 1 (Fallback)",
+                                    url = m3u8Url,
+                                    type = ExtractorLinkType.M3U8
+                                ) {
+                                    this.referer = fallbackStreamInfo.embedUrl
+                                    this.quality = Qualities.Unknown.value
+                                    this.headers = baseHeaders
+                                }
+                            )
+                            
+                            success = true
+                            break
+                        } else {
+                            Log.w("StreamedProvider", "Fallback m3u8 URL test failed: HTTP ${testResponse.code}")
+                        }
+                    } catch (e: Exception) {
+                        Log.e("StreamedProvider", "Error processing fallback stream: ${e.message}")
+                    }
+                } else {
+                    // Try each stream
+                    for (streamInfo in streamInfos) {
+                        try {
+                            Log.d("StreamedProvider", "Trying stream ${streamInfo.streamNo} from $source")
                         
                         // Get the embed URL and extract m3u8
                         val embedUrl = streamInfo.embedUrl
@@ -464,10 +525,11 @@ class StreamedProvider : MainAPI() {
                         Log.e("StreamedProvider", "Error processing stream ${streamInfo.streamNo}: ${e.message}")
                     }
                 }
+                }
                 
                 if (success) break
                 
-            } catch (e: Exception) {
+        } catch (e: Exception) {
                 Log.e("StreamedProvider", "Error processing source $source: ${e.message}")
             }
         }

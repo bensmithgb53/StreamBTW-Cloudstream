@@ -22,5 +22,5 @@ cloudstream {
         "Live",
     )
 
-    iconUrl = "https://streamed.su/api/images/poster/fallback.webp"
+    iconUrl = "https://streamed.pk/api/images/poster/fallback.webp"
 }
