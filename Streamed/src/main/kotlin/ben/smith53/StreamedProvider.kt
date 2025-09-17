@@ -1,19 +1,23 @@
 package ben.smith53
 
+import android.util.Log
+import ben.smith53.extractors.StreamedExtractor
 import com.fasterxml.jackson.annotation.JsonProperty
-import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.HomePageList
+import com.lagradost.cloudstream3.HomePageResponse
+import com.lagradost.cloudstream3.LoadResponse
+import com.lagradost.cloudstream3.MainAPI
+import com.lagradost.cloudstream3.MainPageRequest
+import com.lagradost.cloudstream3.SubtitleFile
+import com.lagradost.cloudstream3.TvType
+import com.lagradost.cloudstream3.app
+import com.lagradost.cloudstream3.mainPageOf
+import com.lagradost.cloudstream3.newHomePageResponse
+import com.lagradost.cloudstream3.newLiveSearchResponse
+import com.lagradost.cloudstream3.newLiveStreamLoadResponse
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.Qualities
-import android.util.Log
-import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.newExtractorLink
 import java.util.Locale
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.RequestBody.Companion.toRequestBody
-import ben.smith53.extractors.StreamedExtractor
 
 class StreamedProvider : MainAPI() {
     override var mainUrl = "https://streamed.su"
@@ -31,7 +35,9 @@ class StreamedProvider : MainAPI() {
         "Accept-Language" to "en-GB,en-US;q=0.9,en;q=0.8",
         "Sec-Ch-Ua" to "\"Chromium\";v=\"137\", \"Not/A)Brand\";v=\"24\"",
         "Sec-Ch-Ua-Mobile" to "?1",
-        "Sec-Ch-Ua-Platform" to "\"Android\""
+        "Sec-Ch-Ua-Platform" to "\"Android\"",
+        "Connection" to "keep-alive",
+        "Cache-Control" to "no-cache"
     )
 
     override val mainPage = mainPageOf(
@@ -54,27 +60,109 @@ class StreamedProvider : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        var lastException: Exception? = null
+        
+        // First, test basic connectivity
         try {
-            val rawList = app.get(request.data).text
-            val listJson = parseJson<List<Match>>(rawList)
-            val list = listJson.filter { match -> match.matchSources.isNotEmpty() }.map { match ->
-                val url = "$mainUrl/watch/${match.id}"
-                newLiveSearchResponse(
-                    name = match.title,
-                    url = url,
-                    type = TvType.Live
-                ) {
-                    this.posterUrl = "$mainUrl${match.posterPath ?: "/api/images/poster/fallback.webp"}"
-                }
-            }.filterNotNull()
-            return newHomePageResponse(
-                list = listOf(HomePageList(request.name, list, isHorizontalImages = true)),
-                hasNext = false
-            )
+            val testResponse = app.head("$mainUrl/api/matches/live/popular", headers = baseHeaders, timeout = 10000)
+            Log.d("StreamedProvider", "Connectivity test: HTTP ${testResponse.code}")
         } catch (e: Exception) {
-            Log.e("StreamedProvider", "Failed to load main page ${request.data}: ${e.message}")
-            return newHomePageResponse(list = emptyList(), hasNext = false)
+            Log.w("StreamedProvider", "Connectivity test failed: ${e.message}")
         }
+        
+        // Try up to 3 times with different approaches
+        for (attempt in 1..3) {
+            try {
+                Log.d("StreamedProvider", "Attempt $attempt: Loading main page ${request.data}")
+                
+                val response = app.get(
+                    request.data,
+                    headers = baseHeaders,
+                    timeout = 30000, // 30 second timeout
+                    allowRedirects = true
+                )
+                
+                if (!response.isSuccessful) {
+                    Log.w("StreamedProvider", "HTTP ${response.code} for ${request.data}")
+                    if (attempt < 3) continue
+                }
+                
+                val rawList = response.text
+                if (rawList.isBlank()) {
+                    Log.w("StreamedProvider", "Empty response for ${request.data}")
+                    if (attempt < 3) continue
+                }
+                
+                val listJson = parseJson<List<Match>>(rawList)
+                val list = listJson.filter { match -> match.matchSources.isNotEmpty() }.map { match ->
+                    val url = "$mainUrl/watch/${match.id}"
+                    newLiveSearchResponse(
+                        name = match.title,
+                        url = url,
+                        type = TvType.Live
+                    ) {
+                        this.posterUrl = "$mainUrl${match.posterPath ?: "/api/images/poster/fallback.webp"}"
+                    }
+                }.filterNotNull()
+                
+                Log.d("StreamedProvider", "Successfully loaded ${list.size} items for ${request.name}")
+                return newHomePageResponse(
+                    list = listOf(HomePageList(request.name, list, isHorizontalImages = true)),
+                    hasNext = false
+                )
+                
+            } catch (e: Exception) {
+                lastException = e
+                Log.w("StreamedProvider", "Attempt $attempt failed for ${request.data}: ${e.message}")
+                
+                // Wait before retry (exponential backoff)
+                if (attempt < 3) {
+                    kotlinx.coroutines.delay(1000L * attempt)
+                }
+            }
+        }
+        
+        // If individual category failed, try the "all matches" endpoint as fallback
+        if (request.data != "$mainUrl/api/matches/all") {
+            try {
+                Log.d("StreamedProvider", "Trying fallback endpoint for ${request.name}")
+                val fallbackResponse = app.get(
+                    "$mainUrl/api/matches/all",
+                    headers = baseHeaders,
+                    timeout = 30000,
+                    allowRedirects = true
+                )
+                
+                if (fallbackResponse.isSuccessful) {
+                    val fallbackData = fallbackResponse.parsedSafe<Map<String, List<Match>>>()
+                    val categoryMatches = fallbackData?.get(request.name.lowercase()) ?: emptyList()
+                    
+                    val list = categoryMatches.filter { match -> match.matchSources.isNotEmpty() }.map { match ->
+                        val url = "$mainUrl/watch/${match.id}"
+                        newLiveSearchResponse(
+                            name = match.title,
+                            url = url,
+                            type = TvType.Live
+                        ) {
+                            this.posterUrl = "$mainUrl${match.posterPath ?: "/api/images/poster/fallback.webp"}"
+                        }
+                    }.filterNotNull()
+                    
+                    if (list.isNotEmpty()) {
+                        Log.d("StreamedProvider", "Fallback successful: loaded ${list.size} items for ${request.name}")
+                        return newHomePageResponse(
+                            list = listOf(HomePageList(request.name, list, isHorizontalImages = true)),
+                            hasNext = false
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w("StreamedProvider", "Fallback also failed for ${request.name}: ${e.message}")
+            }
+        }
+        
+        Log.e("StreamedProvider", "All attempts failed for ${request.data}: ${lastException?.message}")
+        return newHomePageResponse(list = emptyList(), hasNext = false)
     }
 
     override suspend fun load(url: String): LoadResponse {

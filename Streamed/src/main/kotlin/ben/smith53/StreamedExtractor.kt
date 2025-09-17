@@ -87,37 +87,69 @@ class StreamedExtractor : ExtractorApi() {
             
             val embedDoc = embedResponse.document
             
-            // Look for m3u8 URLs in the embed page
-            val m3u8Urls = mutableListOf<String>()
-            
-            // Method 1: Look in script tags
+            // Extract JavaScript variables from the embed page
             val scripts = embedDoc.select("script")
+            var sourceVar = ""
+            var idVar = ""
+            var streamVar = ""
+            
             for (script in scripts) {
                 val scriptContent = script.html()
-                val m3u8Regex = """(https?://[^"'\s]+\.m3u8[^"'\s]*)""".toRegex()
-                val matches = m3u8Regex.findAll(scriptContent)
-                matches.forEach { match ->
-                    m3u8Urls.add(match.groupValues[1])
+                if (scriptContent.contains("var k =") && scriptContent.contains("var i =") && scriptContent.contains("var s =")) {
+                    val kMatch = Regex("""var k = "([^"]+)"""").find(scriptContent)
+                    val iMatch = Regex("""var i = "([^"]+)"""").find(scriptContent)
+                    val sMatch = Regex("""var s = "([^"]+)"""").find(scriptContent)
+                    
+                    sourceVar = kMatch?.groupValues?.get(1) ?: source
+                    idVar = iMatch?.groupValues?.get(1) ?: streamId
+                    streamVar = sMatch?.groupValues?.get(1) ?: streamNo.toString()
+                    
+                    Log.d("StreamedExtractor", "Found JS variables: k=$sourceVar, i=$idVar, s=$streamVar")
+                    break
                 }
             }
             
-            // Method 2: Look for iframe sources
-            val iframes = embedDoc.select("iframe[src]")
-            for (iframe in iframes) {
-                val iframeSrc = iframe.attr("src")
-                if (iframeSrc.contains("m3u8")) {
-                    m3u8Urls.add(iframeSrc)
+            // Try to construct m3u8 URL based on common patterns
+            val possibleM3u8Urls = mutableListOf<String>()
+            
+            // Pattern 1: Direct API call to get m3u8
+            val directApiUrl = "$baseApiUrl/api/stream/$sourceVar/$idVar/$streamVar.m3u8"
+            possibleM3u8Urls.add(directApiUrl)
+            
+            // Pattern 2: Common m3u8 patterns
+            val baseUrls = listOf(
+                "https://rr.buytommy.top",
+                "https://lb1.strmd.top",
+                "https://lb2.strmd.top", 
+                "https://lb3.strmd.top",
+                "https://lb4.strmd.top"
+            )
+            
+            for (baseUrl in baseUrls) {
+                possibleM3u8Urls.add("$baseUrl/stream/$sourceVar/$idVar/$streamVar/playlist.m3u8")
+                possibleM3u8Urls.add("$baseUrl/secure/*/stream/$sourceVar/$idVar/$streamVar/playlist.m3u8")
+            }
+            
+            // Test each possible URL
+            var m3u8Url = ""
+            for (url in possibleM3u8Urls) {
+                try {
+                    Log.d("StreamedExtractor", "Testing URL: $url")
+                    val testResponse = app.head(url, headers = baseHeaders, timeout = 10000)
+                    if (testResponse.isSuccessful) {
+                        m3u8Url = url
+                        Log.d("StreamedExtractor", "Found working m3u8 URL: $url")
+                        break
+                    }
+                } catch (e: Exception) {
+                    Log.d("StreamedExtractor", "URL failed: $url - ${e.message}")
                 }
             }
             
-            if (m3u8Urls.isEmpty()) {
-                Log.e("StreamedExtractor", "No m3u8 URLs found in embed page")
+            if (m3u8Url.isEmpty()) {
+                Log.e("StreamedExtractor", "No working m3u8 URLs found")
                 return false
             }
-            
-            // Use the first m3u8 URL found
-            val m3u8Url = m3u8Urls.first()
-            Log.d("StreamedExtractor", "Found m3u8 URL: $m3u8Url")
             
             // Create the extractor link
             callback.invoke(
