@@ -108,32 +108,42 @@ class StreamedExtractor : ExtractorApi() {
                             Log.d("StreamedExtractor", "Fetched embed page for ${streamInfo.embedUrl}")
                             
                             // Extract the m3u8 URL from the 'o' variable in the embed page
-                            val m3u8Url = extractM3u8UrlFromEmbed(embedHtml)
-                            if (m3u8Url != null) {
-                                Log.d("StreamedExtractor", "Found m3u8 URL: $m3u8Url")
-                                
-                                // Test if the m3u8 URL is accessible
-                                val testResponse = app.head(m3u8Url, headers = baseHeaders, timeout = 10000)
-                                if (testResponse.isSuccessful) {
-                                    Log.d("StreamedExtractor", "M3u8 URL is accessible")
+                            val m3u8Urls = extractM3u8UrlsFromEmbed(embedHtml, source, sourceSpecificId, streamInfo.streamNo)
+                            
+                            var foundWorkingUrl = false
+                            for (m3u8Url in m3u8Urls) {
+                                try {
+                                    Log.d("StreamedExtractor", "Testing m3u8 URL: $m3u8Url")
                                     
-                                    extractorLinks.add(
-            newExtractorLink(
-                                            source = "Streamed",
-                                            name = "${source} Stream ${streamInfo.streamNo} (${streamInfo.language}${if (streamInfo.hd) ", HD" else ""})",
-                                            url = m3u8Url,
-                type = ExtractorLinkType.M3U8
-            ) {
-                                            this.referer = streamInfo.embedUrl
-                                            this.quality = if (streamInfo.hd) Qualities.P1080.value else Qualities.Unknown.value
-                this.headers = baseHeaders
-            }
-        )
-                                } else {
-                                    Log.w("StreamedExtractor", "M3u8 URL not accessible: $m3u8Url - HTTP ${testResponse.code}")
+                                    // Test if the m3u8 URL is accessible
+                                    val testResponse = app.head(m3u8Url, headers = baseHeaders, timeout = 10000)
+                                    if (testResponse.isSuccessful) {
+                                        Log.d("StreamedExtractor", "Found working m3u8 URL: $m3u8Url")
+                                        
+                                        extractorLinks.add(
+                                            newExtractorLink(
+                                                source = "Streamed",
+                                                name = "${source} Stream ${streamInfo.streamNo} (${streamInfo.language}${if (streamInfo.hd) ", HD" else ""})",
+                                                url = m3u8Url,
+                                                type = ExtractorLinkType.M3U8
+                                            ) {
+                                                this.referer = streamInfo.embedUrl
+                                                this.quality = if (streamInfo.hd) Qualities.P1080.value else Qualities.Unknown.value
+                                                this.headers = baseHeaders
+                                            }
+                                        )
+                                        foundWorkingUrl = true
+                                        break
+                                    } else {
+                                        Log.d("StreamedExtractor", "URL not accessible: $m3u8Url - HTTP ${testResponse.code}")
+                                    }
+                                } catch (e: Exception) {
+                                    Log.d("StreamedExtractor", "Error testing URL $m3u8Url: ${e.message}")
                                 }
-                            } else {
-                                Log.w("StreamedExtractor", "No m3u8 URL found in embed page")
+                            }
+                            
+                            if (!foundWorkingUrl) {
+                                Log.w("StreamedExtractor", "No working m3u8 URL found for ${source} stream ${streamInfo.streamNo}")
                             }
                             
         } catch (e: Exception) {
@@ -141,7 +151,7 @@ class StreamedExtractor : ExtractorApi() {
                         }
                     }
                     
-                } catch (e: Exception) {
+        } catch (e: Exception) {
                     Log.e("StreamedExtractor", "Error processing source $source: ${e.message}")
                 }
             }
@@ -149,21 +159,48 @@ class StreamedExtractor : ExtractorApi() {
             Log.d("StreamedExtractor", "Extraction complete: found ${extractorLinks.size} links")
             return extractorLinks
             
-        } catch (e: Exception) {
+                    } catch (e: Exception) {
             Log.e("StreamedExtractor", "Extraction failed: ${e.message}")
             return emptyList()
         }
     }
     
-    private fun extractM3u8UrlFromEmbed(html: String): String? {
+    private fun extractM3u8UrlsFromEmbed(html: String, source: String, sourceId: String, streamNo: Int): List<String> {
         try {
-            // Look for the 'o' variable that contains the m3u8 URL
+            // Look for the 'o' variable that contains the m3u8 URL (admin sources)
             val oVarPattern = Regex("var\\s+o\\s*=\\s*[\"']([^\"']+)[\"']")
             val match = oVarPattern.find(html)
             if (match != null) {
                 val m3u8Url = match.groupValues[1]
                 Log.d("StreamedExtractor", "Extracted m3u8 URL from embed: $m3u8Url")
-                return m3u8Url
+                return listOf(m3u8Url)
+            }
+            
+            // For non-admin sources, generate the m3u8 URL based on the pattern
+            Log.d("StreamedExtractor", "No 'o' variable found, generating URL for $source source")
+            
+            // Extract k, i, s variables from the embed page
+            val kPattern = Regex("var\\s+k\\s*=\\s*[\"']([^\"']+)[\"']")
+            val iPattern = Regex("var\\s+i\\s*=\\s*[\"']([^\"']+)[\"']")
+            val sPattern = Regex("var\\s+s\\s*=\\s*[\"']([^\"']+)[\"']")
+            
+            val kMatch = kPattern.find(html)
+            val iMatch = iPattern.find(html)
+            val sMatch = sPattern.find(html)
+            
+            if (kMatch != null && iMatch != null && sMatch != null) {
+                val k = kMatch.groupValues[1]  // source
+                val i = iMatch.groupValues[1]  // source-specific ID
+                val s = sMatch.groupValues[1]  // stream number
+                
+                Log.d("StreamedExtractor", "Extracted variables: k=$k, i=$i, s=$s")
+                
+                // Generate m3u8 URLs based on source type
+                val m3u8Urls = generateM3u8UrlsForSource(k, i, s)
+                if (m3u8Urls.isNotEmpty()) {
+                    Log.d("StreamedExtractor", "Generated ${m3u8Urls.size} m3u8 URLs")
+                    return m3u8Urls
+                }
             }
             
             // Fallback: look for any m3u8 URL in the HTML
@@ -172,14 +209,85 @@ class StreamedExtractor : ExtractorApi() {
             if (m3u8Match != null) {
                 val m3u8Url = m3u8Match.value
                 Log.d("StreamedExtractor", "Found m3u8 URL in HTML: $m3u8Url")
-                return m3u8Url
+                return listOf(m3u8Url)
             }
             
             Log.w("StreamedExtractor", "No m3u8 URL found in embed HTML")
-            return null
+            return emptyList()
         } catch (e: Exception) {
             Log.e("StreamedExtractor", "Error extracting m3u8 URL from embed: ${e.message}")
-            return null
+            return emptyList()
+        }
+    }
+    
+    private fun generateM3u8UrlsForSource(source: String, sourceId: String, streamNo: String): List<String> {
+        try {
+            // Different base URLs for different sources
+            val baseUrls = when (source) {
+                "alpha" -> listOf(
+                    "https://lb1.strmd.top",
+                    "https://lb2.strmd.top", 
+                    "https://lb3.strmd.top",
+                    "https://lb4.strmd.top",
+                    "https://lb6.strmd.top"
+                )
+                "charlie" -> listOf(
+                    "https://lb1.strmd.top",
+                    "https://lb2.strmd.top",
+                    "https://lb3.strmd.top", 
+                    "https://lb4.strmd.top",
+                    "https://lb6.strmd.top"
+                )
+                "delta" -> listOf(
+                    "https://lb1.strmd.top",
+                    "https://lb2.strmd.top",
+                    "https://lb3.strmd.top",
+                    "https://lb4.strmd.top", 
+                    "https://lb6.strmd.top"
+                )
+                "echo" -> listOf(
+                    "https://lb1.strmd.top",
+                    "https://lb2.strmd.top",
+                    "https://lb3.strmd.top",
+                    "https://lb4.strmd.top",
+                    "https://lb6.strmd.top"
+                )
+                "foxtrot" -> listOf(
+                    "https://lb1.strmd.top",
+                    "https://lb2.strmd.top",
+                    "https://lb3.strmd.top",
+                    "https://lb4.strmd.top",
+                    "https://lb6.strmd.top"
+                )
+                else -> emptyList()
+            }
+            
+            // Common encryption keys (these might need to be updated based on current events)
+            val encryptionKeys = listOf(
+                "hYOeUTfQyHEyWeTszoOhqBCQvpCaYdHb",
+                "iCrHEMPgOmYrZtaFHAufNCHorGUslKKw",
+                "aBcDeFgHiJkLmNoPqRsTuVwXyZ123456"
+            )
+            
+            // Generate possible URLs
+            val possibleUrls = mutableListOf<String>()
+            
+            for (baseUrl in baseUrls) {
+                for (key in encryptionKeys) {
+                    // Pattern: /secure/{key}/{source}/stream/{sourceId}/{streamNo}/playlist.m3u8
+                    possibleUrls.add("$baseUrl/secure/$key/$source/stream/$sourceId/$streamNo/playlist.m3u8")
+                    
+                    // Alternative pattern: /secure/{key}/{source}/{sourceId}/{streamNo}/playlist.m3u8
+                    possibleUrls.add("$baseUrl/secure/$key/$source/$sourceId/$streamNo/playlist.m3u8")
+                }
+            }
+            
+            Log.d("StreamedExtractor", "Generated ${possibleUrls.size} possible URLs for $source")
+            return possibleUrls
+            
+        } catch (e: Exception) {
+            Log.e("StreamedExtractor", "Error generating m3u8 URL: ${e.message}")
+            return emptyList()
         }
     }
     

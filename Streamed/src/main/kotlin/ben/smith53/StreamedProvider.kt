@@ -356,7 +356,7 @@ class StreamedProvider : MainAPI() {
         }
         
         Log.d("StreamedProvider", "Successfully loaded ${links.size} links")
-        return true
+            return true
     }
     
 
