@@ -1,10 +1,11 @@
-package com.lagradost.cloudstream3.extractors
+package ben.smith53
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.app
 import org.jsoup.nodes.Element
 import java.net.URI
+import ben.smith53.extractors.StreamedExtractor
 
 class StreamedProvider : MainAPI() {
     override var mainUrl = "https://streamed.pk"
@@ -45,13 +46,10 @@ class StreamedProvider : MainAPI() {
                         newLiveSearchResponse(
                             name = title,
                             url = "$mainUrl/watch/${match.id}",
-                            apiName = this.name,
-                            type = TvType.Live,
-                            posterUrl = posterUrl,
-                            plot = "Live $category event"
+                            type = TvType.Live
                         )
                     } catch (e: Exception) {
-                        currentLogger().d(e.stackTraceToString())
+                        println("StreamedProvider error: ${e.message}")
                         null
                     }
                 }
@@ -61,10 +59,10 @@ class StreamedProvider : MainAPI() {
                 }
             }
         } catch (e: Exception) {
-            currentLogger().d(e.stackTraceToString())
+            println("StreamedProvider error: ${e.message}")
         }
         
-        return HomePageResponse(items)
+        return newHomePageResponse(items)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
@@ -88,23 +86,20 @@ class StreamedProvider : MainAPI() {
                             }
                             
                             searchResults.add(
-                                LiveSearchResponse(
+                                newLiveSearchResponse(
                                     name = match.title ?: "Unknown Event",
                                     url = "$mainUrl/watch/${match.id}",
-                                    apiName = this.name,
-                                    type = TvType.Live,
-                                    posterUrl = posterUrl,
-                                    plot = "Live ${match.category?.replaceFirstChar { it.uppercase() }} event"
+                                    type = TvType.Live
                                 )
                             )
                         }
                     }
                 } catch (e: Exception) {
-                    currentLogger().d(e.stackTraceToString())
+                    println("StreamedProvider error: ${e.message}")
                 }
             }
         } catch (e: Exception) {
-            currentLogger().d(e.stackTraceToString())
+            println("StreamedProvider error: ${e.message}")
         }
         
         return searchResults
@@ -128,7 +123,7 @@ class StreamedProvider : MainAPI() {
                     eventDetails = response?.find { it.id == eventId }
                     if (eventDetails != null) break
                 } catch (e: Exception) {
-                    currentLogger().d(e.stackTraceToString())
+                    println("StreamedProvider error: ${e.message}")
                 }
             }
             
@@ -153,13 +148,10 @@ class StreamedProvider : MainAPI() {
             return newLiveStreamLoadResponse(
                 name = title,
                 url = url,
-                apiName = this.name,
-                dataUrl = url,
-                posterUrl = posterUrl,
-                plot = plot.ifEmpty { "Live streaming event" }
+                dataUrl = url
             )
         } catch (e: Exception) {
-            currentLogger().d(e.stackTraceToString())
+            println("StreamedProvider error: ${e.message}")
             return null
         }
     }
@@ -229,17 +221,20 @@ class StreamedProvider : MainAPI() {
                         if (iframeSrc != null) {
                             // Use StreamedExtractor to extract the actual stream
                             val extractor = StreamedExtractor()
-                            extractor.getSafeUrl(iframeSrc, "", subtitleCallback, callback)
+                            val links = extractor.getUrl(iframeSrc, "")
+                            links?.forEach { link ->
+                                callback(link)
+                            }
                         }
                     }
                 } catch (e: Exception) {
-                    currentLogger().d(e.stackTraceToString())
+                    println("StreamedProvider error: ${e.message}")
                 }
             }
             
             return true
         } catch (e: Exception) {
-            currentLogger().d(e.stackTraceToString())
+            println("StreamedProvider error: ${e.message}")
             return false
         }
     }
@@ -272,7 +267,7 @@ class StreamedProvider : MainAPI() {
             
             return "https://embedsports.top/embed/$sourceType/$eventId/$streamNumber"
         } catch (e: Exception) {
-            currentLogger().d(e.stackTraceToString())
+            println("StreamedProvider error: ${e.message}")
             return null
         }
     }

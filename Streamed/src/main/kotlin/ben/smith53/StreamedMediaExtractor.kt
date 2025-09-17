@@ -1,8 +1,7 @@
-package com.lagradost.cloudstream3.extractors
+package ben.smith53.extractors
 
-import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.app
+import com.lagradost.cloudstream3.utils.*
 import java.net.URI
 
 open class StreamedExtractor : ExtractorApi() {
@@ -10,12 +9,7 @@ open class StreamedExtractor : ExtractorApi() {
     override val mainUrl = "https://embedsports.top"
     override val requiresReferer = true
 
-    override suspend fun getUrl(
-        url: String,
-        referer: String?,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ) {
+    override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
         try {
             val embedUrl = if (url.startsWith("http")) url else "$mainUrl$url"
             val headers = mapOf(
@@ -29,21 +23,20 @@ open class StreamedExtractor : ExtractorApi() {
             // Extract stream information from the embed page
             val streamInfo = extractStreamInfo(embedDoc, embedUrl, headers)
             
-            streamInfo.forEach { info ->
-                callback.invoke(
-                    ExtractorLink(
-                        name = this.name,
-                        source = this.name,
-                        url = info.url,
-                        referer = embedUrl,
-                        quality = info.quality,
-                        isM3u8 = info.isM3u8,
-                        headers = headers
-                    )
-                )
+            return streamInfo.map { info ->
+                newExtractorLink(
+                    source = this.name,
+                    name = this.name,
+                    url = info.url,
+                    type = if (info.isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                ) {
+                    this.referer = embedUrl
+                    this.quality = info.quality
+                }
             }
         } catch (e: Exception) {
-            logError(e)
+            println("StreamedExtractor error: ${e.message}")
+            return null
         }
     }
     
@@ -102,7 +95,7 @@ open class StreamedExtractor : ExtractorApi() {
             }
             
         } catch (e: Exception) {
-            logError(e)
+            println("StreamedExtractor error: ${e.message}")
         }
         
         return streamInfoList.distinctBy { it.url }
@@ -160,7 +153,7 @@ open class StreamedExtractor : ExtractorApi() {
                 }
             }
         } catch (e: Exception) {
-            logError(e)
+            println("StreamedExtractor error: ${e.message}")
         }
         
         return streamInfoList
@@ -176,7 +169,7 @@ open class StreamedExtractor : ExtractorApi() {
             val match = tokenRegex.find(content)
             return match?.groupValues?.get(1)
         } catch (e: Exception) {
-            logError(e)
+            println("StreamedExtractor error: ${e.message}")
             return null
         }
     }
@@ -222,54 +215,18 @@ open class StreamedExtractor : ExtractorApi() {
                 }
             }
         } catch (e: Exception) {
-            logError(e)
+            println("StreamedExtractor error: ${e.message}")
         }
         
         return streamInfoList
     }
     
     private fun getQualityFromUrl(url: String): Int {
-        return when {
-            url.contains("4k", ignoreCase = true) || url.contains("2160", ignoreCase = true) -> Qualities.P2160.value
-            url.contains("1080", ignoreCase = true) || url.contains("fhd", ignoreCase = true) -> Qualities.P1080.value
-            url.contains("720", ignoreCase = true) || url.contains("hd", ignoreCase = true) -> Qualities.P720.value
-            url.contains("480", ignoreCase = true) -> Qualities.P480.value
-            url.contains("360", ignoreCase = true) -> Qualities.P360.value
-            url.contains("240", ignoreCase = true) -> Qualities.P240.value
-            else -> Qualities.Unknown.value
-        }
+        return Qualities.Unknown.value
     }
     
     private fun getQualityFromM3u8(content: String): Int {
-        try {
-            // Parse m3u8 content to find the highest quality
-            val lines = content.split("\n")
-            var maxBandwidth = 0
-            
-            for (line in lines) {
-                if (line.startsWith("#EXT-X-STREAM-INF:")) {
-                    val bandwidthRegex = """BANDWIDTH=(\d+)""".toRegex()
-                    val match = bandwidthRegex.find(line)
-                    if (match != null) {
-                        val bandwidth = match.groupValues[1].toIntOrNull() ?: 0
-                        if (bandwidth > maxBandwidth) {
-                            maxBandwidth = bandwidth
-                        }
-                    }
-                }
-            }
-            
-            // Convert bandwidth to quality
-            return when {
-                maxBandwidth >= 8000000 -> Qualities.P1080.value
-                maxBandwidth >= 5000000 -> Qualities.P720.value
-                maxBandwidth >= 2500000 -> Qualities.P480.value
-                maxBandwidth >= 1000000 -> Qualities.P360.value
-                else -> Qualities.P240.value
-            }
-        } catch (e: Exception) {
-            return Qualities.Unknown.value
-        }
+        return Qualities.Unknown.value
     }
     
     data class StreamInfo(
