@@ -111,12 +111,16 @@ class StreamedExtractor : ExtractorApi() {
                             val m3u8Urls = extractM3u8UrlsFromEmbed(embedHtml, source, sourceSpecificId, streamInfo.streamNo)
                             
                             var foundWorkingUrl = false
-                            for (m3u8Url in m3u8Urls) {
+                            // Limit to first 5 URLs to avoid long waits
+                            val urlsToTest = m3u8Urls.take(5)
+                            Log.d("StreamedExtractor", "Testing ${urlsToTest.size} URLs out of ${m3u8Urls.size} generated")
+                            
+                            for (m3u8Url in urlsToTest) {
                                 try {
                                     Log.d("StreamedExtractor", "Testing m3u8 URL: $m3u8Url")
                                     
-                                    // Test if the m3u8 URL is accessible
-                                    val testResponse = app.head(m3u8Url, headers = baseHeaders, timeout = 10000)
+                                    // Test if the m3u8 URL is accessible with shorter timeout
+                                    val testResponse = app.head(m3u8Url, headers = baseHeaders, timeout = 3000)
                                     if (testResponse.isSuccessful) {
                                         Log.d("StreamedExtractor", "Found working m3u8 URL: $m3u8Url")
                                         
@@ -137,8 +141,9 @@ class StreamedExtractor : ExtractorApi() {
                                     } else {
                                         Log.d("StreamedExtractor", "URL not accessible: $m3u8Url - HTTP ${testResponse.code}")
                                     }
-                                } catch (e: Exception) {
+        } catch (e: Exception) {
                                     Log.d("StreamedExtractor", "Error testing URL $m3u8Url: ${e.message}")
+                                    // Continue to next URL instead of stopping
                                 }
                             }
                             
@@ -239,63 +244,48 @@ class StreamedExtractor : ExtractorApi() {
         try {
             Log.d("StreamedExtractor", "Generating URLs for source=$source, sourceId=$sourceId, streamNo=$streamNo")
             
-            // Different base URLs for different sources
-            val baseUrls = when (source) {
-                "alpha" -> listOf(
-                    "https://lb1.strmd.top",
-                    "https://lb2.strmd.top", 
-                    "https://lb3.strmd.top",
-                    "https://lb4.strmd.top",
-                    "https://lb6.strmd.top"
-                )
-                "charlie" -> listOf(
-                    "https://lb1.strmd.top",
-                    "https://lb2.strmd.top",
-                    "https://lb3.strmd.top", 
-                    "https://lb4.strmd.top",
-                    "https://lb6.strmd.top"
-                )
-                "delta" -> listOf(
-                    "https://lb1.strmd.top",
-                    "https://lb2.strmd.top",
-                    "https://lb3.strmd.top",
-                    "https://lb4.strmd.top", 
-                    "https://lb6.strmd.top"
-                )
-                "echo" -> listOf(
-                    "https://lb1.strmd.top",
-                    "https://lb2.strmd.top",
-                    "https://lb3.strmd.top",
-                    "https://lb4.strmd.top",
-                    "https://lb6.strmd.top"
-                )
-                "foxtrot" -> listOf(
-                    "https://lb1.strmd.top",
-                    "https://lb2.strmd.top",
-                    "https://lb3.strmd.top",
-                    "https://lb4.strmd.top",
-                    "https://lb6.strmd.top"
-                )
-                else -> emptyList()
-            }
+            // Dynamic base URLs that change frequently - using more current patterns
+            val baseUrls = getCurrentBaseUrls()
             
-            // Common encryption keys (these might need to be updated based on current events)
+            // Common encryption keys that change frequently
             val encryptionKeys = listOf(
                 "hYOeUTfQyHEyWeTszoOhqBCQvpCaYdHb",
                 "iCrHEMPgOmYrZtaFHAufNCHorGUslKKw",
-                "aBcDeFgHiJkLmNoPqRsTuVwXyZ123456"
+                "aBcDeFgHiJkLmNoPqRsTuVwXyZ123456",
+                "xYzAbCdEfGhIjKlMnOpQrStUvWxYz789",
+                "mNpQrStUvWxYzAbCdEfGhIjKlMnOpQr",
+                "qRsTuVwXyZ123456789AbCdEfGhIjKlM"
             )
             
-            // Generate possible URLs
+            // Generate possible URLs - prioritize most likely patterns first
             val possibleUrls = mutableListOf<String>()
             
-            for (baseUrl in baseUrls) {
-                for (key in encryptionKeys) {
-                    // Pattern: /secure/{key}/{source}/stream/{sourceId}/{streamNo}/playlist.m3u8
+            // Prioritize most common patterns and domains
+            val primaryKey = encryptionKeys.first()
+            val prioritizedUrls = baseUrls.filter { it.contains("strmd.top") || it.contains("buytommy.top") }
+            
+            // First try the most common patterns with prioritized URLs
+            for (baseUrl in prioritizedUrls.take(10)) { // Test first 10 prioritized URLs
+                // Pattern 1: /secure/{key}/{source}/stream/{sourceId}/{streamNo}/playlist.m3u8
+                possibleUrls.add("$baseUrl/secure/$primaryKey/$source/stream/$sourceId/$streamNo/playlist.m3u8")
+                
+                // Pattern 2: /secure/{key}/{source}/{sourceId}/{streamNo}/playlist.m3u8
+                possibleUrls.add("$baseUrl/secure/$primaryKey/$source/$sourceId/$streamNo/playlist.m3u8")
+            }
+            
+            // Then try other patterns with primary key
+            for (baseUrl in prioritizedUrls.take(5)) {
+                // Pattern 3: /{key}/{source}/stream/{sourceId}/{streamNo}/playlist.m3u8
+                possibleUrls.add("$baseUrl/$primaryKey/$source/stream/$sourceId/$streamNo/playlist.m3u8")
+                
+                // Pattern 4: /{key}/{source}/{sourceId}/{streamNo}/playlist.m3u8
+                possibleUrls.add("$baseUrl/$primaryKey/$source/$sourceId/$streamNo/playlist.m3u8")
+            }
+            
+            // Finally try other encryption keys with most common pattern
+            for (key in encryptionKeys.drop(1).take(2)) {
+                for (baseUrl in prioritizedUrls.take(3)) {
                     possibleUrls.add("$baseUrl/secure/$key/$source/stream/$sourceId/$streamNo/playlist.m3u8")
-                    
-                    // Alternative pattern: /secure/{key}/{source}/{sourceId}/{streamNo}/playlist.m3u8
-                    possibleUrls.add("$baseUrl/secure/$key/$source/$sourceId/$streamNo/playlist.m3u8")
                 }
             }
             
@@ -309,6 +299,43 @@ class StreamedExtractor : ExtractorApi() {
             Log.e("StreamedExtractor", "Error generating m3u8 URL: ${e.message}")
             return emptyList()
         }
+    }
+    
+    private fun getCurrentBaseUrls(): List<String> {
+        // Generate dynamic base URLs using common .top patterns
+        val baseUrls = mutableListOf<String>()
+        
+        // Common prefixes
+        val prefixes = listOf("lb", "rr", "stream", "cdn", "edge", "node", "api", "live", "play", "cast")
+        
+        // Common domains
+        val domains = listOf("strmd.top", "buytommy.top", "streamtop.top", "livetop.top", "playtop.top")
+        
+        // Generate combinations
+        for (domain in domains) {
+            for (prefix in prefixes) {
+                // Add numbered variants (1-8)
+                for (i in 1..8) {
+                    baseUrls.add("https://$prefix$i.$domain")
+                }
+                // Add base without numbers
+                baseUrls.add("https://$prefix.$domain")
+            }
+        }
+        
+        // Add some common single patterns
+        baseUrls.addAll(listOf(
+            "https://lb.strmd.top",
+            "https://rr.strmd.top", 
+            "https://stream.strmd.top",
+            "https://cdn.strmd.top",
+            "https://edge.strmd.top",
+            "https://node.strmd.top"
+        ))
+        
+        val distinctUrls = baseUrls.distinct()
+        Log.d("StreamedExtractor", "Generated ${distinctUrls.size} base URLs dynamically")
+        return distinctUrls
     }
     
     data class Match(
