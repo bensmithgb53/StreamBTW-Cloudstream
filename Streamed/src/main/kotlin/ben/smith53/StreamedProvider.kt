@@ -1,7 +1,6 @@
 package ben.smith53
 
 import android.util.Log
-import ben.smith53.extractors.StreamedExtractor
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.HomePageList
 import com.lagradost.cloudstream3.HomePageResponse
@@ -17,6 +16,9 @@ import com.lagradost.cloudstream3.newLiveSearchResponse
 import com.lagradost.cloudstream3.newLiveStreamLoadResponse
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.Qualities
+import com.lagradost.cloudstream3.utils.newExtractorLink
 import java.util.Locale
 
 class StreamedProvider : MainAPI() {
@@ -41,60 +43,78 @@ class StreamedProvider : MainAPI() {
     )
 
     override val mainPage = mainPageOf(
-        "$mainUrl/api/matches/live/popular" to "Popular",
-        "$mainUrl/api/matches/football" to "Football",
-        "$mainUrl/api/matches/baseball" to "Baseball",
-        "$mainUrl/api/matches/american-football" to "American Football",
-        "$mainUrl/api/matches/hockey" to "Hockey",
-        "$mainUrl/api/matches/basketball" to "Basketball",
-        "$mainUrl/api/matches/motor-sports" to "Motor Sports",
-        "$mainUrl/api/matches/fight" to "Fight",
-        "$mainUrl/api/matches/tennis" to "Tennis",
-        "$mainUrl/api/matches/rugby" to "Rugby",
-        "$mainUrl/api/matches/golf" to "Golf",
-        "$mainUrl/api/matches/billiards" to "Billiards",
-        "$mainUrl/api/matches/afl" to "AFL",
-        "$mainUrl/api/matches/darts" to "Darts",
-        "$mainUrl/api/matches/cricket" to "Cricket",
-        "$mainUrl/api/matches/other" to "Other"
+        "$mainUrl/api/matches/all" to "All Matches"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        var lastException: Exception? = null
-        
-        // First, test basic connectivity
         try {
-            val testResponse = app.head("$mainUrl/api/matches/live/popular", headers = baseHeaders, timeout = 10000)
-            Log.d("StreamedProvider", "Connectivity test: HTTP ${testResponse.code}")
-        } catch (e: Exception) {
-            Log.w("StreamedProvider", "Connectivity test failed: ${e.message}")
-        }
-        
-        // Try up to 3 times with different approaches
-        for (attempt in 1..3) {
-            try {
-                Log.d("StreamedProvider", "Attempt $attempt: Loading main page ${request.data}")
-                
-                val response = app.get(
-                    request.data,
-                    headers = baseHeaders,
-                    timeout = 30000, // 30 second timeout
-                    allowRedirects = true
-                )
-                
-                if (!response.isSuccessful) {
-                    Log.w("StreamedProvider", "HTTP ${response.code} for ${request.data}")
-                    if (attempt < 3) continue
+            Log.d("StreamedProvider", "Loading all matches from ${request.data}")
+            
+            val response = app.get(
+                request.data,
+                headers = baseHeaders,
+                timeout = 30000,
+                allowRedirects = true
+            )
+            
+            if (!response.isSuccessful) {
+                Log.e("StreamedProvider", "HTTP ${response.code} for ${request.data}")
+                return newHomePageResponse(list = emptyList(), hasNext = false)
+            }
+            
+            val rawData = response.text
+            if (rawData.isBlank()) {
+                Log.e("StreamedProvider", "Empty response for ${request.data}")
+                return newHomePageResponse(list = emptyList(), hasNext = false)
+            }
+            
+            // Parse the all matches data
+            val allMatches = parseJson<List<Match>>(rawData)
+            Log.d("StreamedProvider", "Loaded ${allMatches.size} total matches")
+            
+            // Group matches by category
+            val categoryGroups = allMatches.groupBy { match ->
+                when (match.category.lowercase()) {
+                    "football" -> "Football"
+                    "basketball" -> "Basketball"
+                    "baseball" -> "Baseball"
+                    "american-football" -> "American Football"
+                    "hockey" -> "Hockey"
+                    "tennis" -> "Tennis"
+                    "rugby" -> "Rugby"
+                    "golf" -> "Golf"
+                    "billiards" -> "Billiards"
+                    "afl" -> "AFL"
+                    "darts" -> "Darts"
+                    "cricket" -> "Cricket"
+                    "motor-sports" -> "Motor Sports"
+                    "fight" -> "Fight"
+                    else -> "Other"
                 }
-                
-                val rawList = response.text
-                if (rawList.isBlank()) {
-                    Log.w("StreamedProvider", "Empty response for ${request.data}")
-                    if (attempt < 3) continue
+            }
+            
+            // Create home page lists for each category
+            val homePageLists = mutableListOf<HomePageList>()
+            
+            // Add popular matches as a separate category first
+            val popularMatches = allMatches.filter { it.popular && it.matchSources.isNotEmpty() }.map { match ->
+                val url = "$mainUrl/watch/${match.id}"
+                newLiveSearchResponse(
+                    name = match.title,
+                    url = url,
+                    type = TvType.Live
+                ) {
+                    this.posterUrl = "$mainUrl${match.posterPath ?: "/api/images/poster/fallback.webp"}"
                 }
-                
-                val listJson = parseJson<List<Match>>(rawList)
-                val list = listJson.filter { match -> match.matchSources.isNotEmpty() }.map { match ->
+            }.filterNotNull()
+            
+            if (popularMatches.isNotEmpty()) {
+                homePageLists.add(HomePageList("Popular", popularMatches, isHorizontalImages = true))
+            }
+            
+            // Add other categories
+            homePageLists.addAll(categoryGroups.map { (categoryName, matches) ->
+                val categoryMatches = matches.filter { match -> match.matchSources.isNotEmpty() }.map { match ->
                     val url = "$mainUrl/watch/${match.id}"
                     newLiveSearchResponse(
                         name = match.title,
@@ -105,64 +125,19 @@ class StreamedProvider : MainAPI() {
                     }
                 }.filterNotNull()
                 
-                Log.d("StreamedProvider", "Successfully loaded ${list.size} items for ${request.name}")
-                return newHomePageResponse(
-                    list = listOf(HomePageList(request.name, list, isHorizontalImages = true)),
-                    hasNext = false
-                )
-                
-            } catch (e: Exception) {
-                lastException = e
-                Log.w("StreamedProvider", "Attempt $attempt failed for ${request.data}: ${e.message}")
-                
-                // Wait before retry (exponential backoff)
-                if (attempt < 3) {
-                    kotlinx.coroutines.delay(1000L * attempt)
-                }
-            }
+                HomePageList(categoryName, categoryMatches, isHorizontalImages = true)
+            })
+            
+            Log.d("StreamedProvider", "Successfully created ${homePageLists.size} categories with ${homePageLists.sumOf { it.list.size }} total matches")
+            return newHomePageResponse(
+                list = homePageLists,
+                hasNext = false
+            )
+            
+        } catch (e: Exception) {
+            Log.e("StreamedProvider", "Failed to load main page: ${e.message}")
+            return newHomePageResponse(list = emptyList(), hasNext = false)
         }
-        
-        // If individual category failed, try the "all matches" endpoint as fallback
-        if (request.data != "$mainUrl/api/matches/all") {
-            try {
-                Log.d("StreamedProvider", "Trying fallback endpoint for ${request.name}")
-                val fallbackResponse = app.get(
-                    "$mainUrl/api/matches/all",
-                    headers = baseHeaders,
-                    timeout = 30000,
-                    allowRedirects = true
-                )
-                
-                if (fallbackResponse.isSuccessful) {
-                    val fallbackData = fallbackResponse.parsedSafe<Map<String, List<Match>>>()
-                    val categoryMatches = fallbackData?.get(request.name.lowercase()) ?: emptyList()
-                    
-                    val list = categoryMatches.filter { match -> match.matchSources.isNotEmpty() }.map { match ->
-                        val url = "$mainUrl/watch/${match.id}"
-                        newLiveSearchResponse(
-                            name = match.title,
-                            url = url,
-                            type = TvType.Live
-                        ) {
-                            this.posterUrl = "$mainUrl${match.posterPath ?: "/api/images/poster/fallback.webp"}"
-                        }
-                    }.filterNotNull()
-                    
-                    if (list.isNotEmpty()) {
-                        Log.d("StreamedProvider", "Fallback successful: loaded ${list.size} items for ${request.name}")
-                        return newHomePageResponse(
-                            list = listOf(HomePageList(request.name, list, isHorizontalImages = true)),
-                            hasNext = false
-                        )
-                    }
-                }
-            } catch (e: Exception) {
-                Log.w("StreamedProvider", "Fallback also failed for ${request.name}: ${e.message}")
-            }
-        }
-        
-        Log.e("StreamedProvider", "All attempts failed for ${request.data}: ${lastException?.message}")
-        return newHomePageResponse(list = emptyList(), hasNext = false)
     }
 
     override suspend fun load(url: String): LoadResponse {
@@ -201,70 +176,168 @@ class StreamedProvider : MainAPI() {
             Log.e("StreamedProvider", "Invalid matchId: $matchId")
             return false
         }
-        val extractor = StreamedExtractor()
+        
+        Log.d("StreamedProvider", "Loading links for match: $matchId")
         var success = false
 
+        // First, get the match details to find available sources
         val matchDetails = try {
-            app.get("$mainUrl/api/matches/live/$matchId", timeout = StreamedExtractor.EXTRACTOR_TIMEOUT_MILLIS).parsedSafe<Match>()
+            // Get all matches and find the specific one
+            val allMatchesResponse = app.get("$mainUrl/api/matches/all", headers = baseHeaders, timeout = 30000)
+            if (allMatchesResponse.isSuccessful) {
+                val allMatches = parseJson<List<Match>>(allMatchesResponse.text)
+                allMatches.find { it.id == matchId }
+            } else {
+                null
+            }
         } catch (e: Exception) {
             Log.w("StreamedProvider", "Failed to fetch match details for $matchId: ${e.message}")
             null
         }
-        val availableSources = matchDetails?.matchSources?.map { it.sourceName }?.toSet() ?: emptySet()
+
+        val availableSources = matchDetails?.matchSources?.map { it.sourceName } ?: emptyList()
         Log.d("StreamedProvider", "Available sources for $matchId: $availableSources")
 
-        val sourcesToProcess = if (availableSources.isNotEmpty()) availableSources.toList() else defaultSources
-        for (source in sourcesToProcess) {
-            val streamInfos = try {
-                val response = app.get("$mainUrl/api/stream/$source/$matchId", timeout = StreamedExtractor.EXTRACTOR_TIMEOUT_MILLIS).text
-                parseJson<List<StreamInfo>>(response).filter { it.embedUrl.isNotBlank() }
-            } catch (e: Exception) {
-                Log.w("StreamedProvider", "No stream info from API for $source ($matchId): ${e.message}")
-                emptyList()
-            }
+        if (availableSources.isEmpty()) {
+            Log.e("StreamedProvider", "No sources available for $matchId")
+            return false
+        }
 
-            if (streamInfos.isNotEmpty()) {
-                streamInfos.forEach { stream ->
-                    repeat(2) { attempt ->
-                        try {
-                            val streamUrl = "$mainUrl/watch/$matchId/$source/${stream.streamNo}"
-                            Log.d("StreamedProvider", "Attempt ${attempt + 1} for $streamUrl")
-                            if (extractor.getUrl(streamUrl, stream.id, source, stream.streamNo, stream.language, stream.hd, subtitleCallback, callback)) {
-                                success = true
-                                return@repeat
-                            }
-                        } catch (e: Exception) {
-                            Log.e("StreamedProvider", "Attempt ${attempt + 1} failed for $source stream ${stream.streamNo}: ${e.message}")
+        // Try each available source
+        for (source in availableSources) {
+            try {
+                Log.d("StreamedProvider", "Trying source: $source")
+                
+                // Get stream info from the API
+                val streamResponse = app.get(
+                    "$mainUrl/api/stream/$source/$matchId",
+                    headers = baseHeaders,
+                    timeout = 30000
+                )
+                
+                if (!streamResponse.isSuccessful) {
+                    Log.w("StreamedProvider", "Stream API failed for $source: HTTP ${streamResponse.code}")
+                    continue
+                }
+                
+                val streamInfos = parseJson<List<StreamInfo>>(streamResponse.text)
+                Log.d("StreamedProvider", "Found ${streamInfos.size} streams for $source")
+                
+                // Try each stream
+                for (streamInfo in streamInfos) {
+                    try {
+                        Log.d("StreamedProvider", "Trying stream ${streamInfo.streamNo} from $source")
+                        
+                        // Get the embed URL and extract m3u8
+                        val embedUrl = streamInfo.embedUrl
+                        if (embedUrl.isBlank()) {
+                            Log.w("StreamedProvider", "No embed URL for stream ${streamInfo.streamNo}")
+                            continue
                         }
+                        
+                        // Fetch the embed page to get encryption key
+                        val embedResponse = app.get(embedUrl, headers = baseHeaders, timeout = 30000)
+                        if (!embedResponse.isSuccessful) {
+                            Log.w("StreamedProvider", "Embed page failed: HTTP ${embedResponse.code}")
+                            continue
+                        }
+                        
+                        val embedDoc = embedResponse.document
+                        
+                        // Extract encryption key from the embed page
+                        val encryptionKey = extractEncryptionKey(embedDoc)
+                        if (encryptionKey.isBlank()) {
+                            Log.w("StreamedProvider", "No encryption key found in embed page")
+                            continue
+                        }
+                        
+                        // Generate m3u8 URL using the correct pattern
+                        val m3u8Url = generateM3u8Url(encryptionKey, source, matchId, streamInfo.streamNo)
+                        Log.d("StreamedProvider", "Generated m3u8 URL: $m3u8Url")
+                        
+                        // Test the m3u8 URL
+                        val testResponse = app.head(m3u8Url, headers = baseHeaders, timeout = 10000)
+                        if (testResponse.isSuccessful) {
+                            Log.d("StreamedProvider", "Successfully found working m3u8 URL")
+                            
+                            // Create the extractor link
+                            callback.invoke(
+                                newExtractorLink(
+                                    source = "Streamed",
+                                    name = "${source} Stream ${streamInfo.streamNo} (${streamInfo.language}${if (streamInfo.hd) ", HD" else ""})",
+                                    url = m3u8Url,
+                                    type = ExtractorLinkType.M3U8
+                                ) {
+                                    this.referer = embedUrl
+                                    this.quality = if (streamInfo.hd) Qualities.P1080.value else Qualities.Unknown.value
+                                    this.headers = baseHeaders
+                                }
+                            )
+                            
+                            success = true
+                            break
+                        } else {
+                            Log.w("StreamedProvider", "M3u8 URL test failed: HTTP ${testResponse.code}")
+                        }
+                        
+                    } catch (e: Exception) {
+                        Log.e("StreamedProvider", "Error processing stream ${streamInfo.streamNo}: ${e.message}")
                     }
                 }
-            } else if (availableSources.isEmpty()) {
-                for (streamNo in 1..maxStreams) {
-                    repeat(2) { attempt ->
-                        try {
-                            val streamUrl = "$mainUrl/watch/$matchId/$source/$streamNo"
-                            Log.d("StreamedProvider", "Attempt ${attempt + 1} for fallback $streamUrl")
-                            if (extractor.getUrl(streamUrl, matchId, source, streamNo, "Unknown", false, subtitleCallback, callback)) {
-                                success = true
-                                return@repeat
-                            }
-                        } catch (e: Exception) {
-                            Log.e("StreamedProvider", "Attempt ${attempt + 1} failed for $source stream $streamNo: ${e.message}")
-                        }
-                    }
-                }
+                
+                if (success) break
+                
+            } catch (e: Exception) {
+                Log.e("StreamedProvider", "Error processing source $source: ${e.message}")
             }
         }
+        
         Log.d("StreamedProvider", "Load links result for $matchId: success=$success")
         return success
     }
+    
+    private fun extractEncryptionKey(doc: org.jsoup.nodes.Document): String {
+        // Look for the encryption key in script tags
+            val scripts = doc.select("script")
+            for (script in scripts) {
+                val scriptContent = script.html()
+            // Look for patterns that might contain the encryption key
+            // This is a simplified approach - the real key extraction might be more complex
+            val keyPattern = Regex("""["']([A-Za-z0-9+/=]{20,})["']""")
+            val match = keyPattern.find(scriptContent)
+                    if (match != null) {
+                        return match.groupValues[1]
+                    }
+                }
+        return ""
+    }
+    
+    private fun generateM3u8Url(encryptionKey: String, source: String, matchId: String, streamNo: Int): String {
+        // Generate the m3u8 URL using the pattern from the website analysis
+        val baseUrl = "https://lb6.strmd.top"
+        return "$baseUrl/secure/$encryptionKey/$source/stream/$matchId/$streamNo/playlist.m3u8"
+    }
 
     data class Match(
-        @JsonProperty("id") val id: String? = null,
+        @JsonProperty("id") val id: String,
         @JsonProperty("title") val title: String,
+        @JsonProperty("category") val category: String,
+        @JsonProperty("date") val date: Long,
         @JsonProperty("poster") val posterPath: String? = null,
         @JsonProperty("popular") val popular: Boolean = false,
-        @JsonProperty("sources") val matchSources: ArrayList<MatchSource> = arrayListOf()
+        @JsonProperty("sources") val matchSources: List<MatchSource> = emptyList(),
+        @JsonProperty("teams") val teams: Teams? = null,
+        @JsonProperty("finished") val finished: Boolean = false
+    )
+
+    data class Teams(
+        @JsonProperty("home") val home: Team,
+        @JsonProperty("away") val away: Team
+    )
+
+    data class Team(
+        @JsonProperty("name") val name: String,
+        @JsonProperty("badge") val badge: String? = null
     )
 
     data class MatchSource(
