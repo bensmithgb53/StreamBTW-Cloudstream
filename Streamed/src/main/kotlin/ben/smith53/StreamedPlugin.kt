@@ -1,14 +1,16 @@
-package ben.smith53
+package com.lagradost.cloudstream3.extractors
 
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 import com.lagradost.cloudstream3.plugins.Plugin
-import android.content.Context
 
 @CloudstreamPlugin
-class StreamedPlugin : Plugin() {
+class StreamedPlugin: Plugin() {
     override fun load(context: Context) {
+        // Register the main provider
         registerMainAPI(StreamedProvider())
-        registerExtractorAPI(StreamedMediaExtractor())
+        // Register the extractors
+        registerExtractorAPI(StreamedExtractor())
+        registerExtractorAPI(StreamedExtractor2())
+        registerExtractorAPI(StreamedExtractor3())
     }
-}
 }
