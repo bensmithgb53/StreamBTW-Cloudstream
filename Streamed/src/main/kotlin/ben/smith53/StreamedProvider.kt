@@ -6,6 +6,8 @@ import com.lagradost.cloudstream3.app
 import org.jsoup.nodes.Element
 import java.net.URI
 import ben.smith53.extractors.StreamedExtractor
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import com.fasterxml.jackson.module.kotlin.readValue
 
 class StreamedProvider : MainAPI() {
     override var mainUrl = "https://streamed.pk"
@@ -16,7 +18,7 @@ class StreamedProvider : MainAPI() {
     override var lang = "en"
 
     override val mainPage = mainPageOf(
-        "$mainUrl/api/matches/live/popular.json" to "Popular Live",
+        "$mainUrl/api/matches/live/popular.json" to "Live Now",
         "$mainUrl/api/matches/football/popular.json" to "Football",
         "$mainUrl/api/matches/basketball/popular.json" to "Basketball",
         "$mainUrl/api/matches/american-football/popular.json" to "American Football",
@@ -30,22 +32,25 @@ class StreamedProvider : MainAPI() {
         val items = arrayListOf<HomePageList>()
         
         try {
-            val response = app.get(request.data).parsedSafe<List<StreamedMatch>>()
-            response?.let { matches ->
-                val homePageList = matches.mapNotNull { match ->
+            val response = app.get(request.data).text
+            val matches = response.let { 
+                try {
+                    jacksonObjectMapper().readValue<List<Map<String, Any>>>(it)
+                } catch (e: Exception) {
+                    println("JSON parse error: ${e.message}")
+                    emptyList()
+                }
+            }
+            
+            if (matches.isNotEmpty()) {
+                val categoryList = matches.mapNotNull { match ->
                     try {
-                        val posterUrl = when {
-                            match.poster?.startsWith("/api/images/") == true -> "$mainUrl${match.poster}"
-                            match.poster?.startsWith("http") == true -> match.poster
-                            else -> null
-                        }
-                        
-                        val title = match.title ?: "Unknown Event"
-                        val category = match.category?.replaceFirstChar { it.uppercase() } ?: "Live"
+                        val title = match["title"] as? String ?: "Unknown Event"
+                        val id = match["id"] as? String ?: ""
                         
                         newLiveSearchResponse(
                             name = title,
-                            url = "$mainUrl/watch/${match.id}",
+                            url = "$mainUrl/watch/$id",
                             type = TvType.Live
                         )
                     } catch (e: Exception) {
@@ -54,8 +59,8 @@ class StreamedProvider : MainAPI() {
                     }
                 }
                 
-                if (homePageList.isNotEmpty()) {
-                    items.add(HomePageList(request.name, homePageList))
+                if (categoryList.isNotEmpty()) {
+                    items.add(HomePageList(request.name, categoryList))
                 }
             }
         } catch (e: Exception) {
@@ -74,24 +79,32 @@ class StreamedProvider : MainAPI() {
             
             for (category in categories) {
                 try {
-                    val response = app.get("$mainUrl/api/matches/$category/popular.json").parsedSafe<List<StreamedMatch>>()
-                    response?.let { matches ->
-                        matches.filter { 
-                            it.title?.contains(query, ignoreCase = true) == true 
-                        }.forEach { match ->
-                            val posterUrl = when {
-                                match.poster?.startsWith("/api/images/") == true -> "$mainUrl${match.poster}"
-                                match.poster?.startsWith("http") == true -> match.poster
-                                else -> null
-                            }
+                    val response = app.get("$mainUrl/api/matches/$category/popular.json").text
+                    val matches = response.let { 
+                        try {
+                            jacksonObjectMapper().readValue<List<Map<String, Any>>>(it)
+                        } catch (e: Exception) {
+                            println("JSON parse error: ${e.message}")
+                            emptyList()
+                        }
+                    }
+                    
+                    matches.forEach { match ->
+                        try {
+                            val title = match["title"] as? String ?: ""
+                            val id = match["id"] as? String ?: ""
                             
-                            searchResults.add(
-                                newLiveSearchResponse(
-                                    name = match.title ?: "Unknown Event",
-                                    url = "$mainUrl/watch/${match.id}",
-                                    type = TvType.Live
+                            if (title.contains(query, ignoreCase = true)) {
+                                searchResults.add(
+                                    newLiveSearchResponse(
+                                        name = title,
+                                        url = "$mainUrl/watch/$id",
+                                        type = TvType.Live
+                                    )
                                 )
-                            )
+                            }
+                        } catch (e: Exception) {
+                            println("StreamedProvider error: ${e.message}")
                         }
                     }
                 } catch (e: Exception) {
@@ -114,34 +127,24 @@ class StreamedProvider : MainAPI() {
             val title = doc.selectFirst("title")?.text()?.substringBefore(" - Streamed") ?: "Live Event"
             
             // Try to get event details from API
-            var eventDetails: StreamedMatch? = null
+            var eventDetails: Map<String, Any>? = null
             val categories = listOf("live", "football", "basketball", "american-football", "hockey", "baseball", "fight", "motor-sports")
             
             for (category in categories) {
                 try {
-                    val response = app.get("$mainUrl/api/matches/$category/popular.json").parsedSafe<List<StreamedMatch>>()
-                    eventDetails = response?.find { it.id == eventId }
+                    val response = app.get("$mainUrl/api/matches/$category/popular.json").text
+                    val matches = response.let { 
+                        try {
+                            jacksonObjectMapper().readValue<List<Map<String, Any>>>(it)
+                        } catch (e: Exception) {
+                            println("JSON parse error: ${e.message}")
+                            emptyList()
+                        }
+                    }
+                    eventDetails = matches.find { it["id"] == eventId }
                     if (eventDetails != null) break
                 } catch (e: Exception) {
                     println("StreamedProvider error: ${e.message}")
-                }
-            }
-            
-            val posterUrl = when {
-                eventDetails?.poster?.startsWith("/api/images/") == true -> "$mainUrl${eventDetails.poster}"
-                eventDetails?.poster?.startsWith("http") == true -> eventDetails.poster
-                else -> null
-            }
-            
-            val plot = buildString {
-                eventDetails?.let { event ->
-                    append("Live ${event.category?.replaceFirstChar { it.uppercase() }} event")
-                    event.teams?.let { teams ->
-                        append("\n${teams.home?.name} vs ${teams.away?.name}")
-                    }
-                    event.date?.let { date ->
-                        append("\nScheduled: ${java.util.Date(date)}")
-                    }
                 }
             }
             
@@ -164,67 +167,31 @@ class StreamedProvider : MainAPI() {
     ): Boolean {
         try {
             val eventId = data.substringAfterLast("/")
-            val doc = app.get(data).document
             
-            // Find all available stream sources
-            val sources = mutableListOf<StreamSource>()
-            
-            // Look for sources in the page structure
-            doc.select("a[href*='/watch/'][href*='/']").forEach { element ->
-                val href = element.attr("href")
-                if (href.contains("/$eventId/")) {
-                    val sourceType = href.substringAfterLast("/$eventId/").substringBefore("/")
-                    val streamNumber = href.substringAfterLast("/")
-                    val quality = element.text().let { text ->
-                        when {
-                            text.contains("HD", ignoreCase = true) -> "HD"
-                            text.contains("4K", ignoreCase = true) -> "4K"
-                            else -> "SD"
-                        }
-                    }
-                    val language = element.text().let { text ->
-                        when {
-                            text.contains("English", ignoreCase = true) -> "English"
-                            text.contains("Español", ignoreCase = true) -> "Spanish"
-                            text.contains("Français", ignoreCase = true) -> "French"
-                            text.contains("Deutsch", ignoreCase = true) -> "German"
-                            text.contains("Italiano", ignoreCase = true) -> "Italian"
-                            else -> "Unknown"
-                        }
-                    }
-                    
-                    sources.add(StreamSource(sourceType, streamNumber, quality, language))
-                }
-            }
-            
-            // If no sources found in DOM, try common source patterns
-            if (sources.isEmpty()) {
-                val commonSources = listOf("admin", "alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "hotel")
-                commonSources.forEach { sourceType ->
-                    for (i in 1..3) {
-                        sources.add(StreamSource(sourceType, i.toString(), "HD", "English"))
-                    }
-                }
-            }
-            
-            // Extract streams from each source
-            sources.forEach { source ->
+            // Get available streams from API
+            val response = app.get("$mainUrl/api/stream/$eventId").text
+            val streams = response.let { 
                 try {
-                    val streamUrl = "$mainUrl/watch/$eventId/${source.type}/${source.number}"
-                    val streamDoc = app.get(streamUrl).document
+                    jacksonObjectMapper().readValue<List<Map<String, Any>>>(it)
+                } catch (e: Exception) {
+                    println("JSON parse error: ${e.message}")
+                    emptyList()
+                }
+            }
+            
+            // Process each stream
+            streams.forEach { stream ->
+                try {
+                    val source = stream["source"] as? String ?: "alpha"
+                    val streamNo = stream["streamNo"] as? Int ?: 1
+                    val embedUrl = stream["embedUrl"] as? String
                     
-                    // Look for embed code button and extract iframe src
-                    val embedButton = streamDoc.selectFirst("button[data-*='embed'], button:contains(Embed)")
-                    if (embedButton != null) {
-                        // Try to find iframe src in the page
-                        val iframeSrc = extractIframeSrc(streamDoc, streamUrl)
-                        if (iframeSrc != null) {
-                            // Use StreamedExtractor to extract the actual stream
-                            val extractor = StreamedExtractor()
-                            val links = extractor.getUrl(iframeSrc, "")
-                            links?.forEach { link ->
-                                callback(link)
-                            }
+                    if (embedUrl != null) {
+                        // Use StreamedExtractor to extract the actual stream
+                        val extractor = StreamedExtractor()
+                        val links = extractor.getUrl(embedUrl, "")
+                        links?.forEach { link ->
+                            callback(link)
                         }
                     }
                 } catch (e: Exception) {
@@ -232,7 +199,7 @@ class StreamedProvider : MainAPI() {
                 }
             }
             
-            return true
+            return streams.isNotEmpty()
         } catch (e: Exception) {
             println("StreamedProvider error: ${e.message}")
             return false
@@ -272,36 +239,4 @@ class StreamedProvider : MainAPI() {
         }
     }
 
-    data class StreamedMatch(
-        val id: String?,
-        val title: String?,
-        val category: String?,
-        val date: Long?,
-        val poster: String?,
-        val popular: Boolean?,
-        val teams: Teams?,
-        val sources: List<Source>?
-    )
-
-    data class Teams(
-        val home: Team?,
-        val away: Team?
-    )
-
-    data class Team(
-        val name: String?,
-        val badge: String?
-    )
-
-    data class Source(
-        val source: String?,
-        val id: String?
-    )
-    
-    data class StreamSource(
-        val type: String,
-        val number: String,
-        val quality: String,
-        val language: String
-    )
 }
