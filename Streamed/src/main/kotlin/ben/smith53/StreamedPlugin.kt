@@ -11,3 +11,4 @@ class StreamedPlugin : Plugin() {
         registerExtractorAPI(StreamedMediaExtractor())
     }
 }
+}
