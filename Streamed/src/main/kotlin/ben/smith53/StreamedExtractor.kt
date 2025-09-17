@@ -84,110 +84,61 @@ class StreamedExtractor : ExtractorApi() {
                     val streamInfos = parseJson<List<StreamInfo>>(streamResponseText)
                     Log.d("StreamedExtractor", "Found ${streamInfos.size} streams for $source")
                     
-                    // If no streams found, try to create fallback streams
-                    if (streamInfos.isEmpty()) {
-                        Log.w("StreamedExtractor", "No streams found for $source, creating fallback streams")
-                        
-                        // Create fallback streams based on common patterns
-                        for (streamNo in 1..4) {
-                            val fallbackStreamInfo = StreamInfo(
-                                id = matchId,
-                                streamNo = streamNo,
-                                language = "English",
-                                hd = streamNo <= 2,
-                                embedUrl = "$mainUrl/embed/$source/$matchId/$streamNo",
-                                source = source
+                    // Process each stream by fetching the embed page and extracting the m3u8 URL
+                    for (streamInfo in streamInfos) {
+                        try {
+                            Log.d("StreamedExtractor", "Processing stream ${streamInfo.streamNo} from $source")
+                            
+                            // Fetch the embed page to get the actual m3u8 URL
+                            val embedResponse = app.get(
+                                streamInfo.embedUrl,
+                                headers = baseHeaders + mapOf(
+                                    "Referer" to "$mainUrl/watch/$matchId",
+                                    "Origin" to mainUrl
+                                ),
+                                timeout = 30000
                             )
                             
-                            // Try to generate working m3u8 URLs using source-specific ID
-                            val generatedUrls = generateM3u8Urls(source, sourceSpecificId, streamNo)
-                            for (m3u8Url in generatedUrls) {
-                                try {
-                                    Log.d("StreamedExtractor", "Testing fallback URL: $m3u8Url")
-                                    val testResponse = app.head(m3u8Url, headers = baseHeaders, timeout = 10000)
-                                    if (testResponse.isSuccessful) {
-                                        Log.d("StreamedExtractor", "Found working fallback m3u8 URL")
-                                        
-                                        extractorLinks.add(
-                                            newExtractorLink(
-                                                source = "Streamed",
-                                                name = "${source} Stream $streamNo (Fallback${if (fallbackStreamInfo.hd) ", HD" else ""})",
-                                                url = m3u8Url,
-                                                type = ExtractorLinkType.M3U8
-                                            ) {
-                                                this.referer = fallbackStreamInfo.embedUrl
-                                                this.quality = if (fallbackStreamInfo.hd) Qualities.P1080.value else Qualities.Unknown.value
-                                                this.headers = baseHeaders
-                                            }
-                                        )
-                                        break
-            }
-        } catch (e: Exception) {
-                                    Log.d("StreamedExtractor", "Fallback URL failed: $m3u8Url - ${e.message}")
-                                }
-                            }
-                        }
-                    } else {
-                        // Try each stream
-                        for (streamInfo in streamInfos) {
-                        try {
-                            Log.d("StreamedExtractor", "Trying stream ${streamInfo.streamNo} from $source")
-                            
-                            // Try direct API m3u8 URL first using source-specific ID
-                            val directApiUrl = "$mainUrl/api/stream/$source/$sourceSpecificId/${streamInfo.streamNo}.m3u8"
-                            Log.d("StreamedExtractor", "Trying direct API m3u8 URL: $directApiUrl")
-                            
-                            val testResponse = app.head(directApiUrl, headers = baseHeaders, timeout = 10000)
-                            if (testResponse.isSuccessful) {
-                                Log.d("StreamedExtractor", "Found working direct m3u8 URL")
-                                
-                                extractorLinks.add(
-                                    newExtractorLink(
-                                        source = "Streamed",
-                                        name = "${source} Stream ${streamInfo.streamNo} (${streamInfo.language}${if (streamInfo.hd) ", HD" else ""})",
-                                        url = directApiUrl,
-                                        type = ExtractorLinkType.M3U8
-                                    ) {
-                                        this.referer = streamInfo.embedUrl
-                                        this.quality = if (streamInfo.hd) Qualities.P1080.value else Qualities.Unknown.value
-                                        this.headers = baseHeaders
-                                    }
-                                )
+                            if (!embedResponse.isSuccessful) {
+                                Log.w("StreamedExtractor", "Embed page failed for ${streamInfo.embedUrl}: HTTP ${embedResponse.code}")
                                 continue
                             }
                             
-                            // Try generated m3u8 URLs as fallback using source-specific ID
-                            val generatedUrls = generateM3u8Urls(source, sourceSpecificId, streamInfo.streamNo)
-                            for (m3u8Url in generatedUrls) {
-                                try {
-                                    Log.d("StreamedExtractor", "Testing generated URL: $m3u8Url")
-                                    val testResponse = app.head(m3u8Url, headers = baseHeaders, timeout = 10000)
-                                    if (testResponse.isSuccessful) {
-                                        Log.d("StreamedExtractor", "Found working generated m3u8 URL")
-                                        
-                                        extractorLinks.add(
+                            val embedHtml = embedResponse.text
+                            Log.d("StreamedExtractor", "Fetched embed page for ${streamInfo.embedUrl}")
+                            
+                            // Extract the m3u8 URL from the 'o' variable in the embed page
+                            val m3u8Url = extractM3u8UrlFromEmbed(embedHtml)
+                            if (m3u8Url != null) {
+                                Log.d("StreamedExtractor", "Found m3u8 URL: $m3u8Url")
+                                
+                                // Test if the m3u8 URL is accessible
+                                val testResponse = app.head(m3u8Url, headers = baseHeaders, timeout = 10000)
+                                if (testResponse.isSuccessful) {
+                                    Log.d("StreamedExtractor", "M3u8 URL is accessible")
+                                    
+                                    extractorLinks.add(
             newExtractorLink(
-                                                source = "Streamed",
-                                                name = "${source} Stream ${streamInfo.streamNo} (${streamInfo.language}${if (streamInfo.hd) ", HD" else ""})",
-                                                url = m3u8Url,
+                                            source = "Streamed",
+                                            name = "${source} Stream ${streamInfo.streamNo} (${streamInfo.language}${if (streamInfo.hd) ", HD" else ""})",
+                                            url = m3u8Url,
                 type = ExtractorLinkType.M3U8
             ) {
-                                                this.referer = streamInfo.embedUrl
-                                                this.quality = if (streamInfo.hd) Qualities.P1080.value else Qualities.Unknown.value
+                                            this.referer = streamInfo.embedUrl
+                                            this.quality = if (streamInfo.hd) Qualities.P1080.value else Qualities.Unknown.value
                 this.headers = baseHeaders
             }
         )
-                                        break
-                                    }
-                                } catch (e: Exception) {
-                                    Log.d("StreamedExtractor", "URL failed: $m3u8Url - ${e.message}")
+                                } else {
+                                    Log.w("StreamedExtractor", "M3u8 URL not accessible: $m3u8Url - HTTP ${testResponse.code}")
                                 }
+                            } else {
+                                Log.w("StreamedExtractor", "No m3u8 URL found in embed page")
                             }
                             
         } catch (e: Exception) {
                             Log.e("StreamedExtractor", "Error processing stream ${streamInfo.streamNo}: ${e.message}")
                         }
-                    }
                     }
                     
                 } catch (e: Exception) {
@@ -204,28 +155,31 @@ class StreamedExtractor : ExtractorApi() {
         }
     }
     
-    private fun generateM3u8Urls(source: String, matchId: String, streamNo: Int): List<String> {
-        val baseUrls = listOf(
-            "https://lb6.strmd.top",
-            "https://lb1.strmd.top",
-            "https://lb2.strmd.top",
-            "https://lb3.strmd.top",
-            "https://lb4.strmd.top",
-            "https://rr.buytommy.top"
-        )
-        
-        val patterns = listOf(
-            "/secure/iCrHEMPgOmYrZtaFHAufNCHorGUslKKw/$source/stream/$matchId/$streamNo/playlist.m3u8",
-            "/$source/stream/$matchId/$streamNo/playlist.m3u8",
-            "/secure/*/$source/stream/$matchId/$streamNo/playlist.m3u8",
-            "/stream/$source/$matchId/$streamNo/playlist.m3u8",
-            "/$source/$matchId/$streamNo/playlist.m3u8"
-        )
-        
-        return baseUrls.flatMap { baseUrl ->
-            patterns.map { pattern ->
-                baseUrl + pattern
+    private fun extractM3u8UrlFromEmbed(html: String): String? {
+        try {
+            // Look for the 'o' variable that contains the m3u8 URL
+            val oVarPattern = Regex("var\\s+o\\s*=\\s*[\"']([^\"']+)[\"']")
+            val match = oVarPattern.find(html)
+            if (match != null) {
+                val m3u8Url = match.groupValues[1]
+                Log.d("StreamedExtractor", "Extracted m3u8 URL from embed: $m3u8Url")
+                return m3u8Url
             }
+            
+            // Fallback: look for any m3u8 URL in the HTML
+            val m3u8Pattern = Regex("https?://[^\"'\\s]+\\.m3u8")
+            val m3u8Match = m3u8Pattern.find(html)
+            if (m3u8Match != null) {
+                val m3u8Url = m3u8Match.value
+                Log.d("StreamedExtractor", "Found m3u8 URL in HTML: $m3u8Url")
+                return m3u8Url
+            }
+            
+            Log.w("StreamedExtractor", "No m3u8 URL found in embed HTML")
+            return null
+        } catch (e: Exception) {
+            Log.e("StreamedExtractor", "Error extracting m3u8 URL from embed: ${e.message}")
+            return null
         }
     }
     
