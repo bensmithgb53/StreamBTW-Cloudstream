@@ -1,233 +1,291 @@
-package ben.smith53
+package com.lagradost.cloudstream3.extractors
 
-import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.Qualities
-import com.lagradost.cloudstream3.utils.SubtitleFile
-import com.lagradost.cloudstream3.utils.AppUtils.parseJson
-import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
-import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.app
-import android.util.Log
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.RequestBody.Companion.toRequestBody
+import java.net.URI
 
-class StreamedMediaExtractor {
-    private val fetchM3u8Url = "https://bensmithgb53-decrypt-13.deno.dev/fetch-m3u8"
-    private val cookieUrl = "https://fishy.streamed.pk/api/event"
-    private val challengeBaseUrl = "https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/g"
-    private val baseHeaders = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
-        "Content-Type" to "application/json",
-        "Accept" to "application/vnd.apple.mpegurl, */*",
-        "Origin" to "https://embedstreams.top",
-        "Accept-Language" to "en-GB,en-US;q=0.9,en;q=0.8",
-        "Sec-Ch-Ua" to "\"Not A(Brand\";v=\"8\", \"Chromium\";v=\"132\"",
-        "Sec-Ch-Ua-Mobile" to "?1",
-        "Sec-Ch-Ua-Platform" to "\"Android\""
-    )
-    private val fallbackDomains = listOf("rr.buytommy.top", "p2-panel.streamed.pk", "streamed.pk", "embedstreams.top", "ann.embedstreams.top")
-    private val cookieCache = mutableMapOf<String, String>()
-    private var cfClearance: String? = null
+open class StreamedExtractor : ExtractorApi() {
+    override val name = "StreamedExtractor"
+    override val mainUrl = "https://embedsports.top"
+    override val requiresReferer = true
 
-    companion object {
-        const val EXTRACTOR_TIMEOUT_SECONDS = 30
-        const val EXTRACTOR_TIMEOUT_MILLIS = EXTRACTOR_TIMEOUT_SECONDS * 1000L
-    }
-
-    suspend fun getUrl(
-        streamUrl: String,
-        streamId: String,
-        source: String,
-        streamNo: Int,
-        language: String,
-        isHd: Boolean,
+    override suspend fun getUrl(
+        url: String,
+        referer: String?,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
-    ): Boolean {
-        Log.d("StreamedMediaExtractor", "Starting extraction for: $streamUrl (ID: $streamId)")
-
-        // Check server availability
+    ) {
         try {
-            if (!app.head("https://streamed.su", timeout = EXTRACTOR_TIMEOUT_MILLIS).isSuccessful) {
-                Log.e("StreamedMediaExtractor", "streamed.su is unreachable")
-                return false
-            }
-        } catch (e: Exception) {
-            Log.e("StreamedMediaExtractor", "Server check failed: ${e.message}")
-            return false
-        }
-
-        // Fetch Cloudflare clearance
-        cfClearance = null
-        if (fetchCloudflareClearance(streamUrl)) {
-            Log.d("StreamedMediaExtractor", "Cloudflare clearance obtained: $cfClearance")
-        } else {
-            Log.w("StreamedMediaExtractor", "Cloudflare clearance failed, proceeding without it")
-        }
-
-        // Fetch stream page cookies
-        val streamResponse = try {
-            app.get(
-                streamUrl,
-                headers = baseHeaders + (cfClearance?.let { mapOf("Cookie" to "cf_clearance=$it") } ?: emptyMap()),
-                timeout = EXTRACTOR_TIMEOUT_MILLIS
+            val embedUrl = if (url.startsWith("http")) url else "$mainUrl$url"
+            val headers = mapOf(
+                "Referer" to (referer ?: "https://streamed.pk/"),
+                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
             )
-        } catch (e: Exception) {
-            Log.e("StreamedMediaExtractor", "Stream page fetch failed for $source/$streamNo: ${e.message}")
-            return false
-        }
-        val streamCookies = streamResponse.cookies
-        Log.d("StreamedMediaExtractor", "Stream cookies for $source/$streamNo: $streamCookies")
-
-        // Fetch event cookies
-        val eventCookies = fetchEventCookies(streamUrl, streamUrl)
-        Log.d("StreamedMediaExtractor", "Event cookies for $source/$streamNo: $eventCookies")
-
-        // Combine cookies
-        val combinedCookies = buildString {
-            if (streamCookies.isNotEmpty()) {
-                append(streamCookies.entries.joinToString("; ") { "${it.key}=${it.value}" })
-            }
-            if (eventCookies.isNotEmpty()) {
-                if (isNotEmpty()) append("; ")
-                append(eventCookies)
-            }
-            cfClearance?.let {
-                if (isNotEmpty()) append("; ")
-                append("cf_clearance=$it")
-            }
-        }
-        if (combinedCookies.isEmpty()) {
-            Log.w("StreamedMediaExtractor", "No cookies obtained for $source/$streamNo")
-        }
-        Log.d("StreamedMediaExtractor", "Combined cookies for $source/$streamNo: $combinedCookies")
-
-        // Fetch M3U8 URL from Deno
-        val fetchPostData = mapOf(
-            "channelPart1" to source,
-            "channelPart2" to streamId,
-            "streamNo" to streamNo.toString()
-        )
-        val embedReferer = "https://embedstreams.top/embed/$source/$streamId/$streamNo"
-        val fetchHeaders = baseHeaders + mapOf("Referer" to streamUrl)
-        Log.d("StreamedMediaExtractor", "Fetching M3U8 with data: $fetchPostData and headers: $fetchHeaders")
-
-        val m3u8Response = try {
-            val response = app.post(fetchM3u8Url, headers = fetchHeaders, json = fetchPostData, timeout = EXTRACTOR_TIMEOUT_MILLIS)
-            Log.d("StreamedMediaExtractor", "Fetch M3U8 response code for $source/$streamNo: ${response.code}")
-            if (response.code != 200) {
-                Log.e("StreamedMediaExtractor", "Fetch M3U8 failed for $source/$streamNo with code: ${response.code}, body: ${response.text.take(100)}")
-                return false
-            }
-            response.parsedSafe<Map<String, String>>()?.get("m3u8")?.takeIf { it.isNotBlank() } ?: return false.also {
-                Log.e("StreamedMediaExtractor", "Empty or invalid M3U8 response for $source/$streamNo")
+            
+            // Get the embed page
+            val embedDoc = app.get(embedUrl, headers = headers).document
+            
+            // Extract stream information from the embed page
+            val streamInfo = extractStreamInfo(embedDoc, embedUrl, headers)
+            
+            streamInfo.forEach { info ->
+                callback.invoke(
+                    ExtractorLink(
+                        name = this.name,
+                        source = this.name,
+                        url = info.url,
+                        referer = embedUrl,
+                        quality = info.quality,
+                        isM3u8 = info.isM3u8,
+                        headers = headers
+                    )
+                )
             }
         } catch (e: Exception) {
-            Log.e("StreamedMediaExtractor", "Fetch M3U8 failed for $source/$streamNo: ${e.message}")
-            return false
+            logError(e)
         }
-        Log.d("StreamedMediaExtractor", "M3U8 URL for $source/$streamNo: $m3u8Response")
-
-        // Test M3U8 with fallbacks
-        var linkFound = false
-        for (domain in fallbackDomains) {
-            try {
-                val testUrl = m3u8Response.replace("rr.buytommy.top", domain)
-                Log.d("StreamedMediaExtractor", "Testing M3U8 URL: $testUrl")
-                val testResponse = app.get(testUrl, headers = baseHeaders + mapOf(
-                    "Referer" to embedReferer,
-                    "Cookie" to combinedCookies
-                ), timeout = EXTRACTOR_TIMEOUT_MILLIS)
-                Log.d("StreamedMediaExtractor", "M3U8 response code for $domain: ${testResponse.code}, body: ${testResponse.text.take(100)}")
-                if (testResponse.code == 200 && testResponse.text.contains("#EXTM3U")) {
-                    callback.invoke(
-                        newExtractorLink(
-                            source = "Streamed",
-                            name = "$source Stream $streamNo ($language${if (isHd) ", HD" else ""})",
-                            url = testUrl,
-                            type = ExtractorLinkType.M3U8
-                        ) {
-                            this.referer = embedReferer
-                            this.quality = if (isHd) Qualities.P1080.value else Qualities.Unknown.value
-                            this.headers = baseHeaders + mapOf(
-                                "Referer" to embedReferer,
-                                "Cookie" to combinedCookies
+    }
+    
+    private suspend fun extractStreamInfo(
+        doc: org.jsoup.nodes.Document, 
+        embedUrl: String, 
+        headers: Map<String, String>
+    ): List<StreamInfo> {
+        val streamInfoList = mutableListOf<StreamInfo>()
+        
+        try {
+            // Method 1: Look for m3u8 URLs in script tags
+            val scripts = doc.select("script")
+            for (script in scripts) {
+                val scriptContent = script.html()
+                
+                // Look for m3u8 URLs
+                val m3u8Regex = """(https?://[^"'\s]+\.m3u8[^"'\s]*)""".toRegex()
+                val m3u8Matches = m3u8Regex.findAll(scriptContent)
+                
+                m3u8Matches.forEach { match ->
+                    val m3u8Url = match.groupValues[1]
+                    streamInfoList.add(
+                        StreamInfo(
+                            url = m3u8Url,
+                            quality = getQualityFromUrl(m3u8Url),
+                            isM3u8 = true
+                        )
+                    )
+                }
+                
+                // Look for direct video URLs
+                val videoRegex = """(https?://[^"'\s]+\.(mp4|webm|avi|mkv)[^"'\s]*)""".toRegex()
+                val videoMatches = videoRegex.findAll(scriptContent)
+                
+                videoMatches.forEach { match ->
+                    val videoUrl = match.groupValues[1]
+                    streamInfoList.add(
+                        StreamInfo(
+                            url = videoUrl,
+                            quality = getQualityFromUrl(videoUrl),
+                            isM3u8 = false
+                        )
+                    )
+                }
+            }
+            
+            // Method 2: Monitor network requests for m3u8 files
+            if (streamInfoList.isEmpty()) {
+                streamInfoList.addAll(extractFromNetworkRequests(embedUrl, headers))
+            }
+            
+            // Method 3: Try common m3u8 URL patterns
+            if (streamInfoList.isEmpty()) {
+                streamInfoList.addAll(tryCommonPatterns(embedUrl, headers))
+            }
+            
+        } catch (e: Exception) {
+            logError(e)
+        }
+        
+        return streamInfoList.distinctBy { it.url }
+    }
+    
+    private suspend fun extractFromNetworkRequests(
+        embedUrl: String, 
+        headers: Map<String, String>
+    ): List<StreamInfo> {
+        val streamInfoList = mutableListOf<StreamInfo>()
+        
+        try {
+            // Parse the embed URL to extract components
+            val uri = URI(embedUrl)
+            val pathParts = uri.path.split("/").filter { it.isNotEmpty() }
+            
+            if (pathParts.size >= 4) {
+                val sourceType = pathParts[1] // alpha, bravo, etc.
+                val eventId = pathParts[2]
+                val streamNumber = pathParts[3]
+                
+                // Try common m3u8 URL patterns based on the analysis
+                val possibleUrls = listOf(
+                    "https://lb4.strmd.top/secure/*/alpha/stream/$eventId/$streamNumber/playlist.m3u8",
+                    "https://lb1.strmd.top/secure/*/alpha/stream/$eventId/$streamNumber/playlist.m3u8",
+                    "https://lb2.strmd.top/secure/*/alpha/stream/$eventId/$streamNumber/playlist.m3u8",
+                    "https://lb3.strmd.top/secure/*/alpha/stream/$eventId/$streamNumber/playlist.m3u8"
+                )
+                
+                // Try to find the actual secure token
+                val secureToken = extractSecureToken(embedUrl, headers)
+                
+                possibleUrls.forEach { pattern ->
+                    val actualUrl = if (secureToken != null) {
+                        pattern.replace("*", secureToken).replace("alpha", sourceType)
+                    } else {
+                        // Try without secure token or with common patterns
+                        pattern.replace("/secure/*/", "/").replace("alpha", sourceType)
+                    }
+                    
+                    try {
+                        val response = app.get(actualUrl, headers = headers)
+                        if (response.isSuccessful) {
+                            streamInfoList.add(
+                                StreamInfo(
+                                    url = actualUrl,
+                                    quality = getQualityFromM3u8(response.text),
+                                    isM3u8 = true
+                                )
                             )
                         }
-                    )
-                    Log.d("StreamedMediaExtractor", "M3U8 URL added for $source/$streamNo: $testUrl")
-                    linkFound = true
-                    break
+                    } catch (e: Exception) {
+                        // Continue trying other URLs
+                    }
                 }
-            } catch (e: Exception) {
-                Log.e("StreamedMediaExtractor", "M3U8 test failed for $domain: ${e.message}")
-            }
-        }
-
-        // Fallback: Add original URL if no test succeeds
-        if (!linkFound) {
-            callback.invoke(
-                newExtractorLink(
-                    source = "Streamed",
-                    name = "$source Stream $streamNo ($language${if (isHd) ", HD" else ""})",
-                    url = m3u8Response,
-                    type = ExtractorLinkType.M3U8
-                ) {
-                    this.referer = embedReferer
-                    this.quality = if (isHd) Qualities.P1080.value else Qualities.Unknown.value
-                    this.headers = baseHeaders + mapOf(
-                        "Referer" to embedReferer,
-                        "Cookie" to combinedCookies
-                    )
-                }
-            )
-            Log.d("StreamedMediaExtractor", "Original M3U8 URL added as fallback for $source/$streamNo: $m3u8Response")
-            linkFound = true
-        }
-        return linkFound
-    }
-
-    private suspend fun fetchCloudflareClearance(url: String): Boolean {
-        val clearanceUrl = "https://bensmithgb53-decrypt-13.deno.dev/cloudflare-clearance"
-        val requestBody = mapOf("url" to url).toJson().toRequestBody("application/json".toMediaType())
-        return try {
-            val response = app.post(clearanceUrl, requestBody = requestBody, timeout = EXTRACTOR_TIMEOUT_MILLIS)
-            if (response.isSuccessful) {
-                val clearance = response.parsedSafe<Map<String, String>>()?.get("cf_clearance")
-                if (!clearance.isNullOrBlank()) {
-                    cfClearance = clearance
-                    true
-                } else {
-                    Log.e("StreamedMediaExtractor", "Cloudflare clearance response was successful but cf_clearance is empty.")
-                    false
-                }
-            } else {
-                Log.e("StreamedMediaExtractor", "Cloudflare clearance request failed with code: ${response.code}, body: ${response.text}")
-                false
             }
         } catch (e: Exception) {
-            Log.e("StreamedMediaExtractor", "Cloudflare clearance request failed: ${e.message}")
-            false
+            logError(e)
         }
+        
+        return streamInfoList
     }
-
-    private suspend fun fetchEventCookies(streamUrl: String, referer: String): String {
-        val eventPostData = "{}".toRequestBody("application/json".toMediaType())
-        val eventHeaders = baseHeaders + mapOf("Referer" to referer)
-        return try {
-            val response = app.post(cookieUrl, headers = eventHeaders, requestBody = eventPostData, timeout = EXTRACTOR_TIMEOUT_MILLIS)
-            response.cookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
+    
+    private suspend fun extractSecureToken(embedUrl: String, headers: Map<String, String>): String? {
+        try {
+            val response = app.get(embedUrl, headers = headers)
+            val content = response.text
+            
+            // Look for secure token patterns in the response
+            val tokenRegex = """secure/([A-Za-z0-9]+)/""".toRegex()
+            val match = tokenRegex.find(content)
+            return match?.groupValues?.get(1)
         } catch (e: Exception) {
-            Log.e("StreamedMediaExtractor", "Failed to fetch event cookies: ${e.message}")
-            ""
+            logError(e)
+            return null
         }
     }
+    
+    private suspend fun tryCommonPatterns(
+        embedUrl: String, 
+        headers: Map<String, String>
+    ): List<StreamInfo> {
+        val streamInfoList = mutableListOf<StreamInfo>()
+        
+        try {
+            val uri = URI(embedUrl)
+            val pathParts = uri.path.split("/").filter { it.isNotEmpty() }
+            
+            if (pathParts.size >= 4) {
+                val sourceType = pathParts[1]
+                val eventId = pathParts[2]
+                val streamNumber = pathParts[3]
+                
+                // Common patterns observed
+                val patterns = listOf(
+                    "https://embedsports.top/stream/$sourceType/$eventId/$streamNumber.m3u8",
+                    "https://embedsports.top/api/stream/$sourceType/$eventId/$streamNumber.m3u8",
+                    "https://strmd.top/stream/$sourceType/$eventId/$streamNumber/playlist.m3u8",
+                    "https://lb4.strmd.top/stream/$sourceType/$eventId/$streamNumber/playlist.m3u8"
+                )
+                
+                patterns.forEach { url ->
+                    try {
+                        val response = app.get(url, headers = headers)
+                        if (response.isSuccessful && response.text.contains("#EXTM3U")) {
+                            streamInfoList.add(
+                                StreamInfo(
+                                    url = url,
+                                    quality = getQualityFromM3u8(response.text),
+                                    isM3u8 = true
+                                )
+                            )
+                        }
+                    } catch (e: Exception) {
+                        // Continue trying other patterns
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            logError(e)
+        }
+        
+        return streamInfoList
+    }
+    
+    private fun getQualityFromUrl(url: String): Int {
+        return when {
+            url.contains("4k", ignoreCase = true) || url.contains("2160", ignoreCase = true) -> Qualities.P2160.value
+            url.contains("1080", ignoreCase = true) || url.contains("fhd", ignoreCase = true) -> Qualities.P1080.value
+            url.contains("720", ignoreCase = true) || url.contains("hd", ignoreCase = true) -> Qualities.P720.value
+            url.contains("480", ignoreCase = true) -> Qualities.P480.value
+            url.contains("360", ignoreCase = true) -> Qualities.P360.value
+            url.contains("240", ignoreCase = true) -> Qualities.P240.value
+            else -> Qualities.Unknown.value
+        }
+    }
+    
+    private fun getQualityFromM3u8(content: String): Int {
+        try {
+            // Parse m3u8 content to find the highest quality
+            val lines = content.split("\n")
+            var maxBandwidth = 0
+            
+            for (line in lines) {
+                if (line.startsWith("#EXT-X-STREAM-INF:")) {
+                    val bandwidthRegex = """BANDWIDTH=(\d+)""".toRegex()
+                    val match = bandwidthRegex.find(line)
+                    if (match != null) {
+                        val bandwidth = match.groupValues[1].toIntOrNull() ?: 0
+                        if (bandwidth > maxBandwidth) {
+                            maxBandwidth = bandwidth
+                        }
+                    }
+                }
+            }
+            
+            // Convert bandwidth to quality
+            return when {
+                maxBandwidth >= 8000000 -> Qualities.P1080.value
+                maxBandwidth >= 5000000 -> Qualities.P720.value
+                maxBandwidth >= 2500000 -> Qualities.P480.value
+                maxBandwidth >= 1000000 -> Qualities.P360.value
+                else -> Qualities.P240.value
+            }
+        } catch (e: Exception) {
+            return Qualities.Unknown.value
+        }
+    }
+    
+    data class StreamInfo(
+        val url: String,
+        val quality: Int,
+        val isM3u8: Boolean
+    )
 }
 
+// Alternative extractor for different embed domains
+class StreamedExtractor2 : StreamedExtractor() {
+    override val name = "StreamedExtractor2"
+    override val mainUrl = "https://strmd.top"
+}
 
-
-
-fun Map<String, String>.toJson(): String {
-    return com.lagradost.cloudstream3.utils.AppUtils.mapper.writeValueAsString(this)
+class StreamedExtractor3 : StreamedExtractor() {
+    override val name = "StreamedExtractor3" 
+    override val mainUrl = "https://lb4.strmd.top"
 }
