@@ -188,6 +188,8 @@ class StreamedExtractor : ExtractorApi() {
             val iMatch = iPattern.find(html)
             val sMatch = sPattern.find(html)
             
+            Log.d("StreamedExtractor", "Variable extraction results: kMatch=${kMatch != null}, iMatch=${iMatch != null}, sMatch=${sMatch != null}")
+            
             if (kMatch != null && iMatch != null && sMatch != null) {
                 val k = kMatch.groupValues[1]  // source
                 val i = iMatch.groupValues[1]  // source-specific ID
@@ -199,6 +201,19 @@ class StreamedExtractor : ExtractorApi() {
                 val m3u8Urls = generateM3u8UrlsForSource(k, i, s)
                 if (m3u8Urls.isNotEmpty()) {
                     Log.d("StreamedExtractor", "Generated ${m3u8Urls.size} m3u8 URLs")
+                    return m3u8Urls
+                } else {
+                    Log.w("StreamedExtractor", "No URLs generated for source $k")
+                }
+            } else {
+                Log.w("StreamedExtractor", "Could not extract all variables from embed page")
+                Log.d("StreamedExtractor", "HTML snippet: ${html.substring(0, minOf(500, html.length))}")
+                
+                // Fallback: use the parameters passed to the function
+                Log.d("StreamedExtractor", "Using fallback parameters: source=$source, sourceId=$sourceId, streamNo=$streamNo")
+                val m3u8Urls = generateM3u8UrlsForSource(source, sourceId, streamNo.toString())
+                if (m3u8Urls.isNotEmpty()) {
+                    Log.d("StreamedExtractor", "Generated ${m3u8Urls.size} m3u8 URLs using fallback parameters")
                     return m3u8Urls
                 }
             }
@@ -222,6 +237,8 @@ class StreamedExtractor : ExtractorApi() {
     
     private fun generateM3u8UrlsForSource(source: String, sourceId: String, streamNo: String): List<String> {
         try {
+            Log.d("StreamedExtractor", "Generating URLs for source=$source, sourceId=$sourceId, streamNo=$streamNo")
+            
             // Different base URLs for different sources
             val baseUrls = when (source) {
                 "alpha" -> listOf(
@@ -283,6 +300,9 @@ class StreamedExtractor : ExtractorApi() {
             }
             
             Log.d("StreamedExtractor", "Generated ${possibleUrls.size} possible URLs for $source")
+            if (possibleUrls.isNotEmpty()) {
+                Log.d("StreamedExtractor", "First few URLs: ${possibleUrls.take(3)}")
+            }
             return possibleUrls
             
         } catch (e: Exception) {
