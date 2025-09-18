@@ -1,5 +1,6 @@
 package ben.smith53
 
+import android.util.Base64
 import android.util.Log
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.HomePageList
@@ -25,20 +26,21 @@ class StreamedProvider : MainAPI() {
     override val hasMainPage = true
 
     private val maxStreams = 4
-    private val defaultSources = listOf("alpha", "bravo", "charlie", "delta", "echo", "foxtrot")
+    private val defaultSources = listOf("admin", "alpha", "bravo", "charlie", "echo", "foxtrot", "delta", "golf", "hotel", "intel")
     private val baseHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
         "Content-Type" to "application/json",
         "Accept" to "application/vnd.apple.mpegurl, */*",
-        "Origin" to "https://embedstreams.top",
+        "Origin" to "https://streamed.pk",
         "Accept-Language" to "en-GB,en-US;q=0.9,en;q=0.8",
         "Sec-Ch-Ua" to "\"Chromium\";v=\"137\", \"Not/A)Brand\";v=\"24\"",
         "Sec-Ch-Ua-Mobile" to "?1",
         "Sec-Ch-Ua-Platform" to "\"Android\"",
         "Connection" to "keep-alive",
-        "Cache-Control" to "no-cache"
+        "Cache-Control" to "no-cache",
+        "Referer" to "https://streamed.pk/"
     )
-    
+
     // Force IPv4 to avoid IPv6 connectivity issues
     private val ipv4Headers = baseHeaders + mapOf(
         "Host" to "streamed.pk"
@@ -51,71 +53,37 @@ class StreamedProvider : MainAPI() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         try {
             Log.d("StreamedProvider", "Loading all matches from ${request.data}")
-            
-            // First test basic connectivity
+
+            // Test connectivity with a HEAD request
             try {
-                val testResponse = app.head("$mainUrl/", headers = mapOf("User-Agent" to "Mozilla/5.0"), timeout = 10000)
+                val testResponse = app.head("$mainUrl/", headers = baseHeaders, timeout = 10000)
                 Log.d("StreamedProvider", "Connectivity test: HTTP ${testResponse.code}")
             } catch (e: Exception) {
                 Log.w("StreamedProvider", "Connectivity test failed: ${e.message}")
-                // Try a different approach - test with a simple GET
-                try {
-                    val simpleTest = app.get("$mainUrl/", headers = mapOf("User-Agent" to "Mozilla/5.0"), timeout = 5000)
-                    Log.d("StreamedProvider", "Simple GET test: HTTP ${simpleTest.code}")
-                } catch (e2: Exception) {
-                    Log.w("StreamedProvider", "Simple GET test also failed: ${e2.message}")
-                }
             }
-            
-            // Try multiple approaches to handle IPv6 connectivity issues
+
+            // Fetch matches with retry logic
             val response = try {
-                // First try with IPv4 headers
-                app.get(
-                    request.data,
-                    headers = ipv4Headers,
-                    timeout = 30000,
-                    allowRedirects = true
-                        )
-                    } catch (e: Exception) {
+                app.get(request.data, headers = ipv4Headers, timeout = 30000, allowRedirects = true)
+            } catch (e: Exception) {
                 Log.w("StreamedProvider", "IPv4 request failed: ${e.message}")
                 try {
-                    // Try with base headers
-                    app.get(
-                        request.data,
-                        headers = baseHeaders,
-                        timeout = 30000,
-                        allowRedirects = true
-                    )
+                    app.get(request.data, headers = baseHeaders, timeout = 30000, allowRedirects = true)
                 } catch (e2: Exception) {
-                    Log.w("StreamedProvider", "Base headers also failed: ${e2.message}")
-                    // Try with minimal headers
-                    app.get(
-                        request.data,
-                        headers = mapOf(
-                            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36",
-                            "Accept" to "*/*"
-                        ),
-                        timeout = 30000,
-                        allowRedirects = true
-                    )
+                    Log.w("StreamedProvider", "Base headers failed: ${e2.message}")
+                    app.get(request.data, headers = mapOf("User-Agent" to baseHeaders["User-Agent"]!!, "Accept" to "*/*"), timeout = 30000, allowRedirects = true)
                 }
             }
-            
-            if (!response.isSuccessful) {
-                Log.e("StreamedProvider", "HTTP ${response.code} for ${request.data}")
+
+            if (!response.isSuccessful || response.text.isBlank()) {
+                Log.e("StreamedProvider", "Failed to load matches: HTTP ${response.code}, Response: ${response.text}")
                 return newHomePageResponse(list = emptyList(), hasNext = false)
             }
-            
-            val rawData = response.text
-            if (rawData.isBlank()) {
-                Log.e("StreamedProvider", "Empty response for ${request.data}")
-                return newHomePageResponse(list = emptyList(), hasNext = false)
-            }
-            
-            // Parse the all matches data
-            val allMatches = parseJson<List<Match>>(rawData)
-            Log.d("StreamedProvider", "Loaded ${allMatches.size} total matches")
-            
+
+            // Parse matches
+            val allMatches = parseJson<List<Match>>(response.text)
+            Log.d("StreamedProvider", "Loaded ${allMatches.size} matches")
+
             // Group matches by category
             val categoryGroups = allMatches.groupBy { match ->
                 when (match.category.lowercase()) {
@@ -136,175 +104,51 @@ class StreamedProvider : MainAPI() {
                     else -> "Other"
                 }
             }
-            
-            // Create home page lists for each category
+
+            // Create home page lists
             val homePageLists = mutableListOf<HomePageList>()
-            
-            // Add popular matches as a separate category first
-            val popularMatches = allMatches.filter { it.popular && it.matchSources.isNotEmpty() }.map { match ->
-                val url = "$mainUrl/watch/${match.id}"
-                newLiveSearchResponse(
-                    name = match.title,
-                    url = url,
-                    type = TvType.Live
-                ) {
-                    this.posterUrl = if (match.posterPath?.startsWith("http") == true) {
-                        match.posterPath
-                    } else {
-                        "$mainUrl${match.posterPath ?: "/api/images/poster/fallback.webp"}"
-                    }
-                }
-            }.filterNotNull()
-            
-            if (popularMatches.isNotEmpty()) {
-                homePageLists.add(HomePageList("Popular", popularMatches, isHorizontalImages = true))
-            }
-            
-            // Add other categories
-            homePageLists.addAll(categoryGroups.map { (categoryName, matches) ->
-                val categoryMatches = matches.filter { match -> match.matchSources.isNotEmpty() }.map { match ->
+            val popularMatches = allMatches
+                .filter { it.popular && it.matchSources.isNotEmpty() }
+                .mapNotNull { match ->
                     val url = "$mainUrl/watch/${match.id}"
                     newLiveSearchResponse(
                         name = match.title,
                         url = url,
                         type = TvType.Live
                     ) {
-                        this.posterUrl = if (match.posterPath?.startsWith("http") == true) {
-                        match.posterPath
-                    } else {
-                        "$mainUrl${match.posterPath ?: "/api/images/poster/fallback.webp"}"
+                        this.posterUrl = match.posterPath?.let {
+                            if (it.startsWith("http")) it else "$mainUrl$it"
+                        } ?: "$mainUrl/api/images/poster/fallback.webp"
                     }
+                }
+
+            if (popularMatches.isNotEmpty()) {
+                homePageLists.add(HomePageList("Popular", popularMatches, isHorizontalImages = true))
+            }
+
+            homePageLists.addAll(categoryGroups.map { (categoryName, matches) ->
+                val categoryMatches = matches
+                    .filter { it.matchSources.isNotEmpty() }
+                    .mapNotNull { match ->
+                        val url = "$mainUrl/watch/${match.id}"
+                        newLiveSearchResponse(
+                            name = match.title,
+                            url = url,
+                            type = TvType.Live
+                        ) {
+                            this.posterUrl = match.posterPath?.let {
+                                if (it.startsWith("http")) it else "$mainUrl$it"
+                            } ?: "$mainUrl/api/images/poster/fallback.webp"
+                        }
                     }
-                }.filterNotNull()
-                
                 HomePageList(categoryName, categoryMatches, isHorizontalImages = true)
             })
-            
-            Log.d("StreamedProvider", "Successfully created ${homePageLists.size} categories with ${homePageLists.sumOf { it.list.size }} total matches")
-            return newHomePageResponse(
-                list = homePageLists,
-                hasNext = false
-            )
-            
+
+            Log.d("StreamedProvider", "Created ${homePageLists.size} categories with ${homePageLists.sumOf { it.list.size }} matches")
+            return newHomePageResponse(list = homePageLists, hasNext = false)
         } catch (e: Exception) {
             Log.e("StreamedProvider", "Failed to load main page: ${e.message}")
-            
-            // If all else fails, try to create a minimal response with a test match
-            try {
-                Log.d("StreamedProvider", "Attempting fallback with test data")
-                
-                // Try one more time with a simple GET request
-                try {
-                    val simpleResponse = app.get("$mainUrl/api/matches/all", timeout = 15000)
-                    if (simpleResponse.isSuccessful) {
-                        Log.d("StreamedProvider", "Simple request succeeded, retrying main logic")
-                        val allMatches = parseJson<List<Match>>(simpleResponse.text)
-                        Log.d("StreamedProvider", "Fallback loaded ${allMatches.size} matches")
-                        
-                        // Group matches by category
-                        val categoryGroups = allMatches.groupBy { match ->
-                            when (match.category.lowercase()) {
-                                "football" -> "Football"
-                                "basketball" -> "Basketball"
-                                "baseball" -> "Baseball"
-                                "american-football" -> "American Football"
-                                "hockey" -> "Hockey"
-                                "tennis" -> "Tennis"
-                                "rugby" -> "Rugby"
-                                "golf" -> "Golf"
-                                "billiards" -> "Billiards"
-                                "afl" -> "AFL"
-                                "darts" -> "Darts"
-                                "cricket" -> "Cricket"
-                                "motor-sports" -> "Motor Sports"
-                                "fight" -> "Fight"
-                                else -> "Other"
-                            }
-                        }
-                        
-                        // Create home page lists for each category
-                        val homePageLists = mutableListOf<HomePageList>()
-                        
-                        // Add popular matches as a separate category first
-                        val popularMatches = allMatches.filter { it.popular && it.matchSources.isNotEmpty() }.map { match ->
-                            val url = "$mainUrl/watch/${match.id}"
-                            newLiveSearchResponse(
-                                name = match.title,
-                                url = url,
-                                type = TvType.Live
-                            ) {
-                                this.posterUrl = if (match.posterPath?.startsWith("http") == true) {
-                        match.posterPath
-                    } else {
-                        "$mainUrl${match.posterPath ?: "/api/images/poster/fallback.webp"}"
-                    }
-                            }
-                        }.filterNotNull()
-                        
-                        if (popularMatches.isNotEmpty()) {
-                            homePageLists.add(HomePageList("Popular", popularMatches, isHorizontalImages = true))
-                        }
-                        
-                        // Add other categories
-                        homePageLists.addAll(categoryGroups.map { (categoryName, matches) ->
-                            val categoryMatches = matches.filter { match -> match.matchSources.isNotEmpty() }.map { match ->
-                                val url = "$mainUrl/watch/${match.id}"
-                                newLiveSearchResponse(
-                                    name = match.title,
-                                    url = url,
-                                    type = TvType.Live
-                                ) {
-                                    this.posterUrl = if (match.posterPath?.startsWith("http") == true) {
-                        match.posterPath
-                    } else {
-                        "$mainUrl${match.posterPath ?: "/api/images/poster/fallback.webp"}"
-                    }
-                                }
-                            }.filterNotNull()
-                            
-                            HomePageList(categoryName, categoryMatches, isHorizontalImages = true)
-                        })
-                        
-                        return newHomePageResponse(
-                            list = homePageLists,
-                            hasNext = false
-                        )
-                    }
-                } catch (e: Exception) {
-                    Log.w("StreamedProvider", "Simple fallback also failed: ${e.message}")
-                }
-                
-                // If everything fails, show test match
-                val testMatch = Match(
-                    id = "test-match",
-                    title = "Test Match - Check Connection",
-                    category = "other",
-                    date = System.currentTimeMillis(),
-                    posterPath = "/api/images/poster/fallback.webp",
-                    popular = true,
-                    matchSources = listOf(
-                        MatchSource("alpha", "test-id")
-                    )
-                )
-                
-                val testList = listOf(
-                    newLiveSearchResponse(
-                        name = testMatch.title,
-                        url = "$mainUrl/watch/${testMatch.id}",
-                        type = TvType.Live
-                    ) {
-                        this.posterUrl = "$mainUrl${testMatch.posterPath}"
-                    }
-                )
-                
-                return newHomePageResponse(
-                    list = listOf(HomePageList("Connection Test", testList, isHorizontalImages = true)),
-                    hasNext = false
-                )
-            } catch (fallbackException: Exception) {
-                Log.e("StreamedProvider", "Fallback also failed: ${fallbackException.message}")
-                return newHomePageResponse(list = emptyList(), hasNext = false)
-            }
+            return newHomePageResponse(list = emptyList(), hasNext = false)
         }
     }
 
@@ -316,15 +160,11 @@ class StreamedProvider : MainAPI() {
                 .replace(Regex("-\\d+$"), "")
             val posterUrl = "$mainUrl/api/images/poster/$matchId.webp"
             val validPosterUrl = try {
-                app.head(posterUrl).isSuccessful.let { if (it) posterUrl else "$mainUrl/api/images/poster/fallback.webp" }
-                } catch (e: Exception) {
+                app.head(posterUrl, headers = baseHeaders).isSuccessful.let { if (it) posterUrl else "$mainUrl/api/images/poster/fallback.webp" }
+            } catch (e: Exception) {
                 "$mainUrl/api/images/poster/fallback.webp"
             }
-            return newLiveStreamLoadResponse(
-                name = title,
-                url = url,
-                dataUrl = url
-            ) {
+            return newLiveStreamLoadResponse(name = title, url = url, dataUrl = url) {
                 this.posterUrl = validPosterUrl
             }
         } catch (e: Exception) {
@@ -340,25 +180,18 @@ class StreamedProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         Log.d("StreamedProvider", "Loading links for: $data")
-        
-        // Use the StreamedExtractor to handle stream extraction
-        val extractor = ben.smith53.extractors.StreamedExtractor()
+        val extractor = StreamedExtractor()
         val links = extractor.getUrl(data, null)
-        
+
         if (links.isNullOrEmpty()) {
-            Log.e("StreamedProvider", "No links found by extractor")
+            Log.e("StreamedProvider", "No links found")
             return false
         }
-        
-        // Pass all found links to the callback
-        links.forEach { link ->
-            callback(link)
-        }
-        
-        Log.d("StreamedProvider", "Successfully loaded ${links.size} links")
+
+        links.forEach { callback(it) }
+        Log.d("StreamedProvider", "Loaded ${links.size} links")
         return true
     }
-    
 
     data class Match(
         @JsonProperty("id") val id: String,
@@ -393,6 +226,7 @@ class StreamedProvider : MainAPI() {
         @JsonProperty("language") val language: String,
         @JsonProperty("hd") val hd: Boolean,
         @JsonProperty("embedUrl") val embedUrl: String,
-        @JsonProperty("source") val source: String
+        @JsonProperty("source") val source: String,
+        @JsonProperty("m3u8") val m3u8: String? = null // Added for decoded M3U8 URL
     )
 }
