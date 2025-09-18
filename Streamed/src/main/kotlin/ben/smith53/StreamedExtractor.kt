@@ -20,6 +20,10 @@ class StreamedExtractor : ExtractorApi() {
         "Accept" to "application/vnd.apple.mpegurl, */*",
         "Accept-Language" to "en-GB,en-US;q=0.9,en;q=0.8"
     )
+    
+    // Deno proxy server for decryption
+    private val denoProxyUrl = "https://bensmithgb53-decrypt-13.deno.dev"
+    private val localDenoUrl = "http://localhost:8000" // For local testing
 
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
         try {
@@ -52,26 +56,26 @@ class StreamedExtractor : ExtractorApi() {
             
             val extractorLinks = mutableListOf<ExtractorLink>()
             
-                        // Try each available source
-                        for (source in availableSources) {
-                            try {
-                                Log.d("StreamedExtractor", "Trying source: $source")
+            // Try each available source using Deno proxy
+            for (source in availableSources) {
+                try {
+                    Log.d("StreamedExtractor", "Trying source: $source")
 
-                                // Find the source-specific ID for this source
-                                val sourceSpecificId = matchDetails.matchSources.find { it.sourceName == source }?.id
-                                if (sourceSpecificId == null) {
-                                    Log.w("StreamedExtractor", "No source-specific ID found for $source")
-                                    continue
-                                }
+                    // Find the source-specific ID for this source
+                    val sourceSpecificId = matchDetails.matchSources.find { it.sourceName == source }?.id
+                    if (sourceSpecificId == null) {
+                        Log.w("StreamedExtractor", "No source-specific ID found for $source")
+                        continue
+                    }
 
-                                Log.d("StreamedExtractor", "Using source-specific ID: $sourceSpecificId for source: $source")
+                    Log.d("StreamedExtractor", "Using source-specific ID: $sourceSpecificId for source: $source")
 
-                                // Get stream info from the API using the source-specific ID
-                                val streamResponse = app.get(
-                                    "$mainUrl/api/stream/$source/$sourceSpecificId",
-                                    headers = baseHeaders,
-                                    timeout = 30000
-                                )
+                    // Get stream info from the API using the source-specific ID
+                    val streamResponse = app.get(
+                        "$mainUrl/api/stream/$source/$sourceSpecificId",
+                        headers = baseHeaders,
+                        timeout = 30000
+                    )
                     
                     if (!streamResponse.isSuccessful) {
                         Log.w("StreamedExtractor", "Stream API failed for $source: HTTP ${streamResponse.code}")
@@ -84,79 +88,58 @@ class StreamedExtractor : ExtractorApi() {
                     val streamInfos = parseJson<List<StreamInfo>>(streamResponseText)
                     Log.d("StreamedExtractor", "Found ${streamInfos.size} streams for $source")
                     
-                    // Process each stream by fetching the embed page and extracting the m3u8 URL
+                    // Process each stream using Deno proxy
                     for (streamInfo in streamInfos) {
                         try {
-                            Log.d("StreamedExtractor", "Processing stream ${streamInfo.streamNo} from $source")
+                            Log.d("StreamedExtractor", "Processing stream ${streamInfo.streamNo} from $source using Deno proxy")
                             
-                            // Fetch the embed page to get the actual m3u8 URL
-                            val embedResponse = app.get(
-                                streamInfo.embedUrl,
-                                headers = baseHeaders + mapOf(
-                                    "Referer" to "$mainUrl/watch/$matchId",
-                                    "Origin" to mainUrl
-                                ),
-                                timeout = 30000
-                            )
+                            // Use Deno proxy to get M3U8 URL
+                            val m3u8Url = getM3u8UrlFromDenoProxy(source, sourceSpecificId, streamInfo.streamNo)
                             
-                            if (!embedResponse.isSuccessful) {
-                                Log.w("StreamedExtractor", "Embed page failed for ${streamInfo.embedUrl}: HTTP ${embedResponse.code}")
-                                continue
-                            }
-                            
-                            val embedHtml = embedResponse.text
-                            Log.d("StreamedExtractor", "Fetched embed page for ${streamInfo.embedUrl}")
-                            
-                            // Extract the m3u8 URL from the 'o' variable in the embed page
-                            val m3u8Urls = extractM3u8UrlsFromEmbed(embedHtml, source, sourceSpecificId, streamInfo.streamNo)
-                            
-                            var foundWorkingUrl = false
-                            // Limit to first 5 URLs to avoid long waits
-                            val urlsToTest = m3u8Urls.take(5)
-                            Log.d("StreamedExtractor", "Testing ${urlsToTest.size} URLs out of ${m3u8Urls.size} generated")
-                            
-                            for (m3u8Url in urlsToTest) {
-                                try {
-                                    Log.d("StreamedExtractor", "Testing m3u8 URL: $m3u8Url")
-                                    
-                                    // Test if the m3u8 URL is accessible with shorter timeout
-                                    val testResponse = app.head(m3u8Url, headers = baseHeaders, timeout = 3000)
-                                    if (testResponse.isSuccessful) {
-                                        Log.d("StreamedExtractor", "Found working m3u8 URL: $m3u8Url")
-                                        
-                                        extractorLinks.add(
-                                            newExtractorLink(
-                                                source = "Streamed",
-                                                name = "${source} Stream ${streamInfo.streamNo} (${streamInfo.language}${if (streamInfo.hd) ", HD" else ""})",
-                                                url = m3u8Url,
-                                                type = ExtractorLinkType.M3U8
-                                            ) {
-                                                this.referer = streamInfo.embedUrl
-                                                this.quality = if (streamInfo.hd) Qualities.P1080.value else Qualities.Unknown.value
-                                                this.headers = baseHeaders
-                                            }
-                                        )
-                                        foundWorkingUrl = true
-                                        break
-                                    } else {
-                                        Log.d("StreamedExtractor", "URL not accessible: $m3u8Url - HTTP ${testResponse.code}")
+                            if (m3u8Url != null) {
+                                Log.d("StreamedExtractor", "Found M3U8 URL from Deno proxy: $m3u8Url")
+                                
+                                extractorLinks.add(
+                                    newExtractorLink(
+                                        source = "Streamed",
+                                        name = "${source} Stream ${streamInfo.streamNo} (${streamInfo.language}${if (streamInfo.hd) ", HD" else ""})",
+                                        url = m3u8Url,
+                                        type = ExtractorLinkType.M3U8
+                                    ) {
+                                        this.referer = streamInfo.embedUrl
+                                        this.quality = if (streamInfo.hd) Qualities.P1080.value else Qualities.Unknown.value
+                                        this.headers = baseHeaders
                                     }
-        } catch (e: Exception) {
-                                    Log.d("StreamedExtractor", "Error testing URL $m3u8Url: ${e.message}")
-                                    // Continue to next URL instead of stopping
+                                )
+                            } else {
+                                Log.w("StreamedExtractor", "Deno proxy failed for ${source} stream ${streamInfo.streamNo}, trying fallback")
+                                
+                                // Fallback to original method
+                                val m3u8Urls = extractM3u8UrlsFromEmbedFallback(source, sourceSpecificId, streamInfo.streamNo)
+                                val workingUrl = findWorkingM3u8Url(m3u8Urls)
+                                
+                                if (workingUrl != null) {
+                                    extractorLinks.add(
+                                        newExtractorLink(
+                                            source = "Streamed",
+                                            name = "${source} Stream ${streamInfo.streamNo} (${streamInfo.language}${if (streamInfo.hd) ", HD" else ""})",
+                                            url = workingUrl,
+                                            type = ExtractorLinkType.M3U8
+                                        ) {
+                                            this.referer = streamInfo.embedUrl
+                                            this.quality = if (streamInfo.hd) Qualities.P1080.value else Qualities.Unknown.value
+                                            this.headers = baseHeaders
+                                        }
+                                    )
                                 }
                             }
                             
-                            if (!foundWorkingUrl) {
-                                Log.w("StreamedExtractor", "No working m3u8 URL found for ${source} stream ${streamInfo.streamNo}")
-                            }
-                            
-        } catch (e: Exception) {
+                        } catch (e: Exception) {
                             Log.e("StreamedExtractor", "Error processing stream ${streamInfo.streamNo}: ${e.message}")
                         }
                     }
                     
-        } catch (e: Exception) {
+                } catch (e: Exception) {
                     Log.e("StreamedExtractor", "Error processing source $source: ${e.message}")
                 }
             }
@@ -164,10 +147,90 @@ class StreamedExtractor : ExtractorApi() {
             Log.d("StreamedExtractor", "Extraction complete: found ${extractorLinks.size} links")
             return extractorLinks
             
-                    } catch (e: Exception) {
+        } catch (e: Exception) {
             Log.e("StreamedExtractor", "Extraction failed: ${e.message}")
             return emptyList()
         }
+    }
+    
+    private suspend fun getM3u8UrlFromDenoProxy(source: String, sourceId: String, streamNo: Int): String? {
+        return try {
+            // Try the remote Deno proxy first
+            val response = app.post(
+                "$denoProxyUrl/fetch-m3u8",
+                headers = mapOf("Content-Type" to "application/json"),
+                json = mapOf(
+                    "source" to source,
+                    "sourceId" to sourceId,
+                    "streamNo" to streamNo
+                ),
+                timeout = 30000
+            )
+            
+            if (response.isSuccessful) {
+                val result = parseJson<Map<String, String>>(response.text)
+                val m3u8Url = result["m3u8"]
+                if (m3u8Url != null && m3u8Url.isNotBlank()) {
+                    Log.d("StreamedExtractor", "Got M3U8 URL from remote Deno proxy: $m3u8Url")
+                    return m3u8Url
+                }
+            }
+            
+            Log.w("StreamedExtractor", "Remote Deno proxy failed, trying local")
+            null
+        } catch (e: Exception) {
+            Log.w("StreamedExtractor", "Remote Deno proxy error: ${e.message}")
+            null
+        }
+    }
+    
+    private suspend fun findWorkingM3u8Url(urls: List<String>): String? {
+        for (url in urls.take(5)) { // Limit to first 5 URLs
+            try {
+                Log.d("StreamedExtractor", "Testing M3U8 URL: $url")
+                val testResponse = app.head(url, headers = baseHeaders, timeout = 3000)
+                if (testResponse.isSuccessful) {
+                    Log.d("StreamedExtractor", "Found working M3U8 URL: $url")
+                    return url
+                }
+            } catch (e: Exception) {
+                Log.d("StreamedExtractor", "Error testing URL $url: ${e.message}")
+            }
+        }
+        return null
+    }
+    
+    private fun extractM3u8UrlsFromEmbedFallback(source: String, sourceId: String, streamNo: Int): List<String> {
+        // Generate possible URLs based on common patterns
+        val baseUrls = listOf(
+            "https://lb1.strmd.top",
+            "https://lb7.strmd.top",
+            "https://rr.strmd.top",
+            "https://stream.strmd.top",
+            "https://cdn.strmd.top",
+            "https://edge.strmd.top",
+            "https://node.strmd.top"
+        )
+        
+        val encryptionKeys = listOf(
+            "hYOeUTfQyHEyWeTszoOhqBCQvpCaYdHb",
+            "iCrHEMPgOmYrZtaFHAufNCHorGUslKKw",
+            "IiFpxFhLhQoaqEBYUhJkkxaTABVfLxNz"
+        )
+        
+        val possibleUrls = mutableListOf<String>()
+        
+        for (baseUrl in baseUrls) {
+            for (key in encryptionKeys) {
+                // Pattern 1: /secure/{key}/{source}/stream/{sourceId}/{streamNo}/playlist.m3u8
+                possibleUrls.add("$baseUrl/secure/$key/$source/stream/$sourceId/$streamNo/playlist.m3u8")
+                
+                // Pattern 2: /secure/{key}/{source}/{sourceId}/{streamNo}/playlist.m3u8
+                possibleUrls.add("$baseUrl/secure/$key/$source/$sourceId/$streamNo/playlist.m3u8")
+            }
+        }
+        
+        return possibleUrls
     }
     
     private fun extractM3u8UrlsFromEmbed(html: String, source: String, sourceId: String, streamNo: Int): List<String> {
