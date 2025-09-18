@@ -16,6 +16,9 @@ import com.lagradost.cloudstream3.newLiveSearchResponse
 import com.lagradost.cloudstream3.newLiveStreamLoadResponse
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.Qualities
+import com.lagradost.cloudstream3.utils.newExtractorLink
 import java.util.Locale
 
 class StreamedProvider : MainAPI() {
@@ -323,26 +326,239 @@ class StreamedProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        Log.d("StreamedProvider", "Loading links for: $data")
-        
-        // Use the StreamedExtractor to handle stream extraction
-        val extractor = ben.smith53.extractors.StreamedExtractor()
-        val links = extractor.getUrl(data, null)
-        
-        if (links.isNullOrEmpty()) {
-            Log.e("StreamedProvider", "No links found by extractor")
+        val matchId = data.substringAfterLast("/")
+        if (matchId.isBlank()) {
+            Log.e("StreamedProvider", "Invalid matchId: $matchId")
             return false
         }
         
-        // Pass all found links to the callback
-        links.forEach { link ->
-            callback(link)
+        Log.d("StreamedProvider", "Loading links for match: $matchId")
+        var success = false
+
+        // First, get the match details to find available sources
+        val matchDetails = try {
+            // Get all matches and find the specific one
+            val allMatchesResponse = try {
+                app.get("$mainUrl/api/matches/all", headers = ipv4Headers, timeout = 30000)
+            } catch (e: Exception) {
+                Log.w("StreamedProvider", "IPv4 request failed, trying base headers: ${e.message}")
+                app.get("$mainUrl/api/matches/all", headers = baseHeaders, timeout = 30000)
+            }
+            
+            if (allMatchesResponse.isSuccessful) {
+                val allMatches = parseJson<List<Match>>(allMatchesResponse.text)
+                allMatches.find { it.id == matchId }
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            Log.w("StreamedProvider", "Failed to fetch match details for $matchId: ${e.message}")
+            null
+        }
+
+        val availableSources = matchDetails?.matchSources?.map { it.sourceName } ?: emptyList()
+        Log.d("StreamedProvider", "Available sources for $matchId: $availableSources")
+
+        if (availableSources.isEmpty()) {
+            Log.e("StreamedProvider", "No sources available for $matchId")
+            return false
+        }
+
+        // Try each available source
+        for (source in availableSources) {
+            try {
+                Log.d("StreamedProvider", "Trying source: $source")
+                
+                // Get stream info from the API
+                val streamResponse = try {
+                    app.get(
+                        "$mainUrl/api/stream/$source/$matchId",
+                        headers = ipv4Headers,
+                        timeout = 30000
+                    )
+                } catch (e: Exception) {
+                    Log.w("StreamedProvider", "IPv4 stream request failed, trying base headers: ${e.message}")
+                    app.get(
+                        "$mainUrl/api/stream/$source/$matchId",
+                        headers = baseHeaders,
+                        timeout = 30000
+                    )
+                }
+                
+                if (!streamResponse.isSuccessful) {
+                    Log.w("StreamedProvider", "Stream API failed for $source: HTTP ${streamResponse.code}")
+                    continue
+                }
+                
+                val streamResponseText = streamResponse.text
+                Log.d("StreamedProvider", "Stream API response for $source: $streamResponseText")
+                
+                val streamInfos = parseJson<List<StreamInfo>>(streamResponseText)
+                Log.d("StreamedProvider", "Found ${streamInfos.size} streams for $source")
+                
+                // If no streams found, try to create a fallback stream
+                if (streamInfos.isEmpty()) {
+                    Log.w("StreamedProvider", "No streams found for $source, trying fallback approach")
+                    
+                    // Try to create a basic stream info based on common patterns
+                    val fallbackStreamInfo = StreamInfo(
+                        id = matchId,
+                        streamNo = 1,
+                        language = "Unknown",
+                        hd = false,
+                        embedUrl = "$mainUrl/embed/$source/$matchId/1",
+                        source = source
+                    )
+                    
+                    Log.d("StreamedProvider", "Created fallback stream for $source")
+                    
+                    // Try the fallback stream
+                    try {
+                        Log.d("StreamedProvider", "Trying fallback stream for $source")
+                        
+                        // Generate m3u8 URL using the correct pattern
+                        val m3u8Url = generateM3u8Url("fallback-key", source, matchId, 1)
+                        Log.d("StreamedProvider", "Generated fallback m3u8 URL: $m3u8Url")
+                        
+                        // Test the m3u8 URL
+                        val testResponse = try {
+                            app.head(m3u8Url, headers = ipv4Headers, timeout = 10000)
+                        } catch (e: Exception) {
+                            Log.w("StreamedProvider", "IPv4 m3u8 test failed, trying base headers: ${e.message}")
+                            app.head(m3u8Url, headers = baseHeaders, timeout = 10000)
+                        }
+                        
+                        if (testResponse.isSuccessful) {
+                            Log.d("StreamedProvider", "Successfully found working fallback m3u8 URL")
+                            
+                            // Create the extractor link
+                            callback.invoke(
+                                newExtractorLink(
+                                    source = "Streamed",
+                                    name = "$source Stream 1 (Fallback)",
+                                    url = m3u8Url,
+                                    type = ExtractorLinkType.M3U8
+                                ) {
+                                    this.referer = fallbackStreamInfo.embedUrl
+                                    this.quality = Qualities.Unknown.value
+                                    this.headers = baseHeaders
+                                }
+                            )
+                            
+                            success = true
+                            break
+                        } else {
+                            Log.w("StreamedProvider", "Fallback m3u8 URL test failed: HTTP ${testResponse.code}")
+                        }
+                    } catch (e: Exception) {
+                        Log.e("StreamedProvider", "Error processing fallback stream: ${e.message}")
+                    }
+                } else {
+                    // Try each stream
+                    for (streamInfo in streamInfos) {
+                        try {
+                            Log.d("StreamedProvider", "Trying stream ${streamInfo.streamNo} from $source")
+                        
+                        // Get the embed URL and extract m3u8
+                        val embedUrl = streamInfo.embedUrl
+                        if (embedUrl.isBlank()) {
+                            Log.w("StreamedProvider", "No embed URL for stream ${streamInfo.streamNo}")
+                            continue
+                        }
+                        
+                        // Fetch the embed page to get encryption key
+                        val embedResponse = try {
+                            app.get(embedUrl, headers = ipv4Headers, timeout = 30000)
+                        } catch (e: Exception) {
+                            Log.w("StreamedProvider", "IPv4 embed request failed, trying base headers: ${e.message}")
+                            app.get(embedUrl, headers = baseHeaders, timeout = 30000)
+                        }
+                        if (!embedResponse.isSuccessful) {
+                            Log.w("StreamedProvider", "Embed page failed: HTTP ${embedResponse.code}")
+                            continue
+                        }
+                        
+                        val embedDoc = embedResponse.document
+                        
+                        // Extract encryption key from the embed page
+                        val encryptionKey = extractEncryptionKey(embedDoc)
+                        if (encryptionKey.isBlank()) {
+                            Log.w("StreamedProvider", "No encryption key found in embed page")
+                            continue
+                        }
+                        
+                        // Generate m3u8 URL using the correct pattern
+                        val m3u8Url = generateM3u8Url(encryptionKey, source, matchId, streamInfo.streamNo)
+                        Log.d("StreamedProvider", "Generated m3u8 URL: $m3u8Url")
+                        
+                        // Test the m3u8 URL
+                        val testResponse = try {
+                            app.head(m3u8Url, headers = ipv4Headers, timeout = 10000)
+                        } catch (e: Exception) {
+                            Log.w("StreamedProvider", "IPv4 m3u8 test failed, trying base headers: ${e.message}")
+                            app.head(m3u8Url, headers = baseHeaders, timeout = 10000)
+                        }
+                        if (testResponse.isSuccessful) {
+                            Log.d("StreamedProvider", "Successfully found working m3u8 URL")
+                            
+                            // Create the extractor link
+                            callback.invoke(
+                                newExtractorLink(
+                                    source = "Streamed",
+                                    name = "${source} Stream ${streamInfo.streamNo} (${streamInfo.language}${if (streamInfo.hd) ", HD" else ""})",
+                                    url = m3u8Url,
+                                    type = ExtractorLinkType.M3U8
+                                ) {
+                                    this.referer = embedUrl
+                                    this.quality = if (streamInfo.hd) Qualities.P1080.value else Qualities.Unknown.value
+                                    this.headers = baseHeaders
+                                }
+                            )
+                            
+                            success = true
+                            break
+                        } else {
+                            Log.w("StreamedProvider", "M3u8 URL test failed: HTTP ${testResponse.code}")
+                        }
+                        
+                    } catch (e: Exception) {
+                        Log.e("StreamedProvider", "Error processing stream ${streamInfo.streamNo}: ${e.message}")
+                    }
+                }
+                }
+                
+                if (success) break
+                
+        } catch (e: Exception) {
+                Log.e("StreamedProvider", "Error processing source $source: ${e.message}")
+            }
         }
         
-        Log.d("StreamedProvider", "Successfully loaded ${links.size} links")
-        return true
+        Log.d("StreamedProvider", "Load links result for $matchId: success=$success")
+        return success
     }
     
+    private fun extractEncryptionKey(doc: org.jsoup.nodes.Document): String {
+        // Look for the encryption key in script tags
+            val scripts = doc.select("script")
+            for (script in scripts) {
+                val scriptContent = script.html()
+            // Look for patterns that might contain the encryption key
+            // This is a simplified approach - the real key extraction might be more complex
+            val keyPattern = Regex("""["']([A-Za-z0-9+/=]{20,})["']""")
+            val match = keyPattern.find(scriptContent)
+                    if (match != null) {
+                        return match.groupValues[1]
+                    }
+                }
+        return ""
+    }
+    
+    private fun generateM3u8Url(encryptionKey: String, source: String, matchId: String, streamNo: Int): String {
+        // Generate the m3u8 URL using the pattern from the website analysis
+        val baseUrl = "https://lb6.strmd.top"
+        return "$baseUrl/secure/$encryptionKey/$source/stream/$matchId/$streamNo/playlist.m3u8"
+    }
 
     data class Match(
         @JsonProperty("id") val id: String,
