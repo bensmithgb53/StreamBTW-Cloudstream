@@ -70,7 +70,7 @@ class StreamedExtractor : ExtractorApi() {
                                 val streamResponse = app.get(
                                     "$mainUrl/api/stream/$source/$sourceSpecificId",
                                     headers = baseHeaders,
-                                    timeout = 30000
+                                    timeout = 10000
                                 )
                     
                     if (!streamResponse.isSuccessful) {
