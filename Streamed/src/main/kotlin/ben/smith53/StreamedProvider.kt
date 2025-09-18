@@ -148,11 +148,7 @@ class StreamedProvider : MainAPI() {
                     url = url,
                     type = TvType.Live
                 ) {
-                    this.posterUrl = if (match.posterPath?.startsWith("http") == true) {
-                        match.posterPath
-                    } else {
-                        "$mainUrl${match.posterPath ?: "/api/images/poster/fallback.webp"}"
-                    }
+                    this.posterUrl = "$mainUrl${match.posterPath ?: "/api/images/poster/fallback.webp"}"
                 }
             }.filterNotNull()
             
@@ -169,11 +165,7 @@ class StreamedProvider : MainAPI() {
                         url = url,
                         type = TvType.Live
                     ) {
-                        this.posterUrl = if (match.posterPath?.startsWith("http") == true) {
-                        match.posterPath
-                    } else {
-                        "$mainUrl${match.posterPath ?: "/api/images/poster/fallback.webp"}"
-                    }
+                        this.posterUrl = "$mainUrl${match.posterPath ?: "/api/images/poster/fallback.webp"}"
                     }
                 }.filterNotNull()
                 
@@ -233,11 +225,7 @@ class StreamedProvider : MainAPI() {
                                 url = url,
                                 type = TvType.Live
                             ) {
-                                this.posterUrl = if (match.posterPath?.startsWith("http") == true) {
-                        match.posterPath
-                    } else {
-                        "$mainUrl${match.posterPath ?: "/api/images/poster/fallback.webp"}"
-                    }
+                                this.posterUrl = "$mainUrl${match.posterPath ?: "/api/images/poster/fallback.webp"}"
                             }
                         }.filterNotNull()
                         
@@ -254,11 +242,7 @@ class StreamedProvider : MainAPI() {
                                     url = url,
                                     type = TvType.Live
                                 ) {
-                                    this.posterUrl = if (match.posterPath?.startsWith("http") == true) {
-                        match.posterPath
-                    } else {
-                        "$mainUrl${match.posterPath ?: "/api/images/poster/fallback.webp"}"
-                    }
+                                    this.posterUrl = "$mainUrl${match.posterPath ?: "/api/images/poster/fallback.webp"}"
                                 }
                             }.filterNotNull()
                             
@@ -356,7 +340,7 @@ class StreamedProvider : MainAPI() {
         }
         
         Log.d("StreamedProvider", "Successfully loaded ${links.size} links")
-            return true
+        return true
     }
     
 
