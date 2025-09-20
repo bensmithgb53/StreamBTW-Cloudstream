@@ -17,7 +17,6 @@ import com.lagradost.cloudstream3.newLiveSearchResponse
 import com.lagradost.cloudstream3.newLiveStreamLoadResponse
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import java.util.Locale
@@ -356,8 +355,12 @@ class StreamedProvider(private val context: Context) : MainAPI() {
             Log.d("StreamedProvider", "Available sources for $matchId: $availableSources")
 
             val extractor = ben.smith53.extractors.StreamedExtractor(context)
+            val allStreamLinks = mutableListOf<ExtractorLink>()
             var foundAnyLinks = false
 
+            // Collect all embed URLs first
+            val allEmbedUrls = mutableListOf<Pair<String, StreamInfo>>()
+            
             // Try each available source
             for (source in availableSources) {
                 try {
@@ -378,45 +381,58 @@ class StreamedProvider(private val context: Context) : MainAPI() {
                     val streamInfos = parseJson<List<StreamInfo>>(streamResponse.text)
                     Log.d("StreamedProvider", "Found ${streamInfos.size} streams for $source")
                     
-                    // Try each stream
+                    // Collect all embed URLs
                     for (streamInfo in streamInfos) {
-                        try {
-                            Log.d("StreamedProvider", "Trying stream ${streamInfo.streamNo} from $source")
-                            
-                            // Use the embed URL for extraction
-                            val embedUrl = streamInfo.embedUrl
-                            Log.d("StreamedProvider", "Extracting from embed URL: $embedUrl")
-                            
-                            val links = extractor.getUrl(embedUrl, null)
-                            if (!links.isNullOrEmpty()) {
-                                Log.d("StreamedProvider", "Found ${links.size} links for stream ${streamInfo.streamNo}")
-                                links.forEach { link ->
-                                    // Create a new link with updated name
-                                    val updatedLink = newExtractorLink(
-                                        source = link.source,
-                                        name = "${source} Stream ${streamInfo.streamNo} (${streamInfo.language}${if (streamInfo.hd) ", HD" else ""})",
-                                        url = link.url,
-                                        type = link.type
-                                    ) {
-                                        this.referer = link.referer
-                                        this.quality = if (streamInfo.hd) Qualities.P1080.value else Qualities.Unknown.value
-                                        this.headers = link.headers
-                                    }
-                                    callback(updatedLink)
-                                    foundAnyLinks = true
-                                }
-                            } else {
-                                Log.w("StreamedProvider", "No links found for stream ${streamInfo.streamNo}")
-                            }
-                            
-                        } catch (e: Exception) {
-                            Log.e("StreamedProvider", "Error processing stream ${streamInfo.streamNo}: ${e.message}")
-                        }
+                        val embedUrl = streamInfo.embedUrl
+                        allEmbedUrls.add(Pair(source, streamInfo))
+                        Log.d("StreamedProvider", "Collected embed URL: $embedUrl")
                     }
                     
                 } catch (e: Exception) {
                     Log.e("StreamedProvider", "Error processing source $source: ${e.message}")
                 }
+            }
+
+            Log.d("StreamedProvider", "Total embed URLs collected: ${allEmbedUrls.size}")
+
+            // Now extract all streams at once
+            for ((source, streamInfo) in allEmbedUrls) {
+                try {
+                    Log.d("StreamedProvider", "Extracting from embed URL: ${streamInfo.embedUrl}")
+                    
+                    val links = extractor.getUrl(streamInfo.embedUrl, null)
+                    if (!links.isNullOrEmpty()) {
+                        Log.d("StreamedProvider", "Found ${links.size} links for ${source} Stream ${streamInfo.streamNo}")
+                        links.forEach { link ->
+                            // Create a new link with updated name
+                            val updatedLink = newExtractorLink(
+                                source = link.source,
+                                name = "${source} Stream ${streamInfo.streamNo} (${streamInfo.language}${if (streamInfo.hd) ", HD" else ""})",
+                                url = link.url,
+                                type = link.type
+                            ) {
+                                this.referer = link.referer
+                                this.quality = if (streamInfo.hd) Qualities.P1080.value else Qualities.Unknown.value
+                                this.headers = link.headers
+                            }
+                            allStreamLinks.add(updatedLink)
+                        }
+                    } else {
+                        Log.w("StreamedProvider", "No links found for ${source} Stream ${streamInfo.streamNo}")
+                    }
+                    
+                } catch (e: Exception) {
+                    Log.e("StreamedProvider", "Error processing ${source} Stream ${streamInfo.streamNo}: ${e.message}")
+                }
+            }
+
+            // Send all links to CloudStream at once
+            if (allStreamLinks.isNotEmpty()) {
+                Log.d("StreamedProvider", "Sending ${allStreamLinks.size} total links to CloudStream")
+                allStreamLinks.forEach { link ->
+                    callback(link)
+                }
+                foundAnyLinks = true
             }
 
             if (!foundAnyLinks) {

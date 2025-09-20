@@ -35,24 +35,16 @@ class ProxyManager(private val context: Context) {
             
             // Try to start the service
             try {
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                    context.startForegroundService(intent)
-                } else {
-                    context.startService(intent)
-                }
+                context.startService(intent)
+                Log.d("ProxyManager", "Service start requested")
             } catch (e: SecurityException) {
                 Log.e("ProxyManager", "Security exception starting service: ${e.message}")
                 continuation.resume(null)
                 return@suspendCancellableCoroutine
             } catch (e: Exception) {
-                Log.w("ProxyManager", "startForegroundService failed, trying startService: ${e.message}")
-                try {
-                    context.startService(intent)
-                } catch (e2: Exception) {
-                    Log.e("ProxyManager", "Both startForegroundService and startService failed", e2)
-                    continuation.resume(null)
-                    return@suspendCancellableCoroutine
-                }
+                Log.e("ProxyManager", "Failed to start service", e)
+                continuation.resume(null)
+                return@suspendCancellableCoroutine
             }
             
             val bound = context.bindService(
@@ -60,20 +52,23 @@ class ProxyManager(private val context: Context) {
                 serviceConnection,
                 Context.BIND_AUTO_CREATE
             )
-            
+
+            Log.d("ProxyManager", "Service binding result: $bound")
+
             if (bound) {
                 // Wait a bit for service to start
                 android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                    Log.d("ProxyManager", "Checking proxy server status...")
                     val proxyServer = proxyService?.getProxyServer()
                     if (proxyServer != null) {
                         val address = proxyServer.getHttpAddress()
                         Log.d("ProxyManager", "Proxy started at: $address")
                         continuation.resume(address)
                     } else {
-                        Log.e("ProxyManager", "Failed to get proxy server")
+                        Log.e("ProxyManager", "Failed to get proxy server - service may not be ready")
                         continuation.resume(null)
                     }
-                }, 1000)
+                }, 2000) // Increased delay to 2 seconds
             } else {
                 Log.e("ProxyManager", "Failed to bind to proxy service")
                 continuation.resume(null)

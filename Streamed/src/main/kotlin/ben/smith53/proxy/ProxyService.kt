@@ -36,7 +36,7 @@ class ProxyService : Service() {
         // Start the proxy service
         startProxyService()
         
-        return START_STICKY
+        return START_NOT_STICKY
     }
     
     private fun startProxyService() {
