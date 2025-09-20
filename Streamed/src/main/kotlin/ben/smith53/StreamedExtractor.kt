@@ -31,15 +31,32 @@ class StreamedExtractor(private val context: Context) : ExtractorApi() {
         // Start proxy in background
         runBlocking {
             try {
+                Log.d("StreamedExtractor", "Attempting to start proxy...")
                 proxyAddress = proxyManager.startProxy()
                 if (proxyAddress != null) {
-                    Log.d("StreamedExtractor", "Proxy started at: $proxyAddress")
+                    Log.d("StreamedExtractor", "Proxy started successfully at: $proxyAddress")
+                    // Test the proxy
+                    testProxy()
                 } else {
-                    Log.w("StreamedExtractor", "Failed to start proxy")
+                    Log.e("StreamedExtractor", "Failed to start proxy - address is null")
                 }
             } catch (e: Exception) {
                 Log.e("StreamedExtractor", "Error starting proxy", e)
             }
+        }
+    }
+    
+    private fun testProxy() {
+        try {
+            val testUrl = "http://httpbin.org/get"
+            val proxyUrl = proxyManager.convertToProxyUrl(testUrl, emptyMap())
+            if (proxyUrl != null) {
+                Log.d("StreamedExtractor", "Proxy test URL created: $proxyUrl")
+            } else {
+                Log.w("StreamedExtractor", "Proxy test failed - could not create proxy URL")
+            }
+        } catch (e: Exception) {
+            Log.e("StreamedExtractor", "Proxy test error", e)
         }
     }
 
@@ -57,9 +74,13 @@ class StreamedExtractor(private val context: Context) : ExtractorApi() {
             Log.d("StreamedExtractor", "Extracting from URL: $url")
             
             // Check if proxy is running
-            if (proxyAddress == null || !proxyManager.isProxyRunning()) {
-                Log.e("StreamedExtractor", "Proxy not running, cannot extract")
-                return emptyList()
+            val isProxyRunning = proxyManager.isProxyRunning()
+            val currentAddress = proxyManager.getProxyAddress()
+            Log.d("StreamedExtractor", "Proxy status - running: $isProxyRunning, address: $currentAddress, stored: $proxyAddress")
+            
+            if (proxyAddress == null || !isProxyRunning) {
+                Log.w("StreamedExtractor", "Proxy not running, trying direct extraction")
+                return extractDirectly(url)
             }
             
             // Check if this is an embed URL (like https://embedsports.top/embed/alpha/bangladesh-vs-sri-lanka/1)
@@ -125,6 +146,65 @@ class StreamedExtractor(private val context: Context) : ExtractorApi() {
             
         } catch (e: Exception) {
             Log.e("StreamedExtractor", "Extraction failed: ${e.message}")
+            return emptyList()
+        }
+    }
+    
+    private suspend fun extractDirectly(url: String): List<ExtractorLink>? {
+        try {
+            Log.d("StreamedExtractor", "Direct extraction from: $url")
+            
+            if (url.contains("embedsports.top/embed/")) {
+                // Extract the actual stream URL from the embed page
+                val embedResponse = app.get(url, headers = baseHeaders, timeout = 30000)
+                if (!embedResponse.isSuccessful) {
+                    Log.e("StreamedExtractor", "Failed to get embed page: HTTP ${embedResponse.code}")
+                    return emptyList()
+                }
+                
+                val embedContent = embedResponse.text
+                Log.d("StreamedExtractor", "Embed page content length: ${embedContent.length}")
+                
+                // Look for M3U8 URLs in the embed page
+                val m3u8Pattern = """https?://[^"'\s]+\.m3u8[^"'\s]*""".toRegex()
+                val m3u8Urls = m3u8Pattern.findAll(embedContent).map { it.value }.toList()
+                
+                Log.d("StreamedExtractor", "Found ${m3u8Urls.size} M3U8 URLs in embed page")
+                
+                val extractorLinks = mutableListOf<ExtractorLink>()
+                
+                for (m3u8Url in m3u8Urls) {
+                    try {
+                        Log.d("StreamedExtractor", "Found M3U8 URL: $m3u8Url")
+                        
+                        extractorLinks.add(
+                            newExtractorLink(
+                                source = "Streamed",
+                                name = "Stream",
+                                url = m3u8Url,
+                                type = ExtractorLinkType.M3U8
+                            ) {
+                                this.referer = url
+                                this.quality = Qualities.Unknown.value
+                                this.headers = baseHeaders
+                            }
+                        )
+                        
+                    } catch (e: Exception) {
+                        Log.e("StreamedExtractor", "Error processing M3U8 URL: ${e.message}")
+                    }
+                }
+                
+                Log.d("StreamedExtractor", "Direct extraction complete: found ${extractorLinks.size} links")
+                return extractorLinks
+                
+            } else {
+                Log.e("StreamedExtractor", "Unsupported URL format for direct extraction: $url")
+                return emptyList()
+            }
+            
+        } catch (e: Exception) {
+            Log.e("StreamedExtractor", "Direct extraction failed: ${e.message}")
             return emptyList()
         }
     }

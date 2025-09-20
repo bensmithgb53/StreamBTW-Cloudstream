@@ -331,28 +331,64 @@ class StreamedProvider(private val context: Context) : MainAPI() {
         try {
             // Extract match ID from URL
             val matchId = data.substringAfterLast("/")
+            Log.d("StreamedProvider", "Extracted matchId: $matchId from URL: $data")
             if (matchId.isBlank()) {
                 Log.e("StreamedProvider", "Invalid matchId: $matchId")
                 return false
             }
 
-            // Get all matches to find available sources
-            val allMatchesResponse = app.get("$mainUrl/api/matches/all", headers = baseHeaders, timeout = 30000)
-            if (!allMatchesResponse.isSuccessful) {
-                Log.e("StreamedProvider", "Failed to get matches: HTTP ${allMatchesResponse.code}")
-                return false
+            // Try live matches first (like your working app does)
+            var matchDetails: Match? = null
+            val liveMatchesResponse = app.get("$mainUrl/api/matches/live", headers = baseHeaders, timeout = 30000)
+            if (liveMatchesResponse.isSuccessful) {
+                Log.d("StreamedProvider", "Live matches API response: ${liveMatchesResponse.text}")
+                val liveMatches = parseJson<List<Match>>(liveMatchesResponse.text)
+                Log.d("StreamedProvider", "Parsed ${liveMatches.size} live matches")
+                matchDetails = liveMatches.find { it.id == matchId }
+                if (matchDetails != null) {
+                    Log.d("StreamedProvider", "Found match in live matches: $matchId")
+                }
+            } else {
+                Log.w("StreamedProvider", "Live matches API failed: HTTP ${liveMatchesResponse.code}")
             }
+            
+            // If not found in live matches, try all matches
+            if (matchDetails == null) {
+                val allMatchesResponse = app.get("$mainUrl/api/matches/all", headers = baseHeaders, timeout = 30000)
+                if (!allMatchesResponse.isSuccessful) {
+                    Log.e("StreamedProvider", "Failed to get matches: HTTP ${allMatchesResponse.code}")
+                    return false
+                }
 
-            val allMatches = parseJson<List<Match>>(allMatchesResponse.text)
-            val matchDetails = allMatches.find { it.id == matchId }
-
+                Log.d("StreamedProvider", "All matches API response: ${allMatchesResponse.text}")
+                val allMatches = parseJson<List<Match>>(allMatchesResponse.text)
+                Log.d("StreamedProvider", "Parsed ${allMatches.size} matches")
+                
+                matchDetails = allMatches.find { it.id == matchId }
+            }
+            
             if (matchDetails == null) {
                 Log.e("StreamedProvider", "Match not found: $matchId")
                 return false
             }
 
-            val availableSources = matchDetails.matchSources.map { it.sourceName }
-            Log.d("StreamedProvider", "Available sources for $matchId: $availableSources")
+            Log.d("StreamedProvider", "Found match details: $matchDetails")
+            val availableSources = matchDetails.matchSources
+            Log.d("StreamedProvider", "Available sources for $matchId: ${availableSources.map { "${it.sourceName}:${it.id}" }}")
+            
+            // If no sources found in match details, try common sources like your working app
+            val finalSources = if (availableSources.isEmpty()) {
+                Log.w("StreamedProvider", "No sources found in match details, trying common sources")
+                listOf(
+                    MatchSource("alpha", matchId),
+                    MatchSource("echo", matchId),
+                    MatchSource("charlie", matchId),
+                    MatchSource("bravo", matchId)
+                )
+            } else {
+                availableSources
+            }
+            Log.d("StreamedProvider", "Final sources to try: ${finalSources.map { "${it.sourceName}:${it.id}" }}")
 
             val extractor = ben.smith53.extractors.StreamedExtractor(context)
             val allStreamLinks = mutableListOf<ExtractorLink>()
@@ -362,52 +398,64 @@ class StreamedProvider(private val context: Context) : MainAPI() {
             val allEmbedUrls = mutableListOf<Pair<String, StreamInfo>>()
             
             // Try each available source
-            for (source in availableSources) {
+            for (sourceInfo in finalSources) {
                 try {
-                    Log.d("StreamedProvider", "Trying source: $source")
+                    val sourceName = sourceInfo.sourceName
+                    val sourceId = sourceInfo.id
+                    Log.d("StreamedProvider", "Trying source: $sourceName with ID: $sourceId")
                     
-                    // Get stream info from the API
+                    // Get stream info from the API using source-specific ID
+                    val streamUrl = "$mainUrl/api/stream/$sourceName/$sourceId"
+                    Log.d("StreamedProvider", "Calling stream API: $streamUrl")
                     val streamResponse = app.get(
-                        "$mainUrl/api/stream/$source/$matchId",
+                        streamUrl,
                         headers = baseHeaders,
                         timeout = 30000
                     )
                     
                     if (!streamResponse.isSuccessful) {
-                        Log.w("StreamedProvider", "Stream API failed for $source: HTTP ${streamResponse.code}")
+                        Log.w("StreamedProvider", "Stream API failed for $sourceName: HTTP ${streamResponse.code}")
+                        Log.w("StreamedProvider", "Response body: ${streamResponse.text}")
                         continue
                     }
                     
+                    Log.d("StreamedProvider", "API Response for $sourceName: ${streamResponse.text}")
                     val streamInfos = parseJson<List<StreamInfo>>(streamResponse.text)
-                    Log.d("StreamedProvider", "Found ${streamInfos.size} streams for $source")
+                    Log.d("StreamedProvider", "Found ${streamInfos.size} streams for $sourceName")
+                    
+                    if (streamInfos.isEmpty()) {
+                        Log.w("StreamedProvider", "No streams found for $sourceName - API returned empty array")
+                    } else {
+                        Log.d("StreamedProvider", "Stream details: ${streamInfos.map { "${it.source} Stream ${it.streamNo} (${it.language}, ${if(it.hd) "HD" else "SD"})" }}")
+                    }
                     
                     // Collect all embed URLs
                     for (streamInfo in streamInfos) {
                         val embedUrl = streamInfo.embedUrl
-                        allEmbedUrls.add(Pair(source, streamInfo))
+                        allEmbedUrls.add(Pair(sourceName, streamInfo))
                         Log.d("StreamedProvider", "Collected embed URL: $embedUrl")
                     }
                     
                 } catch (e: Exception) {
-                    Log.e("StreamedProvider", "Error processing source $source: ${e.message}")
+                    Log.e("StreamedProvider", "Error processing source: ${e.message}")
                 }
             }
 
             Log.d("StreamedProvider", "Total embed URLs collected: ${allEmbedUrls.size}")
 
             // Now extract all streams at once
-            for ((source, streamInfo) in allEmbedUrls) {
+            for ((sourceName, streamInfo) in allEmbedUrls) {
                 try {
                     Log.d("StreamedProvider", "Extracting from embed URL: ${streamInfo.embedUrl}")
                     
                     val links = extractor.getUrl(streamInfo.embedUrl, null)
                     if (!links.isNullOrEmpty()) {
-                        Log.d("StreamedProvider", "Found ${links.size} links for ${source} Stream ${streamInfo.streamNo}")
+                        Log.d("StreamedProvider", "Found ${links.size} links for ${sourceName} Stream ${streamInfo.streamNo}")
                         links.forEach { link ->
                             // Create a new link with updated name
                             val updatedLink = newExtractorLink(
                                 source = link.source,
-                                name = "${source} Stream ${streamInfo.streamNo} (${streamInfo.language}${if (streamInfo.hd) ", HD" else ""})",
+                                name = "${sourceName} Stream ${streamInfo.streamNo} (${streamInfo.language}${if (streamInfo.hd) ", HD" else ""})",
                                 url = link.url,
                                 type = link.type
                             ) {
@@ -418,11 +466,11 @@ class StreamedProvider(private val context: Context) : MainAPI() {
                             allStreamLinks.add(updatedLink)
                         }
                     } else {
-                        Log.w("StreamedProvider", "No links found for ${source} Stream ${streamInfo.streamNo}")
+                        Log.w("StreamedProvider", "No links found for ${sourceName} Stream ${streamInfo.streamNo}")
                     }
                     
                 } catch (e: Exception) {
-                    Log.e("StreamedProvider", "Error processing ${source} Stream ${streamInfo.streamNo}: ${e.message}")
+                    Log.e("StreamedProvider", "Error processing ${sourceName} Stream ${streamInfo.streamNo}: ${e.message}")
                 }
             }
 
@@ -436,9 +484,9 @@ class StreamedProvider(private val context: Context) : MainAPI() {
             }
 
             if (!foundAnyLinks) {
-                Log.e("StreamedProvider", "No links found by extractor")
-                return false
-            }
+            Log.e("StreamedProvider", "No links found by extractor")
+            return false
+        }
 
             Log.d("StreamedProvider", "Successfully loaded links")
             return true

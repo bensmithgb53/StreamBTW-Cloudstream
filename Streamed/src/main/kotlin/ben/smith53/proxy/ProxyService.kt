@@ -16,7 +16,6 @@ class ProxyService : Service() {
     
     private val proxyPort = 1111
     private var proxyServer: ProxyServer? = null
-    private var isForegroundStarted = false
     
     fun getProxyServer(): ProxyServer? = proxyServer
     
@@ -24,8 +23,13 @@ class ProxyService : Service() {
         super.onCreate()
         Log.d("ProxyService", "onCreate")
         
-        proxyServer = ProxyServer(applicationContext, proxyPort)
-        proxyServer?.start()
+        try {
+            proxyServer = ProxyServer(applicationContext, proxyPort)
+            proxyServer?.start()
+            Log.d("ProxyService", "Proxy server start requested on port $proxyPort")
+        } catch (e: Exception) {
+            Log.e("ProxyService", "Error creating proxy server", e)
+        }
         
         initNotificationManager()
     }
@@ -33,46 +37,26 @@ class ProxyService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.d("ProxyService", "onStartCommand")
         
-        // Start the proxy service
-        startProxyService()
+        // Create notification if not already created
+        if (notification == null) {
+            notification = createNotification()
+        }
         
-        return START_NOT_STICKY
+        // Start as foreground service (like StreamBrowser)
+        try {
+            startForeground(NOTIFICATION_ID, notification)
+            Log.d("ProxyService", "Started as foreground service")
+        } catch (e: Exception) {
+            Log.e("ProxyService", "Failed to start foreground service", e)
+        }
+        
+        return START_STICKY
     }
     
-    private fun startProxyService() {
-        // Only start proxy service once
-        if (isForegroundStarted) {
-            Log.d("ProxyService", "Proxy service already started")
-            return
-        }
-        
-        try {
-            // Create notification if not already created
-            if (notification == null) {
-                notification = createNotification()
-            }
-            
-            // Get the notification to use - try multiple fallbacks
-            val notificationToUse = notification 
-                ?: createFallbackNotification() 
-                ?: createLastResortNotification()
-                ?: createBasicNotification()
-                ?: createEmergencyNotification()
-            
-            // Service is running (not as foreground service)
-            isForegroundStarted = true
-            Log.d("ProxyService", "Proxy service started successfully")
-            
-        } catch (e: Exception) {
-            Log.e("ProxyService", "Error in startProxyService", e)
-            Log.e("ProxyService", "Failed to start proxy service", e)
-        }
-    }
     
     override fun onDestroy() {
         Log.d("ProxyService", "onDestroy")
         proxyServer?.stop()
-        isForegroundStarted = false
         super.onDestroy()
     }
     
