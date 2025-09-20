@@ -1,18 +1,16 @@
 package ben.smith53.extractors
 
+// import ben.smith53.proxy.ProxyCallback
 import android.content.Context
 import android.util.Log
 import ben.smith53.proxy.ProxyServer
-// import ben.smith53.proxy.ProxyCallback
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.app
-import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
-import kotlinx.coroutines.runBlocking
 
 // Local interface to avoid import issues
 interface ProxyCallback {
@@ -25,6 +23,7 @@ class StreamedExtractor(private val context: Context) : ExtractorApi() {
     override val requiresReferer = true
 
     private var proxyServer: ProxyServer? = null
+    private var proxyInitialized = false
 
     private val baseHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
@@ -32,7 +31,10 @@ class StreamedExtractor(private val context: Context) : ExtractorApi() {
         "Accept-Language" to "en-GB,en-US;q=0.9,en;q=0.8"
     )
 
-    init {
+    private fun initializeProxy() {
+        if (proxyInitialized) return
+        proxyInitialized = true
+        
         // Try to start proxy, but handle case where Java classes are not available
         try {
             Log.d("StreamedExtractor", "Attempting to start proxy...")
@@ -76,6 +78,9 @@ class StreamedExtractor(private val context: Context) : ExtractorApi() {
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
         try {
             Log.d("StreamedExtractor", "Extracting from URL: $url")
+            
+            // Initialize proxy if not already done
+            initializeProxy()
             
             // Check if proxy is running
             val isProxyRunning = proxyServer != null
