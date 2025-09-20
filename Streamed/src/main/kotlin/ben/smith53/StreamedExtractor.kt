@@ -4,7 +4,7 @@ import android.content.Context
 import android.util.Log
 import ben.smith53.proxy.ProxyServiceConnector
 import ben.smith53.proxy.ProxyServer
-import ben.smith53.proxy.ProxyCallback
+// import ben.smith53.proxy.ProxyCallback
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
@@ -14,6 +14,18 @@ import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import kotlinx.coroutines.runBlocking
+
+// Local interface to avoid import issues
+interface ProxyCallback {
+    fun onProxyReady(proxy: ProxyServer)
+}
+
+// Wrapper to convert Kotlin interface to Java interface
+class ProxyCallbackWrapper(private val kotlinCallback: ProxyCallback) : ben.smith53.proxy.ProxyCallback {
+    override fun onProxyReady(proxy: ProxyServer) {
+        kotlinCallback.onProxyReady(proxy)
+    }
+}
 
 class StreamedExtractor(private val context: Context) : ExtractorApi() {
     override val name = "StreamedExtractor"
@@ -33,14 +45,14 @@ class StreamedExtractor(private val context: Context) : ExtractorApi() {
         // Start proxy using Java ProxyServiceConnector (like StreamBrowser)
         try {
             Log.d("StreamedExtractor", "Attempting to start proxy...")
-            proxyServiceConnector.startProxyServer(context, object : ProxyCallback {
+            proxyServiceConnector.startProxyServer(context, ProxyCallbackWrapper(object : ProxyCallback {
                 override fun onProxyReady(proxy: ProxyServer) {
                     proxyServer = proxy
                     Log.d("StreamedExtractor", "Proxy started successfully at: ${proxy.getHttpAddress()}")
                     // Test the proxy
                     testProxy()
                 }
-            })
+            }))
         } catch (e: Exception) {
             Log.e("StreamedExtractor", "Error starting proxy", e)
         }
