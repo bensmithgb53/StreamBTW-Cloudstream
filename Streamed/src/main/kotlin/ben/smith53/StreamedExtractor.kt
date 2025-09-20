@@ -1,6 +1,5 @@
 package ben.smith53.extractors
 
-import android.content.Context
 import android.util.Log
 import ben.smith53.proxy.ProxyManager
 import com.fasterxml.jackson.annotation.JsonProperty
@@ -22,22 +21,9 @@ class StreamedExtractor : ExtractorApi() {
         "Accept" to "application/vnd.apple.mpegurl, */*",
         "Accept-Language" to "en-GB,en-US;q=0.9,en;q=0.8"
     )
-    
-    private var context: Context? = null
+
     private var proxyAddress: String? = null
-    
-    fun initialize(context: Context) {
-        this.context = context
-        // Start proxy if not already running
-        if (!ProxyManager.isProxyRunning()) {
-            proxyAddress = ProxyManager.startProxy(context)
-            Log.d("StreamedExtractor", "Proxy initialized: $proxyAddress")
-        } else {
-            proxyAddress = ProxyManager.getProxyAddress()
-            Log.d("StreamedExtractor", "Using existing proxy: $proxyAddress")
-        }
-    }
-    
+
     private fun ensureProxyStarted() {
         if (proxyAddress == null) {
             // Try to start proxy without context (fallback mode)
@@ -147,7 +133,7 @@ class StreamedExtractor : ExtractorApi() {
                                     extractorLinks.add(
                                         newExtractorLink(
                                             source = "Streamed",
-                                            name = "${source} Stream ${streamInfo.streamNo} (${streamInfo.language}${if (streamInfo.hd) ", HD" else ""})",
+                                            name = "$source Stream ${streamInfo.streamNo} (${streamInfo.language}${if (streamInfo.hd) ", HD" else ""})",
                                             url = testUrl,
                                             type = ExtractorLinkType.M3U8
                                         ) {
@@ -181,7 +167,7 @@ class StreamedExtractor : ExtractorApi() {
                                             extractorLinks.add(
                                                 newExtractorLink(
                                                     source = "Streamed",
-                                                    name = "${source} Stream ${streamInfo.streamNo} (${streamInfo.language}${if (streamInfo.hd) ", HD" else ""})",
+                                                    name = "$source Stream ${streamInfo.streamNo} (${streamInfo.language}${if (streamInfo.hd) ", HD" else ""})",
                                                     url = testUrl,
                                                     type = ExtractorLinkType.M3U8
                                                 ) {
