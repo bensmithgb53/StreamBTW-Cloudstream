@@ -22,11 +22,26 @@ class ProxyService : Service() {
     override fun onCreate() {
         super.onCreate()
         Log.d("ProxyService", "onCreate")
-        
+
         try {
+            Log.d("ProxyService", "Creating ProxyServer on port $proxyPort")
             proxyServer = ProxyServer(applicationContext, proxyPort)
+            Log.d("ProxyService", "ProxyServer created: $proxyServer")
+            
+            Log.d("ProxyService", "Starting proxy server...")
             proxyServer?.start()
             Log.d("ProxyService", "Proxy server start requested on port $proxyPort")
+            
+            // Check if it actually started
+            val isStarted = proxyServer?.isStarted() ?: false
+            Log.d("ProxyService", "Proxy server isStarted: $isStarted")
+            
+            if (isStarted) {
+                val address = proxyServer?.getHttpAddress()
+                Log.d("ProxyService", "Proxy server address: $address")
+            } else {
+                Log.e("ProxyService", "Proxy server failed to start")
+            }
         } catch (e: Exception) {
             Log.e("ProxyService", "Error creating proxy server", e)
         }

@@ -16,13 +16,20 @@ class ProxyManager(private val context: Context) {
     
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
-            val binder = service as ProxyService.LocalBinder
-            proxyService = binder.getService()
-            isServiceBound = true
-            Log.d("ProxyManager", "Proxy service connected")
+            Log.d("ProxyManager", "onServiceConnected called")
+            try {
+                val binder = service as ProxyService.LocalBinder
+                proxyService = binder.getService()
+                isServiceBound = true
+                Log.d("ProxyManager", "Proxy service connected successfully")
+                Log.d("ProxyManager", "ProxyService instance: $proxyService")
+            } catch (e: Exception) {
+                Log.e("ProxyManager", "Error in onServiceConnected", e)
+            }
         }
-        
+
         override fun onServiceDisconnected(name: ComponentName?) {
+            Log.d("ProxyManager", "onServiceDisconnected called")
             proxyService = null
             isServiceBound = false
             Log.d("ProxyManager", "Proxy service disconnected")
@@ -63,16 +70,30 @@ class ProxyManager(private val context: Context) {
             Log.d("ProxyManager", "Service binding result: $bound")
 
             if (bound) {
+                Log.d("ProxyManager", "Service binding successful, waiting for connection...")
                 // Wait for service to be ready (simpler approach like StreamBrowser)
                 android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
                     Log.d("ProxyManager", "Checking proxy server status...")
+                    Log.d("ProxyManager", "isServiceBound: $isServiceBound")
+                    Log.d("ProxyManager", "proxyService: $proxyService")
+                    
                     val proxyServer = proxyService?.getProxyServer()
-                    if (proxyServer != null && proxyServer.isStarted()) {
-                        val address = proxyServer.getHttpAddress()
-                        Log.d("ProxyManager", "Proxy started at: $address")
-                        continuation.resume(address)
+                    Log.d("ProxyManager", "proxyServer from service: $proxyServer")
+                    
+                    if (proxyServer != null) {
+                        val isStarted = proxyServer.isStarted()
+                        Log.d("ProxyManager", "proxyServer.isStarted(): $isStarted")
+                        
+                        if (isStarted) {
+                            val address = proxyServer.getHttpAddress()
+                            Log.d("ProxyManager", "Proxy started at: $address")
+                            continuation.resume(address)
+                        } else {
+                            Log.e("ProxyManager", "Proxy server not started yet")
+                            continuation.resume(null)
+                        }
                     } else {
-                        Log.e("ProxyManager", "Failed to get proxy server - service may not be ready")
+                        Log.e("ProxyManager", "Failed to get proxy server from service")
                         continuation.resume(null)
                     }
                 }, 2000) // Simpler timing like StreamBrowser
