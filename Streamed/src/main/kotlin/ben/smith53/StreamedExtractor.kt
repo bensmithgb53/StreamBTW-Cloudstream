@@ -33,7 +33,7 @@ class StreamedExtractor(private val context: Context) : ExtractorApi() {
     )
 
     init {
-        // Start proxy directly (simpler approach)
+        // Try to start proxy, but handle case where Java classes are not available
         try {
             Log.d("StreamedExtractor", "Attempting to start proxy...")
             proxyServer = ProxyServer(context, 1111)
@@ -41,8 +41,12 @@ class StreamedExtractor(private val context: Context) : ExtractorApi() {
             Log.d("StreamedExtractor", "Proxy started successfully at: ${proxyServer?.getHttpAddress()}")
             // Test the proxy
             testProxy()
+        } catch (e: ClassNotFoundException) {
+            Log.w("StreamedExtractor", "Proxy classes not available, using direct extraction: ${e.message}")
+            proxyServer = null
         } catch (e: Exception) {
-            Log.e("StreamedExtractor", "Error starting proxy", e)
+            Log.e("StreamedExtractor", "Error starting proxy: ${e.message}")
+            proxyServer = null
         }
     }
     
