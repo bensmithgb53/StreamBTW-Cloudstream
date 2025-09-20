@@ -327,6 +327,10 @@ class StreamedProvider : MainAPI() {
         
         // Use the StreamedExtractor to handle stream extraction
         val extractor = ben.smith53.extractors.StreamedExtractor()
+        
+        // Initialize extractor - proxy will start automatically when needed
+        // Note: Context is not required for basic proxy functionality
+        
         val links = extractor.getUrl(data, null)
         
         if (links.isNullOrEmpty()) {

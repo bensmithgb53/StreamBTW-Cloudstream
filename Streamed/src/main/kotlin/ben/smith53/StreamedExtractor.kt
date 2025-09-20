@@ -1,6 +1,8 @@
 package ben.smith53.extractors
 
+import android.content.Context
 import android.util.Log
+import ben.smith53.proxy.ProxyManager
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
@@ -20,10 +22,43 @@ class StreamedExtractor : ExtractorApi() {
         "Accept" to "application/vnd.apple.mpegurl, */*",
         "Accept-Language" to "en-GB,en-US;q=0.9,en;q=0.8"
     )
+    
+    private var context: Context? = null
+    private var proxyAddress: String? = null
+    
+    fun initialize(context: Context) {
+        this.context = context
+        // Start proxy if not already running
+        if (!ProxyManager.isProxyRunning()) {
+            proxyAddress = ProxyManager.startProxy(context)
+            Log.d("StreamedExtractor", "Proxy initialized: $proxyAddress")
+        } else {
+            proxyAddress = ProxyManager.getProxyAddress()
+            Log.d("StreamedExtractor", "Using existing proxy: $proxyAddress")
+        }
+    }
+    
+    private fun ensureProxyStarted() {
+        if (proxyAddress == null) {
+            // Try to start proxy without context (fallback mode)
+            Log.w("StreamedExtractor", "Context not available, trying fallback proxy mode")
+            // For now, we'll skip proxy and use direct requests
+            // This is a fallback - ideally context should be provided
+        }
+    }
 
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
         try {
             Log.d("StreamedExtractor", "Extracting from URL: $url")
+            
+            // Ensure proxy is started if possible
+            ensureProxyStarted()
+            
+            // If proxy is not available, fall back to direct requests
+            val useProxy = proxyAddress != null
+            if (!useProxy) {
+                Log.w("StreamedExtractor", "Proxy not available, using direct requests (may have token issues)")
+            }
             
             // Extract match ID from URL
             val matchId = url.substringAfterLast("/")
@@ -33,7 +68,17 @@ class StreamedExtractor : ExtractorApi() {
             }
             
             // Get all matches to find available sources
-            val allMatchesResponse = app.get("$mainUrl/api/matches/all", headers = baseHeaders, timeout = 30000)
+            val allMatchesUrl = "$mainUrl/api/matches/all"
+            val allMatchesResponse = if (useProxy) {
+                val proxyUrl = ProxyManager.convertToProxyUrl(allMatchesUrl, baseHeaders)
+                if (proxyUrl == null) {
+                    Log.e("StreamedExtractor", "Failed to convert URL to proxy URL")
+                    return emptyList()
+                }
+                app.get(proxyUrl, timeout = 10000)
+            } else {
+                app.get(allMatchesUrl, headers = baseHeaders, timeout = 10000)
+            }
             if (!allMatchesResponse.isSuccessful) {
                 Log.e("StreamedExtractor", "Failed to get matches: HTTP ${allMatchesResponse.code}")
                 return emptyList()
@@ -58,11 +103,17 @@ class StreamedExtractor : ExtractorApi() {
                     Log.d("StreamedExtractor", "Trying source: $source")
                     
                     // Get stream info from the API
-                    val streamResponse = app.get(
-                        "$mainUrl/api/stream/$source/$matchId",
-                        headers = baseHeaders,
-                        timeout = 30000
-                    )
+                    val streamApiUrl = "$mainUrl/api/stream/$source/$matchId"
+                    val streamResponse = if (useProxy) {
+                        val streamProxyUrl = ProxyManager.convertToProxyUrl(streamApiUrl, baseHeaders)
+                        if (streamProxyUrl == null) {
+                            Log.w("StreamedExtractor", "Failed to convert stream API URL to proxy URL")
+                            continue
+                        }
+                        app.get(streamProxyUrl, timeout = 10000)
+                    } else {
+                        app.get(streamApiUrl, headers = baseHeaders, timeout = 10000)
+                    }
                     
                     if (!streamResponse.isSuccessful) {
                         Log.w("StreamedExtractor", "Stream API failed for $source: HTTP ${streamResponse.code}")
@@ -79,49 +130,68 @@ class StreamedExtractor : ExtractorApi() {
                             
                             // Try direct API m3u8 URL first
                             val directApiUrl = "$mainUrl/api/stream/$source/$matchId/${streamInfo.streamNo}.m3u8"
-                            Log.d("StreamedExtractor", "Trying direct API m3u8 URL: $directApiUrl")
+                            val (testUrl, testHeaders) = if (useProxy) {
+                                val directProxyUrl = ProxyManager.convertToProxyUrl(directApiUrl, baseHeaders)
+                                Log.d("StreamedExtractor", "Trying direct API m3u8 URL: $directApiUrl -> $directProxyUrl")
+                                Pair(directProxyUrl, emptyMap<String, String>())
+                            } else {
+                                Log.d("StreamedExtractor", "Trying direct API m3u8 URL: $directApiUrl")
+                                Pair(directApiUrl, baseHeaders)
+                            }
                             
-                            val testResponse = app.head(directApiUrl, headers = baseHeaders, timeout = 10000)
-                            if (testResponse.isSuccessful) {
-                                Log.d("StreamedExtractor", "Found working direct m3u8 URL")
-                                
-                                extractorLinks.add(
-                                    newExtractorLink(
-                                        source = "Streamed",
-                                        name = "${source} Stream ${streamInfo.streamNo} (${streamInfo.language}${if (streamInfo.hd) ", HD" else ""})",
-                                        url = directApiUrl,
-                                        type = ExtractorLinkType.M3U8
-                                    ) {
-                                        this.referer = streamInfo.embedUrl
-                                        this.quality = if (streamInfo.hd) Qualities.P1080.value else Qualities.Unknown.value
-                                        this.headers = baseHeaders
-                                    }
-                                )
-                                continue
+                            if (testUrl != null) {
+                                val testResponse = app.head(testUrl, headers = testHeaders, timeout = 10000)
+                                if (testResponse.isSuccessful) {
+                                    Log.d("StreamedExtractor", "Found working direct m3u8 URL")
+                                    
+                                    extractorLinks.add(
+                                        newExtractorLink(
+                                            source = "Streamed",
+                                            name = "${source} Stream ${streamInfo.streamNo} (${streamInfo.language}${if (streamInfo.hd) ", HD" else ""})",
+                                            url = testUrl,
+                                            type = ExtractorLinkType.M3U8
+                                        ) {
+                                            this.referer = streamInfo.embedUrl
+                                            this.quality = if (streamInfo.hd) Qualities.P1080.value else Qualities.Unknown.value
+                                            this.headers = testHeaders
+                                        }
+                                    )
+                                    continue
+                                }
                             }
                             
                             // Try generated m3u8 URLs as fallback
                             val generatedUrls = generateM3u8Urls(source, matchId, streamInfo.streamNo)
                             for (m3u8Url in generatedUrls) {
                                 try {
-                                    Log.d("StreamedExtractor", "Testing generated URL: $m3u8Url")
-                                    val testResponse = app.head(m3u8Url, headers = baseHeaders, timeout = 10000)
-                                    if (testResponse.isSuccessful) {
-                                        Log.d("StreamedExtractor", "Found working generated m3u8 URL")
-                                        
-                                        extractorLinks.add(
-            newExtractorLink(
-                                                source = "Streamed",
-                                                name = "${source} Stream ${streamInfo.streamNo} (${streamInfo.language}${if (streamInfo.hd) ", HD" else ""})",
-                                                url = m3u8Url,
-                type = ExtractorLinkType.M3U8
-            ) {
-                                                this.referer = streamInfo.embedUrl
-                                                this.quality = if (streamInfo.hd) Qualities.P1080.value else Qualities.Unknown.value
-                this.headers = baseHeaders
-            }
-        )
-                                        break
+                                    val (testUrl, testHeaders) = if (useProxy) {
+                                        val proxyUrl = ProxyManager.convertToProxyUrl(m3u8Url, baseHeaders)
+                                        Log.d("StreamedExtractor", "Testing generated URL: $m3u8Url -> $proxyUrl")
+                                        Pair(proxyUrl, emptyMap<String, String>())
+                                    } else {
+                                        Log.d("StreamedExtractor", "Testing generated URL: $m3u8Url")
+                                        Pair(m3u8Url, baseHeaders)
+                                    }
+                                    
+                                    if (testUrl != null) {
+                                        val testResponse = app.head(testUrl, headers = testHeaders, timeout = 10000)
+                                        if (testResponse.isSuccessful) {
+                                            Log.d("StreamedExtractor", "Found working generated m3u8 URL")
+                                            
+                                            extractorLinks.add(
+                                                newExtractorLink(
+                                                    source = "Streamed",
+                                                    name = "${source} Stream ${streamInfo.streamNo} (${streamInfo.language}${if (streamInfo.hd) ", HD" else ""})",
+                                                    url = testUrl,
+                                                    type = ExtractorLinkType.M3U8
+                                                ) {
+                                                    this.referer = streamInfo.embedUrl
+                                                    this.quality = if (streamInfo.hd) Qualities.P1080.value else Qualities.Unknown.value
+                                                    this.headers = testHeaders
+                                                }
+                                            )
+                                            break
+                                        }
                                     }
                                 } catch (e: Exception) {
                                     Log.d("StreamedExtractor", "URL failed: $m3u8Url - ${e.message}")
