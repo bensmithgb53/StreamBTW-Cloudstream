@@ -154,7 +154,7 @@ class StreamedExtractor : ExtractorApi() {
                                             extractorLinks.add(
                                                 newExtractorLink(
                                                     source = "Streamed",
-                                                    name = "${source} Stream $streamNo (Fallback${if (fallbackStreamInfo.hd) ", HD" else ""})",
+                                                    name = "$source Stream $streamNo (Fallback${if (fallbackStreamInfo.hd) ", HD" else ""})",
                                                     url = testUrl,
                                                     type = ExtractorLinkType.M3U8
                                                 ) {
@@ -196,7 +196,7 @@ class StreamedExtractor : ExtractorApi() {
                                         extractorLinks.add(
                                             newExtractorLink(
                                                 source = "Streamed",
-                                                name = "${source} Stream ${streamInfo.streamNo} (${streamInfo.language}${if (streamInfo.hd) ", HD" else ""})",
+                                                name = "$source Stream ${streamInfo.streamNo} (${streamInfo.language}${if (streamInfo.hd) ", HD" else ""})",
                                                 url = testUrl,
                                                 type = ExtractorLinkType.M3U8
                                             ) {
@@ -230,7 +230,7 @@ class StreamedExtractor : ExtractorApi() {
                                                 extractorLinks.add(
                                                     newExtractorLink(
                                                         source = "Streamed",
-                                                        name = "${source} Stream ${streamInfo.streamNo} (${streamInfo.language}${if (streamInfo.hd) ", HD" else ""})",
+                                                        name = "$source Stream ${streamInfo.streamNo} (${streamInfo.language}${if (streamInfo.hd) ", HD" else ""})",
                                                         url = testUrl,
                                                         type = ExtractorLinkType.M3U8
                                                     ) {
