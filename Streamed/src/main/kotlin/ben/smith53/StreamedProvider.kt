@@ -17,6 +17,9 @@ import com.lagradost.cloudstream3.newLiveSearchResponse
 import com.lagradost.cloudstream3.newLiveStreamLoadResponse
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.Qualities
+import com.lagradost.cloudstream3.utils.newExtractorLink
 import java.util.Locale
 
 class StreamedProvider(private val context: Context) : MainAPI() {
@@ -326,22 +329,108 @@ class StreamedProvider(private val context: Context) : MainAPI() {
     ): Boolean {
         Log.d("StreamedProvider", "Loading links for: $data")
 
-        // Use the StreamedExtractor to handle stream extraction
-        val extractor = ben.smith53.extractors.StreamedExtractor(context)
-        val links = extractor.getUrl(data, null)
+        try {
+            // Extract match ID from URL
+            val matchId = data.substringAfterLast("/")
+            if (matchId.isBlank()) {
+                Log.e("StreamedProvider", "Invalid matchId: $matchId")
+                return false
+            }
 
-        if (links.isNullOrEmpty()) {
-            Log.e("StreamedProvider", "No links found by extractor")
+            // Get all matches to find available sources
+            val allMatchesResponse = app.get("$mainUrl/api/matches/all", headers = baseHeaders, timeout = 30000)
+            if (!allMatchesResponse.isSuccessful) {
+                Log.e("StreamedProvider", "Failed to get matches: HTTP ${allMatchesResponse.code}")
+                return false
+            }
+
+            val allMatches = parseJson<List<Match>>(allMatchesResponse.text)
+            val matchDetails = allMatches.find { it.id == matchId }
+
+            if (matchDetails == null) {
+                Log.e("StreamedProvider", "Match not found: $matchId")
+                return false
+            }
+
+            val availableSources = matchDetails.matchSources.map { it.sourceName }
+            Log.d("StreamedProvider", "Available sources for $matchId: $availableSources")
+
+            val extractor = ben.smith53.extractors.StreamedExtractor(context)
+            var foundAnyLinks = false
+
+            // Try each available source
+            for (source in availableSources) {
+                try {
+                    Log.d("StreamedProvider", "Trying source: $source")
+                    
+                    // Get stream info from the API
+                    val streamResponse = app.get(
+                        "$mainUrl/api/stream/$source/$matchId",
+                        headers = baseHeaders,
+                        timeout = 30000
+                    )
+                    
+                    if (!streamResponse.isSuccessful) {
+                        Log.w("StreamedProvider", "Stream API failed for $source: HTTP ${streamResponse.code}")
+                        continue
+                    }
+                    
+                    val streamInfos = parseJson<List<StreamInfo>>(streamResponse.text)
+                    Log.d("StreamedProvider", "Found ${streamInfos.size} streams for $source")
+                    
+                    // Try each stream
+                    for (streamInfo in streamInfos) {
+                        try {
+                            Log.d("StreamedProvider", "Trying stream ${streamInfo.streamNo} from $source")
+                            
+                            // Use the embed URL for extraction
+                            val embedUrl = streamInfo.embedUrl
+                            Log.d("StreamedProvider", "Extracting from embed URL: $embedUrl")
+                            
+                            val links = extractor.getUrl(embedUrl, null)
+                            if (!links.isNullOrEmpty()) {
+                                Log.d("StreamedProvider", "Found ${links.size} links for stream ${streamInfo.streamNo}")
+                                links.forEach { link ->
+                                    // Create a new link with updated name
+                                    val updatedLink = newExtractorLink(
+                                        source = link.source,
+                                        name = "${source} Stream ${streamInfo.streamNo} (${streamInfo.language}${if (streamInfo.hd) ", HD" else ""})",
+                                        url = link.url,
+                                        type = link.type
+                                    ) {
+                                        this.referer = link.referer
+                                        this.quality = if (streamInfo.hd) Qualities.P1080.value else Qualities.Unknown.value
+                                        this.headers = link.headers
+                                    }
+                                    callback(updatedLink)
+                                    foundAnyLinks = true
+                                }
+                            } else {
+                                Log.w("StreamedProvider", "No links found for stream ${streamInfo.streamNo}")
+                            }
+                            
+                        } catch (e: Exception) {
+                            Log.e("StreamedProvider", "Error processing stream ${streamInfo.streamNo}: ${e.message}")
+                        }
+                    }
+                    
+                } catch (e: Exception) {
+                    Log.e("StreamedProvider", "Error processing source $source: ${e.message}")
+                }
+            }
+
+            if (!foundAnyLinks) {
+                Log.e("StreamedProvider", "No links found by extractor")
+                return false
+            }
+
+            Log.d("StreamedProvider", "Successfully loaded links")
+            return true
+
+        } catch (e: Exception) {
+            Log.e("StreamedProvider", "Error in loadLinks: ${e.message}")
             return false
         }
-
-        // Pass all found links to the callback
-        links.forEach { link ->
-            callback(link)
-        }
-
-        Log.d("StreamedProvider", "Successfully loaded ${links.size} links")
-        return true
     }
 
 

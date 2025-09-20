@@ -62,93 +62,66 @@ class StreamedExtractor(private val context: Context) : ExtractorApi() {
                 return emptyList()
             }
             
-            // Extract match ID from URL
-            val matchId = url.substringAfterLast("/")
-            if (matchId.isBlank()) {
-                Log.e("StreamedExtractor", "Invalid matchId: $matchId")
-                return emptyList()
-            }
-            
-            // Get all matches to find available sources
-            val allMatchesResponse = app.get("$mainUrl/api/matches/all", headers = baseHeaders, timeout = 30000)
-            if (!allMatchesResponse.isSuccessful) {
-                Log.e("StreamedExtractor", "Failed to get matches: HTTP ${allMatchesResponse.code}")
-                return emptyList()
-            }
-            
-            val allMatches = parseJson<List<Match>>(allMatchesResponse.text)
-            val matchDetails = allMatches.find { it.id == matchId }
-            
-            if (matchDetails == null) {
-                Log.e("StreamedExtractor", "Match not found: $matchId")
-                return emptyList()
-            }
-            
-            val availableSources = matchDetails.matchSources.map { it.sourceName }
-            Log.d("StreamedExtractor", "Available sources for $matchId: $availableSources")
-            
-            val extractorLinks = mutableListOf<ExtractorLink>()
-            
-            // Try each available source
-            for (source in availableSources) {
-                try {
-                    Log.d("StreamedExtractor", "Trying source: $source")
-                    
-                    // Get stream info from the API
-                    val streamResponse = app.get(
-                        "$mainUrl/api/stream/$source/$matchId",
-                        headers = baseHeaders,
-                        timeout = 30000
-                    )
-                    
-                    if (!streamResponse.isSuccessful) {
-                        Log.w("StreamedExtractor", "Stream API failed for $source: HTTP ${streamResponse.code}")
-                        continue
-                    }
-                    
-                    val streamInfos = parseJson<List<StreamInfo>>(streamResponse.text)
-                    Log.d("StreamedExtractor", "Found ${streamInfos.size} streams for $source")
-                    
-                    // Try each stream
-                    for (streamInfo in streamInfos) {
-                        try {
-                            Log.d("StreamedExtractor", "Trying stream ${streamInfo.streamNo} from $source")
-                            
-                            // Use proxy to get the stream URL - this handles all the HTML changes and token hiding
-                            val streamUrl = "$mainUrl/api/stream/$source/$matchId/${streamInfo.streamNo}.m3u8"
-                            val proxyUrl = proxyManager.convertToProxyUrl(streamUrl, baseHeaders)
-                            
-                            if (proxyUrl != null) {
-                                Log.d("StreamedExtractor", "Using proxy URL: $proxyUrl")
-                                
-                                extractorLinks.add(
-                                    newExtractorLink(
-                                        source = "Streamed",
-                                        name = "${source} Stream ${streamInfo.streamNo} (${streamInfo.language}${if (streamInfo.hd) ", HD" else ""})",
-                                        url = proxyUrl,
-                                        type = ExtractorLinkType.M3U8
-                                    ) {
-                                        this.referer = streamInfo.embedUrl
-                                        this.quality = if (streamInfo.hd) Qualities.P1080.value else Qualities.Unknown.value
-                                        this.headers = baseHeaders
-                                    }
-                                )
-                            } else {
-                                Log.w("StreamedExtractor", "Failed to convert URL to proxy URL: $streamUrl")
-                            }
-                            
-                        } catch (e: Exception) {
-                            Log.e("StreamedExtractor", "Error processing stream ${streamInfo.streamNo}: ${e.message}")
-                        }
-                    }
-                    
-                } catch (e: Exception) {
-                    Log.e("StreamedExtractor", "Error processing source $source: ${e.message}")
+            // Check if this is an embed URL (like https://embedsports.top/embed/alpha/bangladesh-vs-sri-lanka/1)
+            if (url.contains("embedsports.top/embed/")) {
+                Log.d("StreamedExtractor", "Processing embed URL: $url")
+                
+                // Extract the actual stream URL from the embed page
+                val embedResponse = app.get(url, headers = baseHeaders, timeout = 30000)
+                if (!embedResponse.isSuccessful) {
+                    Log.e("StreamedExtractor", "Failed to get embed page: HTTP ${embedResponse.code}")
+                    return emptyList()
                 }
+                
+                val embedContent = embedResponse.text
+                Log.d("StreamedExtractor", "Embed page content length: ${embedContent.length}")
+                
+                // Look for M3U8 URLs in the embed page
+                val m3u8Pattern = """https?://[^"'\s]+\.m3u8[^"'\s]*""".toRegex()
+                val m3u8Urls = m3u8Pattern.findAll(embedContent).map { it.value }.toList()
+                
+                Log.d("StreamedExtractor", "Found ${m3u8Urls.size} M3U8 URLs in embed page")
+                
+                val extractorLinks = mutableListOf<ExtractorLink>()
+                
+                for (m3u8Url in m3u8Urls) {
+                    try {
+                        Log.d("StreamedExtractor", "Found M3U8 URL: $m3u8Url")
+                        
+                        // Use proxy to convert the M3U8 URL
+                        val proxyUrl = proxyManager.convertToProxyUrl(m3u8Url, baseHeaders)
+                        
+                        if (proxyUrl != null) {
+                            Log.d("StreamedExtractor", "Using proxy URL: $proxyUrl")
+                            
+                            extractorLinks.add(
+                                newExtractorLink(
+                                    source = "Streamed",
+                                    name = "Stream",
+                                    url = proxyUrl,
+                                    type = ExtractorLinkType.M3U8
+                                ) {
+                                    this.referer = url
+                                    this.quality = Qualities.Unknown.value
+                                    this.headers = baseHeaders
+                                }
+                            )
+                        } else {
+                            Log.w("StreamedExtractor", "Failed to convert M3U8 URL to proxy URL: $m3u8Url")
+                        }
+                        
+                    } catch (e: Exception) {
+                        Log.e("StreamedExtractor", "Error processing M3U8 URL: ${e.message}")
+                    }
+                }
+                
+                Log.d("StreamedExtractor", "Extraction complete: found ${extractorLinks.size} links")
+                return extractorLinks
+                
+            } else {
+                Log.e("StreamedExtractor", "Unsupported URL format: $url")
+                return emptyList()
             }
-            
-            Log.d("StreamedExtractor", "Extraction complete: found ${extractorLinks.size} links")
-            return extractorLinks
             
         } catch (e: Exception) {
             Log.e("StreamedExtractor", "Extraction failed: ${e.message}")
