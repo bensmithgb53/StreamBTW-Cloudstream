@@ -2,7 +2,6 @@ package ben.smith53.extractors
 
 import android.content.Context
 import android.util.Log
-import ben.smith53.proxy.ProxyServiceConnector
 import ben.smith53.proxy.ProxyServer
 // import ben.smith53.proxy.ProxyCallback
 import com.fasterxml.jackson.annotation.JsonProperty
@@ -20,19 +19,11 @@ interface ProxyCallback {
     fun onProxyReady(proxy: ProxyServer)
 }
 
-// Wrapper to convert Kotlin interface to Java interface
-class ProxyCallbackWrapper(private val kotlinCallback: ProxyCallback) : ben.smith53.proxy.ProxyCallback {
-    override fun onProxyReady(proxy: ProxyServer) {
-        kotlinCallback.onProxyReady(proxy)
-    }
-}
-
 class StreamedExtractor(private val context: Context) : ExtractorApi() {
     override val name = "StreamedExtractor"
     override val mainUrl = "https://streamed.pk"
     override val requiresReferer = true
 
-    private val proxyServiceConnector = ProxyServiceConnector()
     private var proxyServer: ProxyServer? = null
 
     private val baseHeaders = mapOf(
@@ -42,17 +33,14 @@ class StreamedExtractor(private val context: Context) : ExtractorApi() {
     )
 
     init {
-        // Start proxy using Java ProxyServiceConnector (like StreamBrowser)
+        // Start proxy directly (simpler approach)
         try {
             Log.d("StreamedExtractor", "Attempting to start proxy...")
-            proxyServiceConnector.startProxyServer(context, ProxyCallbackWrapper(object : ProxyCallback {
-                override fun onProxyReady(proxy: ProxyServer) {
-                    proxyServer = proxy
-                    Log.d("StreamedExtractor", "Proxy started successfully at: ${proxy.getHttpAddress()}")
-                    // Test the proxy
-                    testProxy()
-                }
-            }))
+            proxyServer = ProxyServer(context, 1111)
+            proxyServer?.start()
+            Log.d("StreamedExtractor", "Proxy started successfully at: ${proxyServer?.getHttpAddress()}")
+            // Test the proxy
+            testProxy()
         } catch (e: Exception) {
             Log.e("StreamedExtractor", "Error starting proxy", e)
         }
@@ -74,7 +62,7 @@ class StreamedExtractor(private val context: Context) : ExtractorApi() {
 
     fun cleanup() {
         try {
-            proxyServiceConnector.stopProxyServer(context)
+            proxyServer?.stop()
             Log.d("StreamedExtractor", "Proxy stopped")
         } catch (e: Exception) {
             Log.e("StreamedExtractor", "Error stopping proxy", e)
