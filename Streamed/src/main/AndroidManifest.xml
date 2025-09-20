@@ -14,7 +14,7 @@
         android:supportsRtl="true">
         
         <service
-            android:name=".proxy.ProxyService"
+            android:name="ben.smith53.proxy.ProxyService"
             android:enabled="true"
             android:exported="false"
             android:process=":proxy"

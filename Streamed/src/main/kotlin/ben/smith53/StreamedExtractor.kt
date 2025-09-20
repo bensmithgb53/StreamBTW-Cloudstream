@@ -2,7 +2,9 @@ package ben.smith53.extractors
 
 import android.content.Context
 import android.util.Log
-import ben.smith53.proxy.ProxyManager
+import ben.smith53.proxy.ProxyServiceConnector
+import ben.smith53.proxy.ProxyServer
+import ben.smith53.proxy.ProxyCallback
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
@@ -18,8 +20,8 @@ class StreamedExtractor(private val context: Context) : ExtractorApi() {
     override val mainUrl = "https://streamed.pk"
     override val requiresReferer = true
 
-    private val proxyManager = ProxyManager(context)
-    private var proxyAddress: String? = null
+    private val proxyServiceConnector = ProxyServiceConnector()
+    private var proxyServer: ProxyServer? = null
 
     private val baseHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
@@ -28,28 +30,26 @@ class StreamedExtractor(private val context: Context) : ExtractorApi() {
     )
 
     init {
-        // Start proxy in background
-        runBlocking {
-            try {
-                Log.d("StreamedExtractor", "Attempting to start proxy...")
-                proxyAddress = proxyManager.startProxy()
-                if (proxyAddress != null) {
-                    Log.d("StreamedExtractor", "Proxy started successfully at: $proxyAddress")
+        // Start proxy using Java ProxyServiceConnector (like StreamBrowser)
+        try {
+            Log.d("StreamedExtractor", "Attempting to start proxy...")
+            proxyServiceConnector.startProxyServer(context, object : ProxyCallback {
+                override fun onProxyReady(proxy: ProxyServer) {
+                    proxyServer = proxy
+                    Log.d("StreamedExtractor", "Proxy started successfully at: ${proxy.getHttpAddress()}")
                     // Test the proxy
                     testProxy()
-                } else {
-                    Log.e("StreamedExtractor", "Failed to start proxy - address is null")
                 }
-            } catch (e: Exception) {
-                Log.e("StreamedExtractor", "Error starting proxy", e)
-            }
+            })
+        } catch (e: Exception) {
+            Log.e("StreamedExtractor", "Error starting proxy", e)
         }
     }
     
     private fun testProxy() {
         try {
             val testUrl = "http://httpbin.org/get"
-            val proxyUrl = proxyManager.convertToProxyUrl(testUrl, emptyMap())
+            val proxyUrl = proxyServer?.convertToProxyUrl(testUrl, emptyMap())
             if (proxyUrl != null) {
                 Log.d("StreamedExtractor", "Proxy test URL created: $proxyUrl")
             } else {
@@ -62,7 +62,7 @@ class StreamedExtractor(private val context: Context) : ExtractorApi() {
 
     fun cleanup() {
         try {
-            proxyManager.stopProxy()
+            proxyServiceConnector.stopProxyServer(context)
             Log.d("StreamedExtractor", "Proxy stopped")
         } catch (e: Exception) {
             Log.e("StreamedExtractor", "Error stopping proxy", e)
@@ -74,11 +74,11 @@ class StreamedExtractor(private val context: Context) : ExtractorApi() {
             Log.d("StreamedExtractor", "Extracting from URL: $url")
             
             // Check if proxy is running
-            val isProxyRunning = proxyManager.isProxyRunning()
-            val currentAddress = proxyManager.getProxyAddress()
-            Log.d("StreamedExtractor", "Proxy status - running: $isProxyRunning, address: $currentAddress, stored: $proxyAddress")
+            val isProxyRunning = proxyServer != null
+            val currentAddress = proxyServer?.getHttpAddress()
+            Log.d("StreamedExtractor", "Proxy status - running: $isProxyRunning, address: $currentAddress")
             
-            if (proxyAddress == null || !isProxyRunning) {
+            if (proxyServer == null) {
                 Log.w("StreamedExtractor", "Proxy not running, trying direct extraction")
                 return extractDirectly(url)
             }
@@ -110,7 +110,7 @@ class StreamedExtractor(private val context: Context) : ExtractorApi() {
                         Log.d("StreamedExtractor", "Found M3U8 URL: $m3u8Url")
                         
                         // Use proxy to convert the M3U8 URL
-                        val proxyUrl = proxyManager.convertToProxyUrl(m3u8Url, baseHeaders)
+                        val proxyUrl = proxyServer?.convertToProxyUrl(m3u8Url, baseHeaders)
                         
                         if (proxyUrl != null) {
                             Log.d("StreamedExtractor", "Using proxy URL: $proxyUrl")
